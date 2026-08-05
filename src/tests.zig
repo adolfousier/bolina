@@ -6,4 +6,5 @@
 
 comptime {
     _ = @import("parser_test.zig");
+    _ = @import("verify_test.zig");
 }

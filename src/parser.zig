@@ -37,6 +37,8 @@ pub const LEN_PUBKEY: usize = 32;
 pub const LEN_PARENT: usize = 32;
 pub const LEN_SIG: usize = 64;
 pub const LEN_INTENT_ID: usize = 16;
+pub const LEN_GRANT_ID: usize = 16;
+pub const LEN_ACTION_DIGEST: usize = 32; // BLAKE2s-256 of Intent.action (BE-GRANT-02)
 
 // Domain-separation tags for Ed25519 signing (SPEC BE-SIG-01). The verifier
 // (LANGUAGE.md section 4 item 2) prefixes tag || tbs before checking sig.
@@ -222,5 +224,61 @@ pub fn parseIntent(buf: []const u8) ParseError!Intent {
         .resource_id = resource_id,
         .action = action,
         .rationale = rationale,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Grant (SPEC 8.1)
+//
+//   u8 version(=2) | [16] grant_id | [16] intent_id | [32] approver
+//   [32] subject | [32] executor | u16 resource_len, resource_id
+//   [32] action_digest | u64 not_after | [64] sig
+//
+// tbs is every byte before sig; sig is Ed25519 over (DOMAIN_GRANT || tbs).
+// Like the Envelope, version is parsed here but refused by the verifier
+// (BE-GRANT-03 step 0), keeping parsing total and policy out of the parser.
+// ---------------------------------------------------------------------------
+
+pub const Grant = struct {
+    version: u8,
+    grant_id: []const u8,
+    intent_id: []const u8,
+    approver: []const u8,
+    subject: []const u8,
+    executor: []const u8,
+    resource_id: []const u8,
+    action_digest: []const u8,
+    not_after: u64,
+    tbs: []const u8,
+    sig: []const u8,
+};
+
+pub fn parseGrant(buf: []const u8) ParseError!Grant {
+    var c = Cursor{ .buf = buf };
+    const version = try c.u8r();
+    const grant_id = try c.take(LEN_GRANT_ID);
+    const intent_id = try c.take(LEN_INTENT_ID);
+    const approver = try c.take(LEN_PUBKEY);
+    const subject = try c.take(LEN_PUBKEY);
+    const executor = try c.take(LEN_PUBKEY);
+    const resource_id = try c.field16(MAX_RESOURCE);
+    const action_digest = try c.take(LEN_ACTION_DIGEST);
+    const not_after = try c.u64be();
+    const tbs = buf[0..c.pos];
+    const sig = try c.take(LEN_SIG);
+    // BE-WIRE-02 totality: exactly one grant, nothing after it.
+    if (c.pos != buf.len) return error.TrailingBytes;
+    return .{
+        .version = version,
+        .grant_id = grant_id,
+        .intent_id = intent_id,
+        .approver = approver,
+        .subject = subject,
+        .executor = executor,
+        .resource_id = resource_id,
+        .action_digest = action_digest,
+        .not_after = not_after,
+        .tbs = tbs,
+        .sig = sig,
     };
 }
