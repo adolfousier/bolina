@@ -23,8 +23,15 @@
 #        together with the tests. CI runs never write the file.
 #   M5: The network-parsing module lives at src/parser.zig (and src/parser/
 #        if it is ever split). Absent counts as 0 lines.
-#   M6: Offline build uses unshare -rn where available (Linux); other
-#        platforms report honestly that isolation is unavailable there.
+#   M6: Offline build: the gate is "build succeeds with the network
+#        disabled". Isolation is tried in order: unshare -rn, then sudo
+#        ip netns (runner-friendly, build runs as the invoking user).
+#        With isolation, the build runs under it and the verdict is
+#        PASS/FAIL. Without isolation (macOS, locked-down runners) the
+#        verdict is PENDING with what was tried; the plain build still
+#        runs but its result is informational only, excluded from the
+#        exit code. A PASS without isolation would be a false green,
+#        so it never happens.
 #   M7: build.zig hardcodes ReleaseSafe and exposes no optimize option
 #        (LANGUAGE.md O1). Compiler version and flags are recorded above.
 #
@@ -111,20 +118,35 @@ if ! grep -q '\.dependencies = \.{},' build.zig.zon; then
     DEP_NOTE="WARNING: build.zig.zon dependencies table is not empty"
 fi
 OS="$(uname -s)"
-if [ "$OS" = "Linux" ] && unshare -rn true 2>/dev/null; then
-    ISO="network namespace via unshare -rn"
-    BUILD_OUT="$(unshare -rn "$ZIG" build 2>&1)"
-    BUILD_RC=$?
+ZIG_BIN="$(command -v "$ZIG")"
+ISO=""
+TRIED=""
+if [ "$OS" = "Linux" ]; then
+    TRIED="tried unshare -rn, then sudo ip netns"
+    if unshare -rn true 2>/dev/null; then
+        ISO="network namespace via unshare -rn"
+        BUILD_OUT="$(unshare -rn "$ZIG_BIN" build 2>&1)"
+        BUILD_RC=$?
+    elif [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null && sudo -n ip netns add bolina-m6 2>/dev/null; then
+        ISO="network namespace via sudo ip netns"
+        BUILD_OUT="$(sudo -n ip netns exec bolina-m6 sudo -n -u "$(id -un)" env HOME="$HOME" "$ZIG_BIN" build 2>&1)"
+        BUILD_RC=$?
+        sudo -n ip netns del bolina-m6 2>/dev/null || true
+    fi
 else
-    ISO="isolation not available on $OS: build ran without it; CI (Linux) is the enforcement point"
-    BUILD_OUT="$("$ZIG" build 2>&1)"
+    TRIED="no network namespace facility on $OS"
+fi
+if [ -z "$ISO" ]; then
+    BUILD_OUT="$("$ZIG_BIN" build 2>&1)"
     BUILD_RC=$?
 fi
-if [ "$BUILD_RC" -eq 0 ]; then
-    row M6 PASS "build OK; $ISO; $DEP_NOTE (SPEC.md section 11.7, BE-DEP-01)"
-else
-    row M6 FAIL "build failed under: $ISO; $DEP_NOTE: $(printf '%s' "$BUILD_OUT" | tail -1)"
+if [ -n "$ISO" ] && [ "$BUILD_RC" -eq 0 ]; then
+    row M6 PASS "build OK with network disabled via $ISO; $DEP_NOTE (SPEC.md section 11.7, BE-DEP-01)"
+elif [ -n "$ISO" ]; then
+    row M6 FAIL "build failed with network disabled via $ISO; $DEP_NOTE: $(printf '%s' "$BUILD_OUT" | tail -1)"
     FAILS=$((FAILS + 1))
+else
+    row M6 PENDING "offline build not verified: $TRIED; plain build rc=$BUILD_RC is informational only, excluded from the exit code; $DEP_NOTE (SPEC.md section 11.7, BE-DEP-01)"
 fi
 
 # ---- M7: shipped build is ReleaseSafe, version and flags recorded ----
