@@ -1191,7 +1191,7 @@ an unrelated one.
 
 ```
 resource_id := "bol:" executor_fp "/" namespace "/" path
-  executor_fp : 16 lowercase hex chars — first 8 bytes of the executor's sig_pubkey fingerprint
+  executor_fp : 16 lowercase hex chars, the first 8 bytes of BLAKE2s-256(executor sig_pubkey) (BE-RES-06)
   namespace   : 1..32 chars from [a-z0-9-]
   path        : 1..180 chars from [a-z0-9-._/], no empty segment, no "." or ".." segment
 ```
@@ -1230,6 +1230,8 @@ signed channel state. Approval volume is a direct function of resource granulari
 volume is what produces the approver fatigue named as the dominant residual risk
 (`THREAT-MODEL.md` §4.1). Granularity is therefore an explicit, reviewable operator decision, not a
 by-product of how agents happen to phrase requests.
+
+**BE-RES-06 (the sig_pubkey fingerprint is BLAKE2s-256)**: `executor_fp` is a digest of the executor's signing public key, never the raw bytes: `executor_fp = BLAKE2s-256(sig_pubkey)[0..8]`, rendered as 16 lowercase hex chars. A fingerprint is a hash; raw key bytes are not a fingerprint and would leak key structure into the namespace. Two implementations that derive `executor_fp` differently produce disjoint namespaces and silently defeat BE-RES-03 alias collapsing and BE-RES-04 one-resource-one-executor. The fingerprint affects canonicalization only: `resource_id` is opaque on the wire (a `u16` length plus bytes), so this rule constrains the executor-side canonical resolver, not the wire encoding.
 
 ### 8.5 Refusal
 
@@ -1415,6 +1417,38 @@ A shared vector file fixing encodings, signature inputs, address derivations, di
 byte-for-byte. Toolchain and any vendored primitive are pinned by content hash and re-verified on
 every build: *an artifact can change size and content under a stable name and a stable filename, and
 a result carried forward across such a change is a result about a file that no longer exists.*
+
+The canonical file is `test/vectors.json`, produced by `tools/gen-vectors.zig` (the first
+implementation, Zig `std.crypto`) and cross-verified by `tools/verify-vectors.py` (the second
+implementation, Python `cryptography` for Ed25519 and X25519, `hashlib` for BLAKE2s) and
+`tools/verify-layout.py` (a field-by-field byte-layout walker). The M3 gate regenerates the file,
+fails on any drift versus the committed copy, then runs both verifiers; a vector is canonical only
+when two independent implementations reproduce every key, signature, digest, and address. Every
+value is deterministic: Ed25519 seeds are fixed, Ed25519 signing is deterministic per RFC 8032, and
+BLAKE2s-256 is deterministic, so the file is byte-stable across platforms and runs and can be
+checked in and diffed.
+
+Every signature signs over `domain_tag || tbs` (BE-SIG-01), never bare `tbs`, so a signature valid
+for one structure class cannot be replayed against another. The generator self-verifies each
+positive signature with `std.crypto` before emitting, and the file records both `tbs_hex` and
+`sig_input_hex` (the `domain_tag || tbs` bytes the signature covers) so a second implementation
+verifies over exactly the bytes the first signed. The file carries one vector per structure class:
+Cert (tag `0x01`, two CA signatures over the same `0x01 || tbs` in ascending CA-key order), Envelope
+(tag `0x02`, genesis, carrying an Intent body), Span (tag `0x03`, a subprocess observation), Grant
+(tag `0x04`, an object capability), and Refusal (tag `0x06`, no version field, section 8.5). Each
+records its decoded fields, `tbs_hex`, `sig_input_hex`, the signature, the signer identity and
+public key, the full `wire_hex`, and the expected verify result.
+
+The `method_id_table` fixes the BE-EVID-15 mapping the receiver derives (never receives): `method_id`
+1 through 4 are DirectObservation (ceiling `q8 = 242`, confidence 0.95), 5 and 6 Documentation (191,
+0.75), 7 ExpertTestimony (216, 0.85), 8 Inference (165, 0.65); any `method_id` outside the table
+falls to the floor as Inference (BE-EVID-13). The `keys` block fixes five identities (two CAs, an
+approver, an executor, an agent) with their seeds and derived signing and key-exchange public keys;
+the `addressing` block fixes `overlay_addr = 0xfd || BLAKE2s-256(sig_pubkey)[0..15]` for each. The
+`resource_id` vector records the BE-RES-06 fingerprint choice, `executor_fp = BLAKE2s-256(sig_pubkey)
+[0..8]`. Three negative vectors assert rejection: an Envelope with a truncated signature (BE-WIRE-02
+totality), an Envelope with a trailing byte (section 2.2 forbids unknown trailing bytes), and an
+Envelope whose signature is valid but over the wrong domain tag (BE-SIG-01 domain separation).
 
 ### 11.4 Model checking
 
