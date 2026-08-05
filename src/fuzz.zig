@@ -13,6 +13,8 @@
 const std = @import("std");
 const parser = @import("parser.zig");
 const vectors_json = @import("vectors").json;
+const coverage = @import("coverage.zig");
+const opts = @import("build_options");
 
 const MAX_INPUT: usize = 4096;
 
@@ -76,13 +78,13 @@ pub fn main() !void {
     defer arena.deinit();
     const a = arena.allocator();
 
-    // Fixed iteration count: wall-clock is measured externally (the shell wraps
-    // the run), so the harness depends on no unstable clock API. The budget is
-    // calibrated to roughly one hour of wall-clock at the measured ReleaseSafe
-    // rate (~2.0M inputs/s on this machine), which is the LANGUAGE.md section 4
-    // metric. A ReleaseSafe panic here is a real parser bounds gap; a clean exit
-    // over N inputs means N inputs parsed with no out-of-bounds access.
-    const budget: u64 = 7_300_000_000;
+    // Budget comes from build_options (-Dfuzz-budget). The default is the full
+    // ~1h run (7.3B inputs at ~2.0M inputs/s ReleaseSafe); the coverage step
+    // shortens it via -Dfuzz-budget=4000000. The harness depends on no unstable
+    // clock API: wall-clock is measured externally. A ReleaseSafe panic here is
+    // a real parser bounds gap; a clean exit over N inputs means N inputs
+    // parsed with no out-of-bounds access.
+    const budget: u64 = opts.fuzz_budget;
 
     const seeds = try loadSeeds(a);
 
@@ -100,4 +102,27 @@ pub fn main() !void {
         if (iter % 250_000_000 == 0) std.debug.print("fuzz progress: {d}M / {d}M\n", .{ iter / 1_000_000, budget / 1_000_000 });
     }
     std.debug.print("FUZZ DONE: {d} inputs ({d} parser calls), 0 panics\n", .{ iter, iter * 3 });
+
+    // Coverage report (SPEC section 11.6 / LANGUAGE.md O2). Only emitted when
+    // built with -Dcoverage, which sets coverage.ENABLED comptime true. Manual
+    // instrumentation IS the measurement: the toolchain's -ffuzz coverage has
+    // no script-readable output, so hit_count is read directly here.
+    if (coverage.ENABLED) {
+        var reached: usize = 0;
+        for (0..coverage.COUNT) |i| {
+            if (coverage.hit_count[i] > 0) reached += 1;
+        }
+        std.debug.print("COVERAGE: {d}/{d} branches reached\n", .{ reached, coverage.COUNT });
+        if (reached == coverage.COUNT) {
+            std.debug.print("COVERAGE: no unreached branches\n", .{});
+        } else {
+            std.debug.print("COVERAGE: unreached branches:\n", .{});
+            for (0..coverage.COUNT) |i| {
+                if (coverage.hit_count[i] == 0) {
+                    std.debug.print("  - {s}\n", .{@tagName(@as(coverage.Branch, @enumFromInt(i)))});
+                }
+            }
+        }
+        std.debug.print("COVERAGE: corpus = 3 seeds (envelope, grant, intent from test/vectors.json), 4 mutation operators (bit flip, byte overwrite, truncate, saturate), 40% mutated-seed / 60% fully-random, 4096-byte input cap\n", .{});
+    }
 }
