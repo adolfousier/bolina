@@ -1,0 +1,30 @@
+{
+  "version": "0.16.0",
+  "pinned": "2026-08-05",
+  "obligation": "LANGUAGE.md O4 and THREAT-MODEL.md section 4.8: the Zig version is pinned and recorded with every conformance result, and the release archive is verified by content hash. This file is the single source of truth; CI re-verifies the hash on every build (SPEC.md section 11.3).",
+  "metadata_source": "https://ziglang.org/download/index.json",
+  "targets": {
+    "aarch64-macos": {
+      "url": "https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz",
+      "sha256": "b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489",
+      "size": 52238004
+    },
+    "x86_64-linux": {
+      "url": "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz",
+      "sha256": "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00",
+      "size": 55478392
+    }
+  },
+  "verification_log": [
+    {
+      "target": "aarch64-macos",
+      "date": "2026-08-05",
+      "result": "sha256 OK, size 52238004 OK, zig version reports 0.16.0"
+    },
+    {
+      "target": "x86_64-linux",
+      "date": "2026-08-05",
+      "result": "sha256 OK on GitHub Actions ubuntu-latest (run 31028205307, job summary carries the evidence), zig version reports 0.16.0, M6 build succeeded inside a network namespace"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+.{
+    .name = .bolina,
+    .version = "0.0.0",
+    // Generated once for this package; never changes (see zig docs).
+    .fingerprint = 0x18a1409db52e3325, // Changing this has security and trust implications.
+    // Pinned per LANGUAGE.md O4; CI re-verifies the toolchain by content
+    // hash from tools/toolchain.json on every build (SPEC.md section 11.3).
+    .minimum_zig_version = "0.16.0",
+    // SPEC.md BE-DEP-01: no third-party dependencies. This table stays
+    // empty. Audited by tools/prumo-verify under CONTRIBUTING.md M6.
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+        "NOTICE",
+        "README.md",
+    },
+}

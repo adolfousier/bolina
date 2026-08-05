@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  prumo:
+    name: mechanical gates (prumo-verify)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Read the pinned toolchain manifest
+        id: pin
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          m = json.load(open("tools/toolchain.json"))
+          t = m["targets"]["x86_64-linux"]
+          print(f"url={t['url']}")
+          print(f"sha256={t['sha256']}")
+          print(f"version={m['version']}")
+          PY
+
+      - name: Download the pinned Zig release archive
+        run: curl -fsSL -o /tmp/zig.tar.xz "${{ steps.pin.outputs.url }}"
+
+      - name: Verify the archive by content hash (O4, SPEC.md section 11.3)
+        run: |
+          echo "${{ steps.pin.outputs.sha256 }}  /tmp/zig.tar.xz" | sha256sum -c -
+          {
+            echo "## Toolchain verification (O4)"
+            echo ""
+            echo "zig ${{ steps.pin.outputs.version }}, target x86_64-linux"
+            echo ""
+            echo "sha256 \`${{ steps.pin.outputs.sha256 }}\` verified against tools/toolchain.json"
+            echo ""
+            echo "evidence: GitHub Actions run $GITHUB_RUN_ID, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Extract and add to PATH
+        run: |
+          ZIGDIR="$HOME/zig-toolchain/zig-x86_64-linux-${{ steps.pin.outputs.version }}"
+          mkdir -p "$HOME/zig-toolchain"
+          tar -xJf /tmp/zig.tar.xz -C "$HOME/zig-toolchain"
+          ls -la "$HOME/zig-toolchain"
+          test -x "$ZIGDIR/zig" || { echo "zig binary missing at $ZIGDIR"; exit 1; }
+          echo "ZIGDIR=$ZIGDIR"
+          echo "$ZIGDIR" >> "$GITHUB_PATH"
+
+      - name: Record the compiler version (M7)
+        run: |
+          echo "pinned: ${{ steps.pin.outputs.version }}"
+          echo "installed: $(zig version)"
+          test "$(zig version)" = "${{ steps.pin.outputs.version }}"
+
+      - name: Run prumo-verify (all seven gates)
+        run: ./tools/prumo-verify
