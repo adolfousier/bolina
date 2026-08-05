@@ -124,11 +124,11 @@ TRIED=""
 if [ "$OS" = "Linux" ]; then
     TRIED="tried unshare -rn, then sudo ip netns"
     if unshare -rn true 2>/dev/null; then
-        ISO="network namespace via unshare -rn"
+        ISO="a network namespace (unshare -rn)"
         BUILD_OUT="$(unshare -rn "$ZIG_BIN" build 2>&1)"
         BUILD_RC=$?
     elif [ "$(id -u)" -ne 0 ] && sudo -n true 2>/dev/null && sudo -n ip netns add bolina-m6 2>/dev/null; then
-        ISO="network namespace via sudo ip netns"
+        ISO="a network namespace (sudo ip netns)"
         BUILD_OUT="$(sudo -n ip netns exec bolina-m6 sudo -n -u "$(id -un)" env HOME="$HOME" "$ZIG_BIN" build 2>&1)"
         BUILD_RC=$?
         sudo -n ip netns del bolina-m6 2>/dev/null || true
