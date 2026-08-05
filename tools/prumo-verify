@@ -21,6 +21,13 @@
 #        is the number, printed every run, not the colour of the gate.
 #        Local runs raise the file when the count climbs; commit the bump
 #        together with the tests. CI runs never write the file.
+#   M3: The committed test/vectors.json is canonical only if it cross-verifies
+#        between two independent implementations. This gate regenerates the file
+#        from the Zig generator (tools/gen-vectors.zig), fails on any drift
+#        versus the committed copy, then runs the independent Python verifier
+#        (tools/verify-vectors.py: Ed25519/BLAKE2s/X25519) and the field-by-field
+#        byte-layout walker (tools/verify-layout.py). PENDING only when python3
+#        with cryptography is unavailable.
 #   M5: The network-parsing module lives at src/parser.zig (and src/parser/
 #        if it is ever split). Absent counts as 0 lines.
 #   M6: Offline build: the gate is "build succeeds with the network
@@ -35,7 +42,7 @@
 #   M7: build.zig hardcodes ReleaseSafe and exposes no optimize option
 #        (LANGUAGE.md O1). Compiler version and flags are recorded above.
 #
-# Exit code: number of failing ENFORCED gates (M1, M5, M6, M7).
+# Exit code: number of failing ENFORCED gates (M1, M3, M5, M6, M7).
 # Usage: run from anywhere; ZIG=/path/to/zig overrides PATH lookup.
 
 set -u
@@ -98,10 +105,50 @@ else
     fi
 fi
 
-# ---- M2, M3, M4: printed, not yet enforced ----
+# ---- M2, M4: printed, not yet enforced ----
 row M2 PENDING "not yet enforced: no code to check (mutation testing, SPEC.md section 11.2)"
-row M3 PENDING "not yet enforced: no code to check (cross-implementation vectors, SPEC.md section 11.3)"
 row M4 PENDING "not yet enforced: no code to check (differential fuzzing, SPEC.md section 11.6)"
+
+# ---- M3: cross-implementation vectors, SPEC.md section 11.3 (ENFORCED) ----
+# The committed test/vectors.json is canonical only if two independent
+# implementations agree on it. This gate: (a) regenerates the file from the Zig
+# generator, (b) fails on any drift versus the committed copy, (c) runs the
+# independent Python cross-verifier (Ed25519/BLAKE2s/X25519) and the field-by-field
+# byte-layout walker. PENDING only when python3 + cryptography are unavailable.
+m3_verdict="PASS"
+m3_detail=""
+if [ ! -f test/vectors.json ]; then
+    m3_verdict="FAIL"; m3_detail="test/vectors.json missing: run 'zig run tools/gen-vectors.zig' and commit it"
+elif ! python3 -c "import json; json.load(open('test/vectors.json'))" 2>/dev/null; then
+    m3_verdict="FAIL"; m3_detail="test/vectors.json is not valid JSON"
+elif ! command -v python3 >/dev/null 2>&1 || ! python3 -c "import cryptography" 2>/dev/null; then
+    m3_verdict="PENDING"; m3_detail="python3 with cryptography unavailable: cannot cross-verify (SPEC.md section 11.3)"
+else
+    regen_out="$("$ZIG" run tools/gen-vectors.zig 2>&1)"
+    if [ $? -ne 0 ]; then
+        m3_verdict="FAIL"; m3_detail="vector generator failed: $(printf '%s' "$regen_out" | tail -1)"
+    elif git rev-parse --verify HEAD >/dev/null 2>&1 && git ls-files --error-unmatch test/vectors.json >/dev/null 2>&1; then
+        # tracked file: regenerated output must be byte-identical to the committed copy
+        if [ -n "$(git diff --no-color --text HEAD -- test/vectors.json)" ]; then
+            m3_verdict="FAIL"; m3_detail="committed test/vectors.json drifted from generator output: regenerate and commit"
+        fi
+    fi
+    if [ "$m3_verdict" = "PASS" ]; then
+        v_out="$(python3 tools/verify-vectors.py 2>&1)"; v_rc=$?
+        l_out="$(python3 tools/verify-layout.py 2>&1)"; l_rc=$?
+        if [ "$v_rc" -ne 0 ]; then
+            m3_verdict="FAIL"; m3_detail="independent cross-verify failed: $(printf '%s' "$v_out" | grep -i fail | tail -1)"
+        elif [ "$l_rc" -ne 0 ]; then
+            m3_verdict="FAIL"; m3_detail="byte-layout verify failed: $(printf '%s' "$l_out" | grep -i fail | tail -1)"
+        else
+            m3_detail="vectors cross-verify (zig <-> python cryptography) + byte-layout walk both green (SPEC.md section 11.3)"
+        fi
+    fi
+fi
+row M3 "$m3_verdict" "$m3_detail"
+if [ "$m3_verdict" = "FAIL" ]; then
+    FAILS=$((FAILS + 1))
+fi
 
 # ---- M5: network-parsing module line budget ----
 PARSER_LINES="$( { find src/parser.zig src/parser -name '*.zig' -type f 2>/dev/null || true; } | while read -r f; do wc -l < "$f"; done | awk '{ s += $1 } END { print s + 0 }')"
@@ -168,6 +215,6 @@ else
 fi
 
 echo
-echo "enforced gates: M1 M5 M6 M7, failing: $FAILS"
-echo "not yet enforced: M2 M3 M4, printed above, excluded from the exit code"
+echo "enforced gates: M1 M3 M5 M6 M7, failing: $FAILS"
+echo "not yet enforced: M2 M4, printed above, excluded from the exit code"
 exit "$FAILS"

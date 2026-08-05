@@ -57,5 +57,13 @@ jobs:
           echo "installed: $(zig version)"
           test "$(zig version)" = "${{ steps.pin.outputs.version }}"
 
+      - name: Install Python cryptography for the M3 cross-verify gate
+        run: |
+          if ! python3 -c "import cryptography" 2>/dev/null; then
+            python3 -m pip install --break-system-packages cryptography \
+              || python3 -m pip install --user cryptography \
+              || echo "warn: cryptography install failed; M3 will report PENDING (graceful)"
+          fi
+
       - name: Run prumo-verify (all seven gates)
         run: ./tools/prumo-verify
