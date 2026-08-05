@@ -20,6 +20,11 @@
       "target": "aarch64-macos",
       "date": "2026-08-05",
       "result": "sha256 OK, size 52238004 OK, zig version reports 0.16.0"
+    },
+    {
+      "target": "x86_64-linux",
+      "date": "2026-08-05",
+      "result": "sha256 OK on GitHub Actions ubuntu-latest (run 31028205307, job summary carries the evidence), zig version reports 0.16.0, M6 build succeeded inside a network namespace"
     }
   ]
 }
