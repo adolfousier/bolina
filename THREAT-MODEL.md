@@ -237,6 +237,17 @@ the compiler is not giving**. It is mandatory and it is a merge gate, not a mile
 all of it". That is a real and defensible position. It is not equivalent to a compiler-enforced
 guarantee, and this document does not claim it is.
 
+**Coverage measurement is hand-instrumented, not native.** The Zig toolchain's `-ffuzz` coverage is
+consumed only by a WebSocket UI and emits no script-readable report, so the §11.6 coverage number is
+produced by hand-placed branch counters in `src/coverage.zig` rather than a compiler-generated edge
+map. The current result, 11 of 11 enumerated parser branches reached over a bounded 4,000,000-input
+run, is real but weaker than native coverage in two ways: the branch set is enumerated by hand, so
+an uncounted branch is invisible to this measurement; and the counters track branch reach, not edge
+or path frequency. By how much this weakens the fuzzing substitute against a native instrument is
+itself unknown. The follow-up is to re-run on the first stable toolchain pin that exposes native
+coverage output, filed as #11. This does not reopen the decision: the crash half of §11.6 (zero
+out-of-bounds reads over 7.3B inputs) is independent of coverage instrumentation and held throughout.
+
 ### 4.10 Panic-as-denial-of-service, and the safety inversion — ACTIVE
 
 `ReleaseSafe` prevents memory corruption by aborting on an out-of-bounds read or an overflow. In a
