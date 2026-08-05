@@ -249,6 +249,7 @@ signature whose tag does not match the structure being verified:
 | `0x03` | `Span` (§7.1) |
 | `0x04` | `Grant` (§8.1) |
 | `0x05` | Handshake binding over Noise `h` (§4.1) |
+| `0x06` | `Refusal` (§8.5) |
 
 *Executor keys sign both `Span` and envelopes; approver keys sign both `Grant` and envelopes; every
 key signs the handshake binding. Current field layouts happen to make a cross-type collision
@@ -637,7 +638,7 @@ Envelope :=
                              ; and the signature itself, so a parent reference is a commitment
                              ; to an envelope that was already authenticated (§9)
   u64   ts                   ; unix ms — INFORMATIVE ONLY
-  u8    body_type            ; 1 Utterance, 2 Intent, 3 Grant, 4 Effect, 5 Control
+  u8    body_type            ; 1 Utterance, 2 Intent, 3 Grant, 4 Effect, 5 Control, 6 Refusal
   u32   body_len, body       ; ≤ MAX_MESSAGE − MAX_HEADER (BE-TR-05)
   [64]  sig                  ; Ed25519 over all preceding bytes
 ```
@@ -650,7 +651,7 @@ to time-since-receipt.
 discard the envelope on failure.
 
 **BE-ENV-03** — A receiver MUST reject an envelope whose sender certificate lacks the role its
-`body_type` requires: `Intent` requires `agent`; `Grant` requires `approver`; `Effect` and any
+`body_type` requires: `Intent` requires `agent`; `Grant` and `Refusal` require `approver`; `Effect` and any
 embedded `Span` require `executor`. Rejection happens before the body reaches application logic.
 
 **BE-ENV-04** — A receiver MUST maintain a per-`(sender, channel)` sliding acceptance window over
@@ -684,6 +685,7 @@ Grant     := §8.1
 Effect    := [16] intent_id ; [16] grant_id ; u8 ok ; i32 exit_code
              u8 span_count ; Span[] ; [32] output_digest
 Control   := membership operations, channel metadata
+Refusal   := §8.5
 ```
 
 **BE-BODY-01** — The daemon MUST treat `Intent.action` as opaque bytes: it computes
@@ -1035,7 +1037,9 @@ DRAFTED ──► PENDING ──┬─► APPROVED ──► EXECUTING ──┬
 ```
 
 `DRAFTED → PENDING` is caused by an `Intent`. `PENDING → APPROVED` is caused **only** by a valid
-`Grant`. There is no other in-edge to `APPROVED`.
+`Grant`; there is no other in-edge to `APPROVED`. `PENDING → REJECTED` is caused **only** by a
+valid `Refusal` (§8.5); there is no other in-edge to `REJECTED`, and before RT-01 there was none
+at all: the state sat in the diagram unreachable (RED-TEAM-08, F1).
 
 **BE-GRANT-01 (single-shot, durably)** — An executor MUST keep a ledger of consumed `grant_id`s and
 MUST refuse any already present. The `grant_id` MUST be **durably committed to stable storage before
@@ -1060,30 +1064,58 @@ partial, prefix, or semantic matching. Approving "restart the CMS container" doe
 restarting anything else, because the bytes differ.
 
 **BE-GRANT-03 (no bypass edge)** — No code path may reach `EXECUTING` except through a single
-verification routine that performs **all** of the following checks, and refuses on the first
-failure:
+verification routine that performs **all** of the following checks, in the enumerated order, and
+refuses on the first failure:
 
+0. `Grant.version` equals 2. Any other value MUST be refused before further processing.
+   *The field existed on the wire from the first draft and no check ever read it (RED-TEAM-08,
+   F6): a parser accepting a future variant would feed it through a verification list written
+   for this one.*
 1. The Grant arrived as a `body_type = 3` envelope whose envelope `sender` equals `Grant.approver`.
    A Grant reaching the executor by any other path MUST be refused. *Without this, BE-ENV-03's role
    check — which is about the envelope sender — never binds to the grant body's own approver field.*
 2. `Grant.sig` verifies against `Grant.approver` under BE-SIG-01 domain separation.
 3. `Grant.approver`'s certificate is valid **at this moment**: BE-ID-02, BE-ID-04, carries the
    `approver` role, and is not revoked (BE-REV-02). Re-checked here, not cached from receipt.
-4. `Grant.executor` equals this executor's own `sig_pubkey`, byte-for-byte.
-5. `Grant.subject` equals the `sender` of the `Intent` being executed, byte-for-byte.
-6. `Grant.intent_id` equals the `intent_id` of a `PENDING` intent held by this executor. A Grant
+4. `Grant.subject`'s certificate is valid **at this moment**: BE-ID-02, BE-ID-04, carries the
+   `agent` role, and is not revoked (BE-REV-02). Re-checked here, not cached from receipt.
+   *The approver's certificate was revalidated at execution time, the requesting agent's was not,
+   so revoking a compromised agent did not stop the work it had already requested (RED-TEAM-08,
+   F5). The asymmetry had no justification.*
+5. `Grant.executor` equals this executor's own `sig_pubkey`, byte-for-byte.
+6. `Grant.subject` equals the `sender` of the `Intent` being executed, byte-for-byte.
+7. `Grant.intent_id` equals the `intent_id` of a `PENDING` intent held by this executor. A Grant
    matching no pending intent MUST be dropped, never buffered and never used to create one.
-7. `Grant.resource_id` equals the canonical `resource_id` of that intent (§8.4), byte-for-byte.
-8. `Grant.action_digest` equals `BLAKE2s` recomputed over that intent's `action` bytes (BE-GRANT-02).
-9. `grant_id` is absent from the consumed ledger, and is durably committed before proceeding
-   (BE-GRANT-01).
+8. `Grant.resource_id` equals the canonical `resource_id` of that intent (§8.4), byte-for-byte.
+9. `Grant.action_digest` equals `BLAKE2s` recomputed over that intent's `action` bytes (BE-GRANT-02).
 10. Expiry passes both conditions of BE-GRANT-05.
+11. `grant_id` is absent from the consumed ledger, and is durably committed before proceeding
+   (BE-GRANT-01). This is the only check that performs I/O, and it runs last by obligation, not
+   by accident.
+
+The order above is normative (RED-TEAM-08, F3): every check that reads state or computes runs
+before the only I/O step, check 11's durable ledger commit. An earlier draft committed the
+`grant_id` before comparing expiry, which cost one forced disk write per delivered expired Grant,
+at the attacker's chosen rate, and marked a `grant_id` consumed for a Grant that was then refused:
+on restart, BE-GRANT-01a would publish an `interrupted` Effect for an effect that never started.
+A check order that makes the ledger assert a fabricated effect is an audit defect, not a
+performance detail.
 
 The verified capability MUST be represented by a type that the executor's own code cannot construct
 outside this routine — private fields, no exported constructor. *§8.1's prose says a Grant is bound
-to one agent, one executor, one resource, one intent, and one exact action. Checks 4–8 are what make
-that sentence true; before they were enumerated, only the last of the five had an enforcing rule.
-This is the invariant mutation testing must attack hardest (§11.2).*
+to one agent, one executor, one resource, one intent, and one exact action. Checks 5 to 9 are what
+make that sentence true; before they were enumerated, only the last of the five had an enforcing
+rule. This is the invariant mutation testing must attack hardest (§11.2).*
+
+**BE-GRANT-03a (frozen during verification)** — From the moment the verification routine begins
+for an intent until it either refuses or the intent enters `EXECUTING`, the intent's lifecycle
+MUST be frozen: BE-GRANT-06a's `T_pending` MUST NOT fire for it, the resource lock MUST NOT be
+released, and the transition to `EXECUTING` MUST occur under the same lock acquisition. The
+routine MUST NOT return a verified capability and then re-acquire anything before `EXECUTING`.
+*Two conforming rules, one violated invariant, no rule broken (RED-TEAM-08, F2): `T_pending`
+could fire during the durable write of the last check, releasing the resource lock; another
+agent legitimately acquires the resource; the routine then returns a verified capability and
+enters `EXECUTING` on a resource someone else holds.*
 
 **BE-GRANT-04 (fail-closed on restart)** — Pending state MUST live in process memory only. An
 executor restart MUST collapse every `PENDING` to `EXPIRED`. A dead-man's switch: safety is tied to
@@ -1118,6 +1150,13 @@ unreliable rather than malicious — locks a resource permanently by emitting an
 approves, denying it to every other agent and to every human-driven flow until the process dies.
 BE-GRANT-04 collapses pending state on restart, which is a different trigger and cannot be the only
 one.*
+
+**BE-GRANT-06b (intent_id uniqueness)** — An executor MUST refuse an `Intent` whose `intent_id`
+equals that of an intent it already holds in `PENDING`, so grant matching (check 7) finds at most
+one intent per id by construction. *Before this rule, uniqueness among PENDING intents was
+accidental: check 8's resource comparison caught a mismatched lookup, which is unexploitable by
+accident rather than by construction (RED-TEAM-08, F4). The property belongs at admission, where
+it is enforceable, not at matching, where it was only observed.*
 
 ### 8.3 What the human sees
 
@@ -1191,6 +1230,41 @@ signed channel state. Approval volume is a direct function of resource granulari
 volume is what produces the approver fatigue named as the dominant residual risk
 (`THREAT-MODEL.md` §4.1). Granularity is therefore an explicit, reviewable operator decision, not a
 by-product of how agents happen to phrase requests.
+
+### 8.5 Refusal
+
+`REJECTED` existed in the §8.2 state diagram with no message able to cause it (RED-TEAM-08, F1).
+An approver who reviewed an intent and decided NO could only stay silent, at the cost of the full
+`T_pending` lock on the resource: careful refusal was indistinguishable from being asleep, and was
+punished by the very mechanism meant to expire stale requests. An incentive pointing the wrong way
+exactly where `THREAT-MODEL.md` §4.1 says this design is weakest. Refusal makes NO a first-class,
+signed, ledgered act.
+
+```
+Refusal :=
+  [16]  intent_id            ; the ONE intent instance refused
+  u16   note_len, note       ; ≤ 1 KiB, approver-authored, informative only
+  [64]  sig                  ; Ed25519 over all preceding bytes, domain tag 0x06 (BE-SIG-01)
+```
+
+`note` is prose for the requesting agent and MUST NOT influence any authorization decision: the
+binding content of a Refusal is the `intent_id` alone. Any valid approver may refuse, because an
+intent is bound to no approver until a Grant binds one.
+
+**BE-GRANT-09 (refusal semantics)** — An executor MUST transition an intent `PENDING → REJECTED`
+upon receiving a `body_type = 6` envelope in which `Refusal.sig` verifies against the envelope
+`sender` under domain tag 0x06, the sender carries the `approver` role (BE-ENV-03), and
+`Refusal.intent_id` names an intent this executor holds in `PENDING`. The resource lock MUST be
+released immediately, without waiting for `T_pending`. A Refusal matching no `PENDING` intent MUST
+be dropped: never buffered, and never used to pre-reject an intent that arrives later.
+
+**BE-GRANT-10 (refusal is terminal)** — `REJECTED` is terminal: no transition exists out of it.
+A Grant naming a `REJECTED` intent MUST be dropped, which check 7 provides by construction since
+it matches `PENDING` intents only. A Refusal is a signed channel event (§9), so every member sees
+it: silence and refusal are no longer the same state, and a careful NO now releases the lock in
+one message instead of after the full `T_pending` wait. *A malicious approver's refusal costs no
+more than the silence already available to it, so the new message adds no attack surface; it only
+removes the penalty from honest refusal.*
 
 ## 9. Layer 5 — Channel ledger
 
