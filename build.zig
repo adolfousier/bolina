@@ -32,9 +32,13 @@ pub fn build(b: *std.Build) void {
     // (SPEC.md section 11.1) has a home the moment the first
     // BE-bound test lands. Zig registry convention for M1:
     // test blocks are named test "BE_<CLASS>_<NN> ...".
+    // The test step root is the aggregator (src/tests.zig), which imports every
+    // dedicated *_test.zig module. Source files are production-only; this keeps
+    // test code out of the shipped binary while giving the M1 bijection (SPEC
+    // section 11.1) one compilation root for all BE-bound tests.
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
+            .root_source_file = b.path("src/tests.zig"),
             .target = target,
             .optimize = optimize,
         }),
