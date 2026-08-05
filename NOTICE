@@ -1,0 +1,34 @@
+Bolina Protocol
+Copyright 2026 Daniel Carneiro and the Bolina contributors
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+---
+
+Attribution
+
+The protocol design, and the prior work it formalizes (Prumo, the Gate
+Protocol, MAD, Orbit, caravela-epistemic), are by Daniel Carneiro (`loonix`).
+See SPEC.md §10.2.
+
+The conformance rules R1 through R4 in SPEC.md §11 are not the author's. They
+come from "Slot Benchmarking: A Discipline for Running the Best Local Models
+Without Losing Your Mind (or Your Disk)" by Frinzfrinz, and are used with
+attribution. See SPEC.md §10.1 and §11.9.
+
+Contributors are listed in CONTRIBUTORS.
+
+---
+
+No third-party code
+
+A conformant Bolina node builds from this repository and a standard toolchain
+alone, with the network disabled (SPEC.md §11.7, BE-DEP-01). This repository
+therefore vendors no third-party source.
+
+One dependency exists and is not in this repository: the four cryptographic
+primitives (Ed25519, X25519, ChaCha20-Poly1305, BLAKE2s) come from the Zig
+standard library. They are third-party code with an upstream, and the
+constant-time assumption rests on them. This is stated plainly in
+THREAT-MODEL.md §4.8 and T1 rather than hidden behind the zero-dependency
+claim.

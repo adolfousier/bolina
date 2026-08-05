@@ -1,0 +1,14 @@
+Bolina contributors, in order of first contribution.
+
+Daniel Carneiro (loonix)
+  Protocol design and specification. The prior work Bolina formalizes — Prumo,
+  the Gate Protocol, MAD, Orbit, caravela-epistemic — is his; see SPEC.md §10.2.
+
+---
+
+Not a contributor, but credited:
+
+Frinzfrinz
+  "Slot Benchmarking: A Discipline for Running the Best Local Models Without
+  Losing Your Mind (or Your Disk)". Conformance rules R1 through R4 in
+  SPEC.md §11 are taken from it with attribution. See SPEC.md §11.9.
