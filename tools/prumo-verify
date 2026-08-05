@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# prumo-verify — Bolina mechanical gates (CONTRIBUTING.md section 2)
+#
+# Prints ALL SEVEN gates on every run. M2/M3/M4 are printed but explicitly
+# marked "not yet enforced — no code to check" until the code they target
+# exists. The gap is made visible instead of absent: CONTRIBUTING.md claims
+# seven gates, so seven rows appear even when four have nothing to check.
+#
+# Conventions enforced here:
+#   M1 — SPEC.md declares BE-* items as paragraph-opening bold markers:
+#        **BE-<CLASS>-<NN>** ... The canonical list is derived from SPEC.md
+#        AT RUN TIME on every invocation, never from a stored copy, so the
+#        bijection verifies the spec, not a list. Tests bind by name via the
+#        Zig registry convention (SPEC.md section 11.1, "an equivalent
+#        registry in Zig"): test blocks named  test "BE_<CLASS>_<NN> ...".
+#   M5 — The network-parsing module lives at src/parser.zig (and src/parser/
+#        if it is ever split). Absent counts as 0 lines.
+#   M6 — Offline build uses unshare -rn where available (Linux); other
+#        platforms report honestly that isolation is unavailable there.
+#   M7 — build.zig hardcodes ReleaseSafe and exposes no optimize option
+#        (LANGUAGE.md O1). Compiler version and flags are recorded above.
+#
+# Exit code: number of failing ENFORCED gates (M1, M5, M6, M7).
+# Usage: run from anywhere; ZIG=/path/to/zig overrides PATH lookup.
+
+set -u
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT" || exit 2
+
+ZIG="${ZIG:-zig}"
+if ! command -v "$ZIG" >/dev/null 2>&1; then
+    echo "prumo-verify: zig not found; set ZIG=/path/to/zig or add it to PATH" >&2
+    exit 2
+fi
+ZIG_VERSION="$("$ZIG" version 2>&1)"
+FAILS=0
+
+row() { # id status detail
+    printf '%-4s %-8s %s\n' "$1" "$2" "$3"
+}
+
+echo "prumo-verify — Bolina mechanical gates (CONTRIBUTING.md section 2)"
+echo "repo: $REPO_ROOT"
+echo "zig:  $ZIG_VERSION ($(command -v "$ZIG"))"
+echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo
+
+# ---- M1: BE <-> test bijection, derived from SPEC.md at run time ----
+DECL="$(grep -oE '^\*\*BE-[A-Z]+-[0-9]+[a-z]?' SPEC.md | sed 's/^\*\*//' | sort -u)"
+DECL_COUNT="$(printf '%s\n' "$DECL" | grep -c '^BE-' || true)"
+
+TESTED="$(find src test -name '*.zig' -type f -exec grep -hoE 'test "BE_[A-Z]+_[0-9]+[a-z]?' {} + 2>/dev/null | sed -e 's/^test "//' -e 'y/_/-/' | sort -u || true)"
+TESTED_COUNT="$(printf '%s\n' "$TESTED" | grep -c '^BE-' || true)"
+
+if [ "$DECL_COUNT" -eq 0 ]; then
+    row M1 FAIL "derivation produced 0 declarations from SPEC.md — the declaration convention changed; fix the extractor or the spec, do not hand-edit a list"
+    FAILS=$((FAILS + 1))
+else
+    BOUND="$(comm -12 <(printf '%s\n' "$DECL") <(printf '%s\n' "$TESTED") | grep -c '^BE-' || true)"
+    MISSING="$(comm -23 <(printf '%s\n' "$DECL") <(printf '%s\n' "$TESTED") | grep -c '^BE-' || true)"
+    ORPHANS="$(comm -13 <(printf '%s\n' "$DECL") <(printf '%s\n' "$TESTED") | grep -c '^BE-' || true)"
+    if [ "$MISSING" -eq 0 ] && [ "$ORPHANS" -eq 0 ]; then
+        row M1 PASS "bijection closed: $BOUND/$DECL_COUNT declared BE items bound to tests (SPEC.md section 11.1)"
+    else
+        row M1 FAIL "bijection open: $BOUND/$DECL_COUNT declared BE items bound to tests (missing: $MISSING, orphan tests: $ORPHANS) — the ratchet climbs as tests land"
+        FAILS=$((FAILS + 1))
+    fi
+fi
+
+# ---- M2, M3, M4: printed, not yet enforced ----
+row M2 PENDING "not yet enforced — no code to check (mutation testing, SPEC.md section 11.2)"
+row M3 PENDING "not yet enforced — no code to check (cross-implementation vectors, SPEC.md section 11.3)"
+row M4 PENDING "not yet enforced — no code to check (differential fuzzing, SPEC.md section 11.6)"
+
+# ---- M5: network-parsing module line budget ----
+PARSER_LINES="$( { find src/parser.zig src/parser -name '*.zig' -type f 2>/dev/null || true; } | while read -r f; do wc -l < "$f"; done | awk '{ s += $1 } END { print s + 0 }')"
+if [ "$PARSER_LINES" -le 1500 ]; then
+    row M5 PASS "parser module $PARSER_LINES/1500 lines (BE-SURF-03)"
+else
+    row M5 FAIL "parser module $PARSER_LINES/1500 lines — over budget (BE-SURF-03)"
+    FAILS=$((FAILS + 1))
+fi
+
+# ---- M6: build with the network disabled, no package manager ----
+DEP_NOTE="dependency table empty"
+if ! grep -q '\.dependencies = \.{},' build.zig.zon; then
+    DEP_NOTE="WARNING: build.zig.zon dependencies table is not empty"
+fi
+OS="$(uname -s)"
+if [ "$OS" = "Linux" ] && unshare -rn true 2>/dev/null; then
+    ISO="network namespace via unshare -rn"
+    BUILD_OUT="$(unshare -rn "$ZIG" build 2>&1)"
+    BUILD_RC=$?
+else
+    ISO="isolation not available on $OS — build ran without it; CI (Linux) is the enforcement point"
+    BUILD_OUT="$("$ZIG" build 2>&1)"
+    BUILD_RC=$?
+fi
+if [ "$BUILD_RC" -eq 0 ]; then
+    row M6 PASS "build OK; $ISO; $DEP_NOTE (SPEC.md section 11.7, BE-DEP-01)"
+else
+    row M6 FAIL "build failed under: $ISO; $DEP_NOTE — $(printf '%s' "$BUILD_OUT" | tail -1)"
+    FAILS=$((FAILS + 1))
+fi
+
+# ---- M7: shipped build is ReleaseSafe, version and flags recorded ----
+M7_PROBLEMS=""
+if grep -q 'standardOptimizeOption(' build.zig; then
+    M7_PROBLEMS="$M7_PROBLEMS optimize mode exposed via standardOptimizeOption;"
+fi
+if ! grep -q 'ReleaseSafe' build.zig; then
+    M7_PROBLEMS="$M7_PROBLEMS ReleaseSafe not hardcoded in build.zig;"
+fi
+if "$ZIG" build --help 2>&1 | grep -q '\-Doptimize'; then
+    M7_PROBLEMS="$M7_PROBLEMS -Doptimize flag reachable;"
+fi
+if [ -z "$M7_PROBLEMS" ]; then
+    row M7 PASS "ReleaseSafe hardcoded, no optimize flag exposed; zig $ZIG_VERSION (LANGUAGE.md O1, SPEC.md section 11.8)"
+else
+    row M7 FAIL "$M7_PROBLEMS (LANGUAGE.md O1, SPEC.md section 11.8)"
+    FAILS=$((FAILS + 1))
+fi
+
+echo
+echo "enforced gates: M1 M5 M6 M7 — failing: $FAILS"
+echo "not yet enforced: M2 M3 M4 — printed above, excluded from the exit code"
+exit "$FAILS"
