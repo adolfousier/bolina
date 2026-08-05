@@ -243,6 +243,38 @@ test "BE_GRANT_05 not_after minus 1ms is accepted (boundary deny)" {
     try std.testing.expectEqualSlices(u8, grant.grant_id, verify.grantOf(verified).grant_id);
 }
 
+// T_max and T_recv boundary-allow tests. Each refuse condition is strict
+// ("more than"), so the exact-equal instant is allowed. These kill the
+// WRONG-OPERATOR mutants on the T_max and T_recv comparisons in the mutation
+// harness (tools/mutation-test.py): a >= mutant would refuse at equality.
+test "BE_GRANT_05 not_after exactly T_max from receipt is accepted (boundary)" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    // not_after sits exactly first_receipt + T_max. "More than T_max" is the
+    // refuse condition, so equality is allowed. now is well inside T_recv and
+    // before not_after, so T_max is the only boundary in play.
+    ctx.first_receipt_ms = grant.not_after - (T_MAX_S * 1000);
+    ctx.now_ms = ctx.first_receipt_ms + 150_000; // 150s, inside T_recv (300s)
+    const verified = try verify.verifyGrant(env, &grant, ctx);
+    try std.testing.expectEqualSlices(u8, grant.grant_id, verify.grantOf(verified).grant_id);
+}
+
+test "BE_GRANT_05 now exactly T_recv since receipt is accepted (boundary)" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    // now sits exactly first_receipt + T_recv. "More than T_recv" is the refuse
+    // condition, so equality is allowed. not_after is within T_max and ahead of
+    // now, so T_recv is the only boundary in play.
+    ctx.first_receipt_ms = grant.not_after - (T_MAX_S * 1000 / 2);
+    ctx.now_ms = ctx.first_receipt_ms + (T_RECV_S * 1000);
+    const verified = try verify.verifyGrant(env, &grant, ctx);
+    try std.testing.expectEqualSlices(u8, grant.grant_id, verify.grantOf(verified).grant_id);
+}
+
 test "BE_GRANT_01 already-consumed grant_id refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
     const grant = try parser.parseGrant(&grant_bytes);
