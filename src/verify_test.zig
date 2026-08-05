@@ -219,6 +219,30 @@ test "BE_GRANT_05 more than T_recv since first receipt is refused" {
     try std.testing.expectError(error.Expired, verify.verifyGrant(env, &grant, ctx));
 }
 
+// Boundary tests for the non-strict not_after bound (BE-GRANT-05, SPEC pinned
+// at now_ms >= not_after). The instant of expiry is denied, not granted; the
+// last millisecond before it is the final valid moment.
+test "BE_GRANT_05 not_after exact instant is refused (boundary deny)" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    ctx.now_ms = grant.not_after; // equal, not strictly past
+    try std.testing.expectError(error.Expired, verify.verifyGrant(env, &grant, ctx));
+}
+
+test "BE_GRANT_05 not_after minus 1ms is accepted (boundary deny)" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    ctx.now_ms = grant.not_after - 1; // the last valid millisecond
+    // first_receipt is far enough inside T_recv that the receipt bound still
+    // holds at this now_ms, so the only boundary in play is not_after.
+    const verified = try verify.verifyGrant(env, &grant, ctx);
+    try std.testing.expectEqualSlices(u8, grant.grant_id, verify.grantOf(verified).grant_id);
+}
+
 test "BE_GRANT_01 already-consumed grant_id refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
     const grant = try parser.parseGrant(&grant_bytes);

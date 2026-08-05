@@ -97,7 +97,10 @@ pub fn actionDigest(action: []const u8) [parser.LEN_ACTION_DIGEST]u8 {
 fn checkExpiry(not_after: u64, now_ms: u64, first_receipt_ms: u64, t_max_s: u64, t_recv_s: u64) VerifyError!void {
     const t_max_ms = t_max_s * 1000;
     const t_recv_ms = t_recv_s * 1000;
-    if (now_ms > not_after) return error.Expired;
+    // (a) non-strict: a Grant whose not_after equals the current millisecond is
+    // refused. Capability boundaries are denied at the instant of expiry, not
+    // granted (BE-GRANT-05, SPEC pinned at now_ms >= not_after).
+    if (now_ms >= not_after) return error.Expired;
     if (not_after > first_receipt_ms + t_max_ms) return error.Expired;
     if (now_ms > first_receipt_ms + t_recv_ms) return error.Expired;
 }
