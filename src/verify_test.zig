@@ -132,8 +132,8 @@ test "BE_GRANT_03 canonical grant verifies end to end" {
     const grant = try parser.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
-    const verified = try verify.verifyGrant(env, grant, ctx);
-    try std.testing.expectEqualSlices(u8, grant.grant_id, verified.grant.grant_id);
+    const verified = try verify.verifyGrant(env, &grant, ctx);
+    try std.testing.expectEqualSlices(u8, grant.grant_id, verify.grantOf(verified).grant_id);
 }
 
 test "BE_GRANT_03 version other than 2 refused first" {
@@ -142,7 +142,7 @@ test "BE_GRANT_03 version other than 2 refused first" {
     const grant = try parser.parseGrant(&grant_bytes); // check 0 runs before check 2
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
-    try std.testing.expectError(error.BadVersion, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.BadVersion, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_03 grant not delivered as body_type 3 envelope refused" {
@@ -151,7 +151,7 @@ test "BE_GRANT_03 grant not delivered as body_type 3 envelope refused" {
     var env = grantEnvelope(grant);
     env.body_type = parser.BODY_INTENT; // wrong delivery path
     const ctx = baseContext(ACTION, &ledgerFresh);
-    try std.testing.expectError(error.BadEnvelopeBinding, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.BadEnvelopeBinding, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_03 envelope sender not the approver refused" {
@@ -160,7 +160,7 @@ test "BE_GRANT_03 envelope sender not the approver refused" {
     var env = grantEnvelope(grant);
     env.sender = grant.subject; // delivered by the agent, not the approver
     const ctx = baseContext(ACTION, &ledgerFresh);
-    try std.testing.expectError(error.BadEnvelopeBinding, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.BadEnvelopeBinding, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_03 corrupted grant sig is refused" {
@@ -169,7 +169,7 @@ test "BE_GRANT_03 corrupted grant sig is refused" {
     const grant = try parser.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
-    try std.testing.expectError(error.BadSignature, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.BadSignature, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_03 executor mismatch refused" {
@@ -178,7 +178,7 @@ test "BE_GRANT_03 executor mismatch refused" {
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.own_pubkey = grant.subject; // this executor is not the named one
-    try std.testing.expectError(error.WrongExecutor, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.WrongExecutor, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_02 action digest must match byte for byte" {
@@ -188,7 +188,7 @@ test "BE_GRANT_02 action digest must match byte for byte" {
     // Approving "apt-get install -y sqlite3" does not approve a different
     // command: the recomputed digest over other bytes must not match.
     const ctx = baseContext("apt-get install -y postgresql", &ledgerFresh);
-    try std.testing.expectError(error.ActionDigestMismatch, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.ActionDigestMismatch, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_05 not_after in the past is refused" {
@@ -197,7 +197,7 @@ test "BE_GRANT_05 not_after in the past is refused" {
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.now_ms = grant.not_after + 1; // clock is past the expiry
-    try std.testing.expectError(error.Expired, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.Expired, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_05 not_after beyond T_max from receipt is refused" {
@@ -207,7 +207,7 @@ test "BE_GRANT_05 not_after beyond T_max from receipt is refused" {
     var ctx = baseContext(ACTION, &ledgerFresh);
     // First receipt far enough back that not_after exceeds receipt + T_max.
     ctx.first_receipt_ms = grant.not_after - (T_MAX_S * 1000) - 1;
-    try std.testing.expectError(error.Expired, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.Expired, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_05 more than T_recv since first receipt is refused" {
@@ -216,7 +216,7 @@ test "BE_GRANT_05 more than T_recv since first receipt is refused" {
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.now_ms = FIRST_RECEIPT_MS + (T_RECV_S * 1000) + 1;
-    try std.testing.expectError(error.Expired, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.Expired, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_01 already-consumed grant_id refused" {
@@ -224,7 +224,7 @@ test "BE_GRANT_01 already-consumed grant_id refused" {
     const grant = try parser.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerSpent);
-    try std.testing.expectError(error.AlreadyConsumed, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.AlreadyConsumed, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_01 ledger hook runs last, after expiry" {
@@ -236,12 +236,12 @@ test "BE_GRANT_01 ledger hook runs last, after expiry" {
     // reached, proving the I/O step is ordered after every compute check.
     var ctx = baseContext(ACTION, &ledgerCounting);
     ctx.now_ms = grant.not_after + 1;
-    try std.testing.expectError(error.Expired, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.Expired, verify.verifyGrant(env, &grant, ctx));
     try std.testing.expectEqual(@as(usize, 0), ledger_calls);
 
     // Same hook, a valid grant: now the ledger IS consulted exactly once.
     ledger_calls = 0;
     const ok_ctx = baseContext(ACTION, &ledgerCounting);
-    _ = try verify.verifyGrant(env, grant, ok_ctx);
+    _ = try verify.verifyGrant(env, &grant, ok_ctx);
     try std.testing.expectEqual(@as(usize, 1), ledger_calls);
 }
