@@ -31,6 +31,15 @@ jobs:
       - name: Verify the archive by content hash (O4, SPEC.md section 11.3)
         run: |
           echo "${{ steps.pin.outputs.sha256 }}  /tmp/zig.tar.xz" | sha256sum -c -
+          {
+            echo "## Toolchain verification (O4)"
+            echo ""
+            echo "zig ${{ steps.pin.outputs.version }}, target x86_64-linux"
+            echo ""
+            echo "sha256 \`${{ steps.pin.outputs.sha256 }}\` verified against tools/toolchain.json"
+            echo ""
+            echo "evidence: GitHub Actions run $GITHUB_RUN_ID, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Extract and add to PATH
         run: |
