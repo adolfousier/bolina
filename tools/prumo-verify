@@ -13,6 +13,14 @@
 #        bijection verifies the spec, not a list. Tests bind by name via the
 #        Zig registry convention (SPEC.md section 11.1, "an equivalent
 #        registry in Zig"): test blocks named  test "BE_<CLASS>_<NN> ...".
+#        Verdict is a HIGH-WATER RATCHET, same shape as BE-CHAN-02's
+#        grow-only set: tools/m1-high-water stores the highest bound-test
+#        count ever reached. FAIL if the current bound count drops below
+#        high water (a test was deleted or unbound) or if orphan tests
+#        appear; PASS otherwise, always printing bound/declared. The signal
+#        is the number, printed every run, not the colour of the gate.
+#        Local runs raise the file when the count climbs; commit the bump
+#        together with the tests. CI runs never write the file.
 #   M5: The network-parsing module lives at src/parser.zig (and src/parser/
 #        if it is ever split). Absent counts as 0 lines.
 #   M6: Offline build uses unshare -rn where available (Linux); other
@@ -46,7 +54,11 @@ echo "zig:  $ZIG_VERSION ($(command -v "$ZIG"))"
 echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo
 
-# ---- M1: BE <-> test bijection, derived from SPEC.md at run time ----
+# ---- M1: BE <-> test bijection ratchet, derived from SPEC.md at run time ----
+HIGH_WATER_FILE="tools/m1-high-water"
+HIGH_WATER="$(cat "$HIGH_WATER_FILE" 2>/dev/null | tr -d '[:space:]')"
+case "$HIGH_WATER" in ''|*[!0-9]*) HIGH_WATER=0 ;; esac
+
 DECL="$(grep -oE '^\*\*BE-[A-Z]+-[0-9]+[a-z]?' SPEC.md | sed 's/^\*\*//' | sort -u)"
 DECL_COUNT="$(printf '%s\n' "$DECL" | grep -c '^BE-' || true)"
 
@@ -60,11 +72,22 @@ else
     BOUND="$(comm -12 <(printf '%s\n' "$DECL") <(printf '%s\n' "$TESTED") | grep -c '^BE-' || true)"
     MISSING="$(comm -23 <(printf '%s\n' "$DECL") <(printf '%s\n' "$TESTED") | grep -c '^BE-' || true)"
     ORPHANS="$(comm -13 <(printf '%s\n' "$DECL") <(printf '%s\n' "$TESTED") | grep -c '^BE-' || true)"
-    if [ "$MISSING" -eq 0 ] && [ "$ORPHANS" -eq 0 ]; then
-        row M1 PASS "bijection closed: $BOUND/$DECL_COUNT declared BE items bound to tests (SPEC.md section 11.1)"
-    else
-        row M1 FAIL "bijection open: $BOUND/$DECL_COUNT declared BE items bound to tests (missing: $MISSING, orphan tests: $ORPHANS). The ratchet climbs as tests land"
+    if [ "$BOUND" -lt "$HIGH_WATER" ]; then
+        row M1 FAIL "ratchet regression: $BOUND/$DECL_COUNT bound, below high water $HIGH_WATER: a bound test was deleted or unbound"
         FAILS=$((FAILS + 1))
+    elif [ "$ORPHANS" -gt 0 ]; then
+        row M1 FAIL "bijection open: $BOUND/$DECL_COUNT bound, orphan tests: $ORPHANS name undeclared BE items"
+        FAILS=$((FAILS + 1))
+    else
+        row M1 PASS "ratchet: $BOUND/$DECL_COUNT bound, high water $HIGH_WATER, missing $MISSING (SPEC.md section 11.1)"
+        if [ "$BOUND" -gt "$HIGH_WATER" ]; then
+            if [ -n "${GITHUB_ACTIONS:-}" ]; then
+                echo "     note: high water bump pending; commit tools/m1-high-water = $BOUND with these tests"
+            else
+                printf '%s\n' "$BOUND" > "$HIGH_WATER_FILE"
+                echo "     note: high water raised to $BOUND in $HIGH_WATER_FILE; commit it with these tests"
+            fi
+        fi
     fi
 fi
 
