@@ -155,16 +155,22 @@ implementation only; they carry no comparison against the other candidates.
 | Third-party code in the build | **0 lines.** `build.zig.zon` declares `.dependencies = .{}`; all four primitives come from `std.crypto`; nothing vendored. |
 | Clean build, network disabled | **11.0 s** from an empty cache, zero fetch attempts. |
 | Implementation lines | **490** (`parser.zig` 284, `verify.zig` 182, `main.zig` 13, `tests.zig` 11). Fuzz and vector harnesses excluded. |
-| Lines of `unsafe` / `@ptrCast` | **0** across all of `src/`. |
-| Crashes and OOB reads after 1 h of fuzzing | **0.** 7,300,000,000 inputs, 21,900,000,000 parser calls, 59 min 11 s wall, ReleaseSafe: zero panics, zero macOS crash reports. |
-| Mutation kill on the Grant verifier | **5/5 (100%).** No `cargo-mutants` exists for Zig; `tools/mutation-test.py` is the equivalent, one mutant per check (BE-GRANT-03 c0 and c1, executor c5, BE-GRANT-02 c9, BE-GRANT-05 c10), full test suite rebuilt per mutant. |
+| `@ptrCast` (Zig has no `unsafe` blocks) | **2**, both at the capability boundary in `src/verify.zig` (lines 154, 199), the only place a forged `VerifiedGrant` can be rebuilt from a raw pointer. Gated by M8 (`tools/prumo-verify`): code-only `@ptrCast` must be exactly these two and nowhere else, and a negative-compile canary refuses value-construction of the opaque capability. |
+| Crashes and OOB reads after 1 h of fuzzing | **0.** 7,300,000,000 inputs (measured loop budget), 59 min 11 s wall, ReleaseSafe: zero panics, zero macOS crash reports. The earlier "21,900,000,000 parser calls" figure was a derived product (inputs times three parsers), not a measurement, and is dropped here. |
+| Branch coverage (SPEC §11.6) | **11/11 enumerated parser branches reached** over a bounded run of 4,000,000 inputs (12,000,000 parser calls), zero unreached. Measured by hand-instrumented counters (`src/coverage.zig`), reproduced with `zig build coverage -Dcoverage -Dfuzz-budget=4000000`. Native toolchain coverage has no script-readable output on this toolchain, so manual instrumentation is the measurement, not a proxy (residual in `THREAT-MODEL.md` §4.6). Corpus: 3 seeds (envelope, grant, intent from `test/vectors.json`), 4 mutation operators (bit flip, byte overwrite, truncate, saturate), 40% mutated-seed / 60% fully-random, 4096-byte input cap. |
+| Mutation kill on the Grant verifier | **9/9 check-correctness mutants killed** (100% of the modeled set). `tools/mutation-test.py` v2: two WRONG-CONSTANT, three WRONG-FIELD, three WRONG-OPERATOR, one WRONG-LOGIC, full test suite rebuilt per mutant. Honest denominator: this covers 7 of the 12 BE-GRANT-03 modeled checks (c0, c1, c2, c5, c9, c10, c11); the other 5 are check-absence checks deferred to a later slice. |
 | Wall-clock time to write it | **One session** (~3 h, evening of 2026-08-05): vectors, parser, verifier, harnesses, this measurement. |
 
-**Verdict: the measurement confirms §6.** The §6.2 trigger for reopening was parser findings in
-the first hour of fuzzing; the hour produced none, under ReleaseSafe bounds checking, against
-vector-seeded mutations and raw random bytes. The parser is 284 lines, readable in one sitting,
-allocates nothing (BE-WIRE-01, O3), and the Grant verifier reached the 100% mutant kill that
-SPEC §11.2 demands with plain tooling. No §6.2 condition fired. The decision stands as written.
+**Verdict: the measurement confirms §6, with one residual named below.** The §6.2 trigger for
+reopening was parser findings in the first hour of fuzzing; the hour produced none, under ReleaseSafe
+bounds checking, against vector-seeded mutations and raw random bytes. The parser is 284 lines,
+readable in one sitting, allocates nothing (BE-WIRE-01, O3), and the Grant verifier reached 9/9
+mutant kill on the modeled checks with plain tooling. The coverage gate (SPEC §11.6) now reports
+11/11 branches and the corpus, where the first merge reported neither. **Residual:** the coverage is
+hand-instrumented, not native; that is weaker than a compiler-backed edge map, and by how much is
+itself unknown. This residual is stated in `THREAT-MODEL.md` §4.6 and tracked in a follow-up issue
+for re-run on the first stable toolchain pin that exposes native coverage. No §6.2 condition fired.
+The decision stands.
 
 ---
 
@@ -209,6 +215,12 @@ that skips any of them is not a Zig implementation of Bolina — it is a differe
 - **O2 — Fuzzing is a merge gate, not a milestone.** SPEC §11.6 is promoted: no change touching
   parsing code merges without a clean fuzz run reporting coverage and corpus. This is the substitute
   for the guarantee the compiler is not giving, and the substitute only works if it runs every time.
+  *Honest record: the Round 3 merge cycle violated the "reporting coverage and corpus" half of this
+  obligation, because coverage instrumentation did not yet exist on this toolchain. The crash half
+  (zero OOB reads over 7.3B inputs) held throughout. Remediation landed in the same cycle:
+  hand-instrumented branch counters (`src/coverage.zig`) report 11/11 branches and the corpus, the
+  `coverage` build step reproduces them, and the residual gap (manual counters vs a native edge map)
+  is tracked in #11 for re-run on the first stable pin.*
 - **O3 — The parser allocates nothing and dereferences nothing it was not handed as a bounded
   slice.** BE-WIRE-01 and BE-WIRE-02 stop being tidy design and become the load-bearing safety
   property. Any allocation inside the parse path is a defect regardless of whether it crashes.

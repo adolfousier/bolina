@@ -132,8 +132,8 @@ test "BE_GRANT_03 canonical grant verifies end to end" {
     const grant = try parser.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
-    const verified = try verify.verifyGrant(env, grant, ctx);
-    try std.testing.expectEqualSlices(u8, grant.grant_id, verified.grant.grant_id);
+    const verified = try verify.verifyGrant(env, &grant, ctx);
+    try std.testing.expectEqualSlices(u8, grant.grant_id, verify.grantOf(verified).grant_id);
 }
 
 test "BE_GRANT_03 version other than 2 refused first" {
@@ -142,7 +142,7 @@ test "BE_GRANT_03 version other than 2 refused first" {
     const grant = try parser.parseGrant(&grant_bytes); // check 0 runs before check 2
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
-    try std.testing.expectError(error.BadVersion, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.BadVersion, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_03 grant not delivered as body_type 3 envelope refused" {
@@ -151,7 +151,7 @@ test "BE_GRANT_03 grant not delivered as body_type 3 envelope refused" {
     var env = grantEnvelope(grant);
     env.body_type = parser.BODY_INTENT; // wrong delivery path
     const ctx = baseContext(ACTION, &ledgerFresh);
-    try std.testing.expectError(error.BadEnvelopeBinding, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.BadEnvelopeBinding, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_03 envelope sender not the approver refused" {
@@ -160,7 +160,7 @@ test "BE_GRANT_03 envelope sender not the approver refused" {
     var env = grantEnvelope(grant);
     env.sender = grant.subject; // delivered by the agent, not the approver
     const ctx = baseContext(ACTION, &ledgerFresh);
-    try std.testing.expectError(error.BadEnvelopeBinding, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.BadEnvelopeBinding, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_03 corrupted grant sig is refused" {
@@ -169,7 +169,7 @@ test "BE_GRANT_03 corrupted grant sig is refused" {
     const grant = try parser.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
-    try std.testing.expectError(error.BadSignature, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.BadSignature, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_03 executor mismatch refused" {
@@ -178,7 +178,7 @@ test "BE_GRANT_03 executor mismatch refused" {
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.own_pubkey = grant.subject; // this executor is not the named one
-    try std.testing.expectError(error.WrongExecutor, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.WrongExecutor, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_02 action digest must match byte for byte" {
@@ -188,7 +188,7 @@ test "BE_GRANT_02 action digest must match byte for byte" {
     // Approving "apt-get install -y sqlite3" does not approve a different
     // command: the recomputed digest over other bytes must not match.
     const ctx = baseContext("apt-get install -y postgresql", &ledgerFresh);
-    try std.testing.expectError(error.ActionDigestMismatch, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.ActionDigestMismatch, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_05 not_after in the past is refused" {
@@ -197,7 +197,7 @@ test "BE_GRANT_05 not_after in the past is refused" {
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.now_ms = grant.not_after + 1; // clock is past the expiry
-    try std.testing.expectError(error.Expired, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.Expired, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_05 not_after beyond T_max from receipt is refused" {
@@ -207,7 +207,7 @@ test "BE_GRANT_05 not_after beyond T_max from receipt is refused" {
     var ctx = baseContext(ACTION, &ledgerFresh);
     // First receipt far enough back that not_after exceeds receipt + T_max.
     ctx.first_receipt_ms = grant.not_after - (T_MAX_S * 1000) - 1;
-    try std.testing.expectError(error.Expired, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.Expired, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_05 more than T_recv since first receipt is refused" {
@@ -216,7 +216,63 @@ test "BE_GRANT_05 more than T_recv since first receipt is refused" {
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.now_ms = FIRST_RECEIPT_MS + (T_RECV_S * 1000) + 1;
-    try std.testing.expectError(error.Expired, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.Expired, verify.verifyGrant(env, &grant, ctx));
+}
+
+// Boundary tests for the non-strict not_after bound (BE-GRANT-05, SPEC pinned
+// at now_ms >= not_after). The instant of expiry is denied, not granted; the
+// last millisecond before it is the final valid moment.
+test "BE_GRANT_05 not_after exact instant is refused (boundary deny)" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    ctx.now_ms = grant.not_after; // equal, not strictly past
+    try std.testing.expectError(error.Expired, verify.verifyGrant(env, &grant, ctx));
+}
+
+test "BE_GRANT_05 not_after minus 1ms is accepted (boundary deny)" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    ctx.now_ms = grant.not_after - 1; // the last valid millisecond
+    // first_receipt is far enough inside T_recv that the receipt bound still
+    // holds at this now_ms, so the only boundary in play is not_after.
+    const verified = try verify.verifyGrant(env, &grant, ctx);
+    try std.testing.expectEqualSlices(u8, grant.grant_id, verify.grantOf(verified).grant_id);
+}
+
+// T_max and T_recv boundary-allow tests. Each refuse condition is strict
+// ("more than"), so the exact-equal instant is allowed. These kill the
+// WRONG-OPERATOR mutants on the T_max and T_recv comparisons in the mutation
+// harness (tools/mutation-test.py): a >= mutant would refuse at equality.
+test "BE_GRANT_05 not_after exactly T_max from receipt is accepted (boundary)" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    // not_after sits exactly first_receipt + T_max. "More than T_max" is the
+    // refuse condition, so equality is allowed. now is well inside T_recv and
+    // before not_after, so T_max is the only boundary in play.
+    ctx.first_receipt_ms = grant.not_after - (T_MAX_S * 1000);
+    ctx.now_ms = ctx.first_receipt_ms + 150_000; // 150s, inside T_recv (300s)
+    const verified = try verify.verifyGrant(env, &grant, ctx);
+    try std.testing.expectEqualSlices(u8, grant.grant_id, verify.grantOf(verified).grant_id);
+}
+
+test "BE_GRANT_05 now exactly T_recv since receipt is accepted (boundary)" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    // now sits exactly first_receipt + T_recv. "More than T_recv" is the refuse
+    // condition, so equality is allowed. not_after is within T_max and ahead of
+    // now, so T_recv is the only boundary in play.
+    ctx.first_receipt_ms = grant.not_after - (T_MAX_S * 1000 / 2);
+    ctx.now_ms = ctx.first_receipt_ms + (T_RECV_S * 1000);
+    const verified = try verify.verifyGrant(env, &grant, ctx);
+    try std.testing.expectEqualSlices(u8, grant.grant_id, verify.grantOf(verified).grant_id);
 }
 
 test "BE_GRANT_01 already-consumed grant_id refused" {
@@ -224,7 +280,7 @@ test "BE_GRANT_01 already-consumed grant_id refused" {
     const grant = try parser.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerSpent);
-    try std.testing.expectError(error.AlreadyConsumed, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.AlreadyConsumed, verify.verifyGrant(env, &grant, ctx));
 }
 
 test "BE_GRANT_01 ledger hook runs last, after expiry" {
@@ -236,12 +292,12 @@ test "BE_GRANT_01 ledger hook runs last, after expiry" {
     // reached, proving the I/O step is ordered after every compute check.
     var ctx = baseContext(ACTION, &ledgerCounting);
     ctx.now_ms = grant.not_after + 1;
-    try std.testing.expectError(error.Expired, verify.verifyGrant(env, grant, ctx));
+    try std.testing.expectError(error.Expired, verify.verifyGrant(env, &grant, ctx));
     try std.testing.expectEqual(@as(usize, 0), ledger_calls);
 
     // Same hook, a valid grant: now the ledger IS consulted exactly once.
     ledger_calls = 0;
     const ok_ctx = baseContext(ACTION, &ledgerCounting);
-    _ = try verify.verifyGrant(env, grant, ok_ctx);
+    _ = try verify.verifyGrant(env, &grant, ok_ctx);
     try std.testing.expectEqual(@as(usize, 1), ledger_calls);
 }

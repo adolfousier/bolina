@@ -16,6 +16,7 @@
 // IS refused (BE-GRANT-03 step 0) by the verifier, not by this parser.
 
 const std = @import("std");
+const coverage = @import("coverage.zig");
 
 // ---------------------------------------------------------------------------
 // Declared limits (SPEC BE-TR-05). These are the only attacker-influenced
@@ -84,7 +85,10 @@ const Cursor = struct {
     }
 
     fn need(self: *Cursor, n: usize) ParseError!void {
-        if (self.remaining() < n) return error.Truncated;
+        if (self.remaining() < n) {
+            coverage.hit(.cursor_truncated);
+            return error.Truncated;
+        }
     }
 
     fn u8r(self: *Cursor) ParseError!u8 {
@@ -126,14 +130,20 @@ const Cursor = struct {
     // u16-length-prefixed field with a declared maximum.
     fn field16(self: *Cursor, max: usize) ParseError![]const u8 {
         const len = try self.u16be();
-        if (len > max) return error.Oversize;
+        if (len > max) {
+            coverage.hit(.field16_oversize);
+            return error.Oversize;
+        }
         return try self.take(@intCast(len));
     }
 
     // u32-length-prefixed field with a declared maximum.
     fn field32(self: *Cursor, max: u32) ParseError![]const u8 {
         const len = try self.u32be();
-        if (len > max) return error.Oversize;
+        if (len > max) {
+            coverage.hit(.field32_oversize);
+            return error.Oversize;
+        }
         return try self.take(@intCast(len));
     }
 };
@@ -169,17 +179,27 @@ pub fn parseEnvelope(buf: []const u8) ParseError!Envelope {
     const sender = try c.take(LEN_PUBKEY);
     const seq = try c.u64be();
     const parent_count = try c.u8r();
-    if (parent_count > MAX_PARENTS) return error.Oversize;
+    if (parent_count > MAX_PARENTS) {
+        coverage.hit(.env_parent_oversize);
+        return error.Oversize;
+    }
     const parents = try c.take(@as(usize, parent_count) * LEN_PARENT);
     const ts = try c.u64be();
     const body_type = try c.u8r();
     const body_len = try c.u32be();
-    if (body_len > MAX_BODY) return error.Oversize;
+    if (body_len > MAX_BODY) {
+        coverage.hit(.env_body_oversize);
+        return error.Oversize;
+    }
     const body = try c.take(@intCast(body_len));
     const tbs = buf[0..c.pos];
     const sig = try c.take(LEN_SIG);
     // BE-WIRE-02 totality: the buffer holds exactly one envelope, nothing more.
-    if (c.pos != buf.len) return error.TrailingBytes;
+    if (c.pos != buf.len) {
+        coverage.hit(.env_trailing);
+        return error.TrailingBytes;
+    }
+    coverage.hit(.env_accepted);
     return .{
         .version = version,
         .channel_id = channel_id,
@@ -218,7 +238,11 @@ pub fn parseIntent(buf: []const u8) ParseError!Intent {
     const resource_id = try c.field16(MAX_RESOURCE);
     const action = try c.field32(MAX_ACTION);
     const rationale = try c.field16(MAX_RATIONALE);
-    if (c.pos != buf.len) return error.TrailingBytes;
+    if (c.pos != buf.len) {
+        coverage.hit(.intent_trailing);
+        return error.TrailingBytes;
+    }
+    coverage.hit(.intent_accepted);
     return .{
         .intent_id = intent_id,
         .resource_id = resource_id,
@@ -267,7 +291,11 @@ pub fn parseGrant(buf: []const u8) ParseError!Grant {
     const tbs = buf[0..c.pos];
     const sig = try c.take(LEN_SIG);
     // BE-WIRE-02 totality: exactly one grant, nothing after it.
-    if (c.pos != buf.len) return error.TrailingBytes;
+    if (c.pos != buf.len) {
+        coverage.hit(.grant_trailing);
+        return error.TrailingBytes;
+    }
+    coverage.hit(.grant_accepted);
     return .{
         .version = version,
         .grant_id = grant_id,

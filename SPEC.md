@@ -1101,11 +1101,34 @@ on restart, BE-GRANT-01a would publish an `interrupted` Effect for an effect tha
 A check order that makes the ledger assert a fabricated effect is an audit defect, not a
 performance detail.
 
-The verified capability MUST be represented by a type that the executor's own code cannot construct
-outside this routine — private fields, no exported constructor. *§8.1's prose says a Grant is bound
-to one agent, one executor, one resource, one intent, and one exact action. Checks 5 to 9 are what
-make that sentence true; before they were enumerated, only the last of the five had an enforcing
-rule. This is the invariant mutation testing must attack hardest (§11.2).*
+**Conformance status (Zig slice).** The routine in `verify.zig` models checks 0, 1, 2, 5, 9, 10 and
+11 inside the single routine. Checks 3 and 4 (approver and subject certificate validity) and 6, 7
+and 8 (subject, intent_id and resource_id matching against the pending intent) are delegated to the
+executor until a certificate store and a pending-intent table exist. This is provisional debt, not a
+relaxation of the rule above: BE-GRANT-03 requires all twelve checks in the routine, and the
+repayment condition is that 3, 4, 6, 7 and 8 fold into `verifyGrant` the moment their backing state
+is available. Recorded here so the debt survives being forgotten.
+
+**BE-GRANT-03b (capability type, language-portable property).** The verified capability MUST be
+represented by a type with this property: no code outside the verification routine can construct a
+value of it or obtain one by any means the language makes available to safe code. Fabricating a
+reference to one MUST require the language's unsafe equivalent, and every such escape MUST be
+confined to a fixed set of boundary functions gated mechanically (§11.2, gate M8). The mechanism is
+per language:
+
+| Language | Mechanism | Unsafe escape, gated |
+|---|---|---|
+| Rust | private field, no exported constructor | none in safe code |
+| Zig | `opaque {}` behind a pointer, constructor inside the module | `@ptrCast`, two boundary functions (M8) |
+| Go | unexported field, exported constructor | `unsafe.Pointer`, audited |
+
+*§8.1's prose says a Grant is bound to one agent, one executor, one resource, one intent, and one
+exact action. Checks 5 to 9 are what make that sentence true; before they were enumerated, only the
+last of the five had an enforcing rule. This is the invariant mutation testing must attack hardest
+(§11.2).*
+
+*Rust's guarantee is safe code cannot forge; Zig's honest translation is code that passes the gates
+cannot forge.*
 
 **BE-GRANT-03a (frozen during verification)** — From the moment the verification routine begins
 for an intent until it either refuses or the intent enters `EXECUTING`, the intent's lifecycle
@@ -1125,7 +1148,9 @@ anticipated. No timer is required for this transition to be correct.
 **BE-GRANT-05 (bounded expiry)** — An executor MUST refuse a Grant if **any** of the following
 holds:
 
-- `not_after` is past by the executor's own clock;
+- `not_after` is at or past on the executor's own clock, compared as a non-strict bound: a Grant
+  whose `not_after` equals the current millisecond is refused. *Capability boundaries are denied at
+  the instant of expiry, not granted; the check is `now_ms >= not_after`, refuse on equal.*
 - `not_after` is further in the future than `T_max` (default 3600 s) from the moment of first
   receipt — an approver MUST NOT be able to mint long-lived authority by writing a distant
   timestamp, and an executor MUST NOT accept one;

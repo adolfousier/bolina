@@ -97,7 +97,10 @@ pub fn actionDigest(action: []const u8) [parser.LEN_ACTION_DIGEST]u8 {
 fn checkExpiry(not_after: u64, now_ms: u64, first_receipt_ms: u64, t_max_s: u64, t_recv_s: u64) VerifyError!void {
     const t_max_ms = t_max_s * 1000;
     const t_recv_ms = t_recv_s * 1000;
-    if (now_ms > not_after) return error.Expired;
+    // (a) non-strict: a Grant whose not_after equals the current millisecond is
+    // refused. Capability boundaries are denied at the instant of expiry, not
+    // granted (BE-GRANT-05, SPEC pinned at now_ms >= not_after).
+    if (now_ms >= not_after) return error.Expired;
     if (not_after > first_receipt_ms + t_max_ms) return error.Expired;
     if (now_ms > first_receipt_ms + t_recv_ms) return error.Expired;
 }
@@ -126,18 +129,30 @@ pub const GrantContext = struct {
 };
 
 // ---------------------------------------------------------------------------
-// VerifiedGrant: the capability this routine produces.
+// VerifiedGrant: the capability this routine produces (BE-GRANT-03b).
 //
-// SPEC 8.1 requires the verified capability to be a type the executor cannot
-// construct outside this routine. Zig has no field privacy, so the guarantee
-// here is structural, not type-enforced: the only place a VerifiedGrant is
-// produced is the tail of verifyGrant, after every check has passed. This is a
-// real expressiveness gap the slice records (see LANGUAGE.md section 4).
+// opaque {} is the forgery wall. It has no fields and no size, so no code
+// anywhere can construct one by value: the struct-literal mint that a plain
+// public-field struct would allow is a compile error. The ONLY way to obtain
+// a *const VerifiedGrant is the verification routine below, and the ONLY way
+// to fabricate the pointer is @ptrCast, confined to the two boundary
+// functions here (verifyGrant, grantOf) and gated mechanically by M8
+// (tools/prumo-verify, CONTRIBUTING.md). test/negative_capability.zig is the
+// canary: it tries the old struct-literal mint and MUST fail to compile; the
+// `zig build negative` step asserts on it.
+//
+// The backing data is the caller's Grant (parser slices alias the input bytes,
+// never the heap, BE-WIRE-01), so the capability carries no allocation.
 // ---------------------------------------------------------------------------
 
-pub const VerifiedGrant = struct {
-    grant: parser.Grant,
-};
+pub const VerifiedGrant = opaque {};
+
+// Boundary accessor (the @ptrCast here is one of exactly two in the module;
+// M8). Consumers read the grant through this, never by constructing the
+// capability.
+pub fn grantOf(v: *const VerifiedGrant) *const parser.Grant {
+    return @ptrCast(@alignCast(v));
+}
 
 // ---------------------------------------------------------------------------
 // verifyGrant: the single BE-GRANT-03 verification routine (slice subset).
@@ -148,7 +163,8 @@ pub const VerifiedGrant = struct {
 // ordering from RED-TEAM-08 (F3).
 // ---------------------------------------------------------------------------
 
-pub fn verifyGrant(env: parser.Envelope, grant: parser.Grant, ctx: GrantContext) VerifyError!VerifiedGrant {
+pub fn verifyGrant(env: parser.Envelope, grant_ptr: *const parser.Grant, ctx: GrantContext) VerifyError!*const VerifiedGrant {
+    const grant = grant_ptr.*;
     // 0. Grant.version must be 2 (RED-TEAM-08 F6: the field is read, not ignored).
     if (grant.version != 2) return error.BadVersion;
 
@@ -178,5 +194,7 @@ pub fn verifyGrant(env: parser.Envelope, grant: parser.Grant, ctx: GrantContext)
     // 11. grant_id is not already consumed (BE-GRANT-01). Only I/O step; last.
     if (ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed;
 
-    return VerifiedGrant{ .grant = grant };
+    // Boundary constructor (the @ptrCast here is one of exactly two in the
+    // module; M8). The pointer aliases the caller's Grant storage directly.
+    return @ptrCast(grant_ptr);
 }
