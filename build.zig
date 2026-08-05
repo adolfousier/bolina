@@ -43,6 +43,13 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    // The vectors harness (src/vectors_test.zig) embeds test/vectors.json at
+    // compile time. That file lives outside src/ (the test module's package
+    // path), so it is exposed through a bridge module rooted in test/.
+    const vectors_mod = b.createModule(.{
+        .root_source_file = b.path("test/vectors_module.zig"),
+    });
+    tests.root_module.addImport("vectors", vectors_mod);
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_tests.step);
