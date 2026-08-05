@@ -53,4 +53,22 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_tests.step);
+
+    // Fuzz harness (LANGUAGE.md O2 / SPEC section 11.6). Built and run on demand
+    // via `zig build fuzz` (fixed ~1h budget). main.zig never imports it, so it
+    // stays out of the shipped binary; a ReleaseSafe panic there is a real
+    // bounds gap.
+    const fuzz_mod = b.createModule(.{
+        .root_source_file = b.path("src/fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const fuzz_vectors = b.createModule(.{
+        .root_source_file = b.path("test/vectors_module.zig"),
+    });
+    fuzz_mod.addImport("vectors", fuzz_vectors);
+    const fuzz_exe = b.addExecutable(.{ .name = "bolina-fuzz", .root_module = fuzz_mod });
+    const run_fuzz = b.addRunArtifact(fuzz_exe);
+    const fuzz_step = b.step("fuzz", "Build and run the parser chaos fuzzer (fixed ~1h budget)");
+    fuzz_step.dependOn(&run_fuzz.step);
 }

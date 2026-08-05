@@ -143,6 +143,29 @@ If the Zig parser survives an hour of fuzzing with no findings and the code is s
 in one sitting, C2's risk is smaller than argued here and Zig wins on C1 and C3 together. If it
 produces findings in the first hour, that is the answer, arrived at cheaply.
 
+### 4.1 Result (2026-08-05, Zig slice)
+
+The slice was built once, in Zig. §6 decided Zig ahead of this measurement, so the
+experiment's surviving role was the one §6.2 assigns to it: falsification. The Rust and Go
+repetitions named above were therefore not built, and the numbers below measure the Zig
+implementation only; they carry no comparison against the other candidates.
+
+| Metric | Measured |
+|---|---|
+| Third-party code in the build | **0 lines.** `build.zig.zon` declares `.dependencies = .{}`; all four primitives come from `std.crypto`; nothing vendored. |
+| Clean build, network disabled | **11.0 s** from an empty cache, zero fetch attempts. |
+| Implementation lines | **490** (`parser.zig` 284, `verify.zig` 182, `main.zig` 13, `tests.zig` 11). Fuzz and vector harnesses excluded. |
+| Lines of `unsafe` / `@ptrCast` | **0** across all of `src/`. |
+| Crashes and OOB reads after 1 h of fuzzing | **0.** 7,300,000,000 inputs, 21,900,000,000 parser calls, 59 min 11 s wall, ReleaseSafe: zero panics, zero macOS crash reports. |
+| Mutation kill on the Grant verifier | **5/5 (100%).** No `cargo-mutants` exists for Zig; `tools/mutation-test.py` is the equivalent, one mutant per check (BE-GRANT-03 c0 and c1, executor c5, BE-GRANT-02 c9, BE-GRANT-05 c10), full test suite rebuilt per mutant. |
+| Wall-clock time to write it | **One session** (~3 h, evening of 2026-08-05): vectors, parser, verifier, harnesses, this measurement. |
+
+**Verdict: the measurement confirms §6.** The §6.2 trigger for reopening was parser findings in
+the first hour of fuzzing; the hour produced none, under ReleaseSafe bounds checking, against
+vector-seeded mutations and raw random bytes. The parser is 284 lines, readable in one sitting,
+allocates nothing (BE-WIRE-01, O3), and the Grant verifier reached the 100% mutant kill that
+SPEC §11.2 demands with plain tooling. No §6.2 condition fired. The decision stands as written.
+
 ---
 
 ## 5. Not part of this decision
