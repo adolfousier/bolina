@@ -34,9 +34,12 @@ jobs:
 
       - name: Extract and add to PATH
         run: |
+          ZIGDIR="$HOME/zig-toolchain/zig-x86_64-linux-${{ steps.pin.outputs.version }}"
           mkdir -p "$HOME/zig-toolchain"
           tar -xJf /tmp/zig.tar.xz -C "$HOME/zig-toolchain"
-          ZIGDIR=$(find "$HOME/zig-toolchain" -maxdepth 1 -type d -name 'zig-*' | head -1)
+          ls -la "$HOME/zig-toolchain"
+          test -x "$ZIGDIR/zig" || { echo "zig binary missing at $ZIGDIR"; exit 1; }
+          echo "ZIGDIR=$ZIGDIR"
           echo "$ZIGDIR" >> "$GITHUB_PATH"
 
       - name: Record the compiler version (M7)
