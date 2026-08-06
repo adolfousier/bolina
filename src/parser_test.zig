@@ -326,3 +326,158 @@ test "BE_WIRE_02 transport data above the BE-TR-05 packet ceiling is rejected" {
     // 1384-byte (1400 - 16) BE-TR-05 payload bound.
     try std.testing.expectError(error.Oversize, parser.parseDataPacketHeader(&buf));
 }
+
+// ---------------------------------------------------------------------------
+// Fragment header + lighthouse lookup fixtures (SPEC 4.5, 5.1a). Synthetic,
+// structurally valid bytes: like the four transport messages above there is no
+// canonical vector for these (D-020), so each field carries a distinct fill so
+// a round-trip asserts the slice landed at the right offset, not just the right
+// length. Round-trip tests are BE_WIRE_01 (zero heap), rejections BE_WIRE_02
+// (totality); both markers are already declared in SPEC section 11.1, so no new
+// BE-* binding and no M1 high-water bump.
+// ---------------------------------------------------------------------------
+
+// Fragment header (SPEC 4.5): msg_id u64 + index u16 + total u16 + payload.
+// 12-byte header + 4-byte payload = 16 bytes.
+const FRAG_HEADER_HEX =
+    "0102030405060708" ++ // msg_id = 0x0102030405060708 (u64 BE)
+    "0002" ++ // index = 2 (u16 BE)
+    "0005" ++ // total = 5 (u16 BE)
+    "deadbeef"; // 4-byte fragment payload
+
+test "BE_WIRE_01 fragment header round-trips the pinned layout, zero heap" {
+    const bytes = decodeHex(FRAG_HEADER_HEX);
+    try std.testing.expectEqual(@as(usize, 16), bytes.len);
+    const frag = try parser.parseFragmentHeader(&bytes);
+    try std.testing.expectEqual(@as(u64, 0x0102030405060708), frag.msg_id);
+    try std.testing.expectEqual(@as(u16, 2), frag.index);
+    try std.testing.expectEqual(@as(u16, 5), frag.total);
+    // Payload aliases the suffix; variable like the data packet, no trailing check.
+    try std.testing.expectEqualSlices(u8, bytes[12..16], frag.payload);
+}
+
+test "BE_WIRE_01 fragment header with an empty payload is accepted (no spec floor)" {
+    // 12-byte header, index 0 of 1, no payload bytes: structurally valid. SPEC 4.5
+    // declares no per-fragment payload floor (MAX_FRAGMENTS is not a BE-TR-05 row),
+    // so the parser does not invent one.
+    const bytes = decodeHex("0102030405060708" ++ "0000" ++ "0001");
+    try std.testing.expectEqual(@as(usize, 12), bytes.len);
+    const frag = try parser.parseFragmentHeader(&bytes);
+    try std.testing.expectEqual(@as(u16, 0), frag.index);
+    try std.testing.expectEqual(@as(u16, 1), frag.total);
+    try std.testing.expectEqual(@as(usize, 0), frag.payload.len);
+}
+
+test "BE_WIRE_02 fragment header with total == 0 is rejected as Malformed" {
+    var bytes = decodeHex(FRAG_HEADER_HEX);
+    // total field at bytes 10..11; set to 0.
+    bytes[10] = 0x00;
+    bytes[11] = 0x00;
+    try std.testing.expectError(error.Malformed, parser.parseFragmentHeader(&bytes));
+}
+
+test "BE_WIRE_02 fragment header with index >= total is rejected as Malformed" {
+    var bytes = decodeHex(FRAG_HEADER_HEX);
+    // index 2, total 5 in the fixture; raise index to 5 so index == total.
+    bytes[8] = 0x00;
+    bytes[9] = 0x05;
+    try std.testing.expectError(error.Malformed, parser.parseFragmentHeader(&bytes));
+}
+
+test "BE_WIRE_02 truncated fragment header is rejected" {
+    const bytes = decodeHex(FRAG_HEADER_HEX);
+    // 11 bytes: one short of the 12-byte header.
+    try std.testing.expectError(error.Truncated, parser.parseFragmentHeader(bytes[0..11]));
+}
+
+// LookupRequest (SPEC 5.1a): u8 version + [16] overlay_addr = 17 bytes fixed.
+const OVERLAY_ADDR_FILL = "0a" ** 16; // 16 bytes, the overlay address being looked up
+const LOOKUP_REQ_HEX =
+    "01" ++ // version = 1
+    OVERLAY_ADDR_FILL;
+
+test "BE_WIRE_01 lookup request round-trips the pinned layout, zero heap" {
+    const bytes = decodeHex(LOOKUP_REQ_HEX);
+    try std.testing.expectEqual(@as(usize, 17), bytes.len);
+    const req = try parser.parseLookupRequest(&bytes);
+    try std.testing.expectEqual(@as(u8, 1), req.version);
+    try std.testing.expectEqualSlices(u8, bytes[1..17], req.overlay_addr);
+}
+
+test "BE_WIRE_02 lookup request with a trailing byte is rejected" {
+    const bytes = decodeHex(LOOKUP_REQ_HEX);
+    var buf: [18]u8 = undefined;
+    @memcpy(buf[0..17], &bytes);
+    buf[17] = 0x00;
+    try std.testing.expectError(error.TrailingBytes, parser.parseLookupRequest(&buf));
+}
+
+test "BE_WIRE_02 truncated lookup request is rejected" {
+    const bytes = decodeHex(LOOKUP_REQ_HEX);
+    // 16 bytes: one short of the 17-byte fixed message.
+    try std.testing.expectError(error.Truncated, parser.parseLookupRequest(bytes[0..16]));
+}
+
+// LookupResponse (SPEC 5.1a): u8 version + [16] overlay_addr + u8 endpoint_count +
+// endpoint_count*(u8 family + [16] addr + u16 port) + u16 cert_len + cert.
+// 2 endpoints, 4-byte cert: 1 + 16 + 1 + 2*19 + 2 + 4 = 62 bytes.
+const EP_ADDR_A_FILL = "b1" ** 16; // endpoint A address
+const EP_ADDR_B_FILL = "b2" ** 16; // endpoint B address
+const CERT_FILL = "c1" ** 4; // 4-byte opaque certificate slice
+const LOOKUP_RESP_HEX =
+    "01" ++ // version = 1
+    OVERLAY_ADDR_FILL ++ // [16] overlay_addr echoed back
+    "02" ++ // endpoint_count = 2 (u8)
+    "02" ++ EP_ADDR_A_FILL ++ "01f5" ++ // endpoint A: family=2, [16] addr, port=501 (u16 BE)
+    "0a" ++ EP_ADDR_B_FILL ++ "1f90" ++ // endpoint B: family=10, [16] addr, port=8080 (u16 BE)
+    "0004" ++ // cert_len = 4 (u16 BE)
+    CERT_FILL; // 4-byte cert
+
+test "BE_WIRE_01 lookup response round-trips the pinned layout, zero heap" {
+    const bytes = decodeHex(LOOKUP_RESP_HEX);
+    try std.testing.expectEqual(@as(usize, 62), bytes.len);
+    const resp = try parser.parseLookupResponse(&bytes);
+    try std.testing.expectEqual(@as(u8, 1), resp.version);
+    try std.testing.expectEqualSlices(u8, bytes[1..17], resp.overlay_addr);
+    try std.testing.expectEqual(@as(u8, 2), resp.endpoint_count);
+    // Endpoints flat slice = 2 tuples * 19 bytes = 38 bytes, aliasing buffer[18..56].
+    try std.testing.expectEqual(@as(usize, 38), resp.endpoints.len);
+    try std.testing.expectEqualSlices(u8, bytes[18..56], resp.endpoints);
+    // Cert opaque slice aliases buffer[58..62]; caller runs BE-ID-01..04 (BE-MESH-04).
+    try std.testing.expectEqualSlices(u8, bytes[58..62], resp.cert);
+}
+
+test "BE_WIRE_02 lookup response with a trailing byte is rejected" {
+    const bytes = decodeHex(LOOKUP_RESP_HEX);
+    var buf: [63]u8 = undefined;
+    @memcpy(buf[0..62], &bytes);
+    buf[62] = 0x00;
+    try std.testing.expectError(error.TrailingBytes, parser.parseLookupResponse(&buf));
+}
+
+test "BE_WIRE_02 lookup response with fewer endpoint bytes than declared is rejected" {
+    const bytes = decodeHex(LOOKUP_RESP_HEX);
+    // endpoint_count = 2 (38 bytes needed) but truncate after one endpoint:
+    // version(1) + overlay(16) + count(1) + one endpoint(19) = 37 bytes.
+    try std.testing.expectError(error.Truncated, parser.parseLookupResponse(bytes[0..37]));
+}
+
+test "BE_WIRE_02 lookup response whose cert is shorter than cert_len is rejected" {
+    var bytes = decodeHex(LOOKUP_RESP_HEX);
+    // cert_len at bytes 56..57 (= 1+16+1+19+19); claim 5 bytes, only 4 follow.
+    bytes[56] = 0x00;
+    bytes[57] = 0x05;
+    try std.testing.expectError(error.Truncated, parser.parseLookupResponse(&bytes));
+}
+
+test "BE_WIRE_01 lookup response with no endpoints is accepted" {
+    // A lighthouse may have no observed endpoint for an overlay (BE-MESH-01: a
+    // lighthouse can refuse to answer). endpoint_count = 0, cert still served.
+    const hex = "01" ++ OVERLAY_ADDR_FILL ++ "00" ++ "0004" ++ CERT_FILL;
+    const bytes = decodeHex(hex);
+    try std.testing.expectEqual(@as(usize, 24), bytes.len); // 1+16+1+0+2+4
+    const resp = try parser.parseLookupResponse(&bytes);
+    try std.testing.expectEqual(@as(u8, 0), resp.endpoint_count);
+    try std.testing.expectEqual(@as(usize, 0), resp.endpoints.len);
+    try std.testing.expectEqualSlices(u8, bytes[20..24], resp.cert);
+}

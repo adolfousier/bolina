@@ -72,6 +72,13 @@ pub const LEN_ENCRYPTED_COOKIE: usize = 32; // 16 cookie + 16 tag (SPEC 4.1a)
 pub const LEN_TRANSPORT_HEADER: usize = 16; // type + reserved + receiver_index + counter (SPEC 4.1a)
 pub const MAX_PACKET: usize = 1400; // transport packet ceiling (SPEC BE-TR-05)
 
+// Mesh / fragment field widths (SPEC section 4.5, 5.1a). The fragment header
+// is the flat msg_id/index/total prefix on every fragmented packet body; the
+// lighthouse lookup fields name the grammar in section 5.1a.
+pub const LEN_FRAGMENT_HEADER: usize = 12; // msg_id u64 + index u16 + total u16 (SPEC 4.5)
+pub const LEN_OVERLAY_ADDR: usize = 16; // overlay address, the mesh node id (SPEC 5.1)
+pub const LEN_ENDPOINT: usize = 19; // lighthouse endpoint tuple: family u8 + [16] addr + u16 port (SPEC 5.1a)
+
 // Transport message_type discriminants (SPEC section 4.1a). The parser
 // validates byte 0 against the expected constant for the function called; it
 // never dispatches on it, so these name the wire values, not control flow.
@@ -667,5 +674,117 @@ pub fn parseDataPacketHeader(buf: []const u8) ParseError!DataPacketHeader {
         .receiver_index = receiver_index,
         .counter = counter,
         .encrypted_payload = encrypted_payload,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Fragment header (SPEC section 4.5) and lighthouse lookups (SPEC section 5.1a).
+//
+// These are session-AEAD plaintext bodies: a fragment header prefixes every
+// fragmented packet body, and LookupRequest / LookupResponse are the lighthouse
+// discovery messages. None carries its own Ed25519 signature; each is
+// authenticated by the transport session it rides in (D-020).
+//
+// Derived max for the fragment `total` field: a reassembled message is bounded
+// by MAX_MESSAGE (1 MiB, BE-TR-05). The smallest fragment payload is one byte,
+// so the theoretical fragment ceiling is MAX_MESSAGE itself (1,048,576), which
+// is wider than the u16 `total` range. Every u16-representable `total` is
+// therefore consistent with MAX_MESSAGE (65535 one-byte fragments reassemble to
+// 64 KiB, under the 1 MiB ceiling), and reading `total` as a u16 is itself the
+// derived-max clamp. MAX_FRAGMENTS is not a row in the BE-TR-05 table, so no
+// tighter limit is declared here; inventing one would add an undeclared bound.
+// Fragment indices are zero-based: a valid index is in [0, total). (SPEC 4.5)
+//
+// BE-MESH-07: LookupRequest and LookupResponse MUST travel inside an
+// established session with a lighthouse and MUST NOT be parsed from
+// unauthenticated input. This parser performs structural validation only; the
+// caller is responsible for having authenticated the session. The served
+// certificate is returned as an opaque byte slice here and verified under
+// BE-ID-01..04 by the caller (BE-MESH-04); its internal structure is walked by
+// the certificate parser in a later task. (SPEC 5.1a)
+// ---------------------------------------------------------------------------
+
+pub const FragmentHeader = struct {
+    msg_id: u64,
+    index: u16,
+    total: u16,
+    payload: []const u8,
+};
+
+pub const LookupRequest = struct {
+    version: u8,
+    overlay_addr: []const u8,
+};
+
+pub const LookupResponse = struct {
+    version: u8,
+    overlay_addr: []const u8,
+    endpoint_count: u8,
+    endpoints: []const u8, // endpoint_count * LEN_ENDPOINT bytes flat (family u8 | [16] addr | u16 port), aliases the caller buffer
+    cert: []const u8, // opaque certificate bytes; caller runs BE-ID-01..04 over them (BE-MESH-04)
+};
+
+// parseFragmentHeader reads the flat msg_id/index/total prefix (SPEC 4.5) and
+// exposes the remaining bytes as the fragment payload. The payload floor and
+// BE-TR-05 ceiling are enforced upstream by parseDataPacketHeader on the
+// enclosing transport packet; this function sees only the AEAD plaintext body,
+// so it applies no payload bound of its own (the variable-payload pattern from
+// parseDataPacketHeader).
+pub fn parseFragmentHeader(buf: []const u8) ParseError!FragmentHeader {
+    var c = Cursor{ .buf = buf };
+    const msg_id = try c.u64be();
+    const index = try c.u16be();
+    const total = try c.u16be();
+    if (total == 0) return coverage.reject(.frag_total_zero);
+    if (index >= total) return coverage.reject(.frag_index_range);
+    const payload = buf[c.pos..];
+    coverage.accept(.frag_accepted);
+    return .{
+        .msg_id = msg_id,
+        .index = index,
+        .total = total,
+        .payload = payload,
+    };
+}
+
+// parseLookupRequest reads the fixed 17-byte lighthouse request (SPEC 5.1a): a
+// version byte and the overlay address being looked up. The grammar is
+// fixed-width, so any trailing byte is a parse failure (SPEC 2.2).
+pub fn parseLookupRequest(buf: []const u8) ParseError!LookupRequest {
+    var c = Cursor{ .buf = buf };
+    const version = try c.u8r();
+    const overlay_addr = try c.take(LEN_OVERLAY_ADDR);
+    if (c.pos != buf.len) return coverage.reject(.lookup_req_trailing);
+    coverage.accept(.lookup_req_accepted);
+    return .{
+        .version = version,
+        .overlay_addr = overlay_addr,
+    };
+}
+
+// parseLookupResponse reads the lighthouse response (SPEC 5.1a): version, the
+// overlay address echoed back, a u8 endpoint_count followed by that many
+// (family, addr, port) tuples read as one flat slice (the envelope-parent
+// convention: a count plus a single take of count * stride, no allocation),
+// then a u16 cert_len and the served certificate. Each field read runs through
+// the cursor, so a short buffer fails with the shared truncation exit point
+// rather than a bespoke one. The cert closes the message, so any byte after it
+// is trailing and a parse failure (SPEC 2.2).
+pub fn parseLookupResponse(buf: []const u8) ParseError!LookupResponse {
+    var c = Cursor{ .buf = buf };
+    const version = try c.u8r();
+    const overlay_addr = try c.take(LEN_OVERLAY_ADDR);
+    const endpoint_count = try c.u8r();
+    const endpoints = try c.take(@as(usize, endpoint_count) * LEN_ENDPOINT);
+    const cert_len = try c.u16be();
+    const cert = try c.take(@as(usize, cert_len));
+    if (c.pos != buf.len) return coverage.reject(.lookup_resp_trailing);
+    coverage.accept(.lookup_resp_accepted);
+    return .{
+        .version = version,
+        .overlay_addr = overlay_addr,
+        .endpoint_count = endpoint_count,
+        .endpoints = endpoints,
+        .cert = cert,
     };
 }

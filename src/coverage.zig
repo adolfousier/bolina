@@ -73,6 +73,19 @@ pub const Branch = enum {
     data_payload_short, // parseDataPacketHeader: payload shorter than the AEAD tag
     data_payload_oversize, // parseDataPacketHeader: payload above the BE-TR-05 bound
     data_accepted, // parseDataPacketHeader: returned a valid header
+    // Mesh / fragment parsers (SPEC 4.5, 5.1a). These are session-AEAD plaintext
+    // bodies with no type byte of their own; Malformed covers the two structural
+    // impossibilities a fragment header can assert (a zero total and an
+    // out-of-range index). Each lighthouse message has its own trailing check;
+    // the fragment header exposes its remaining bytes as payload like the
+    // variable data packet, so it has none.
+    frag_total_zero, // parseFragmentHeader: total == 0 (zero-fragment message)
+    frag_index_range, // parseFragmentHeader: index >= total (impossible position)
+    frag_accepted, // parseFragmentHeader: returned a valid header
+    lookup_req_trailing, // parseLookupRequest: bytes after the 17-byte request
+    lookup_req_accepted, // parseLookupRequest: returned a valid request
+    lookup_resp_trailing, // parseLookupResponse: bytes after the served cert
+    lookup_resp_accepted, // parseLookupResponse: returned a valid response
 };
 
 pub const COUNT: usize = @typeInfo(Branch).@"enum".fields.len;
@@ -94,9 +107,9 @@ pub inline fn reject(comptime tag: Branch) parser.ParseError {
     return switch (tag) {
         .cursor_truncated, .data_payload_short => error.Truncated,
         .env_parent_oversize, .env_body_oversize, .field16_oversize, .field32_oversize, .data_payload_oversize => error.Oversize,
-        .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing, .hs_init_trailing, .hs_resp_trailing, .cookie_trailing => error.TrailingBytes,
-        .hs_init_type, .hs_init_reserved, .hs_resp_type, .hs_resp_reserved, .cookie_type, .cookie_reserved, .data_type, .data_reserved => error.Malformed,
-        .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted, .hs_init_accepted, .hs_resp_accepted, .cookie_accepted, .data_accepted => @compileError("accepted exit points do not reject; use accept()"),
+        .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing, .hs_init_trailing, .hs_resp_trailing, .cookie_trailing, .lookup_req_trailing, .lookup_resp_trailing => error.TrailingBytes,
+        .hs_init_type, .hs_init_reserved, .hs_resp_type, .hs_resp_reserved, .cookie_type, .cookie_reserved, .data_type, .data_reserved, .frag_total_zero, .frag_index_range => error.Malformed,
+        .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted, .hs_init_accepted, .hs_resp_accepted, .cookie_accepted, .data_accepted, .frag_accepted, .lookup_req_accepted, .lookup_resp_accepted => @compileError("accepted exit points do not reject; use accept()"),
     };
 }
 
