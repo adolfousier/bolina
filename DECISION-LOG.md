@@ -215,3 +215,80 @@ ledger-last, BE-GRANT-03b exactly-once) are observable only through them.
 This is a test harness change. It alters no wire format, no declared guarantee, and no conformance
 item. What would reopen it: if the library ever grows genuine production concurrency, the pin comes
 off and the callback doubles get per-test storage at that point.
+
+## D-017 — 2026-08-06 — Transport parser cost estimated before any transport code; the budget fits
+
+Question: Daniel's transport directive requires a parser line-cost estimate for the five
+transport components (Noise handshake, cookie, fragmentation/reassembly, anti-replay window,
+lighthouse lookup) against the remaining BE-SURF-03 budget before any transport code is
+written, because a budget that cannot hold the transport is a false premise (stop item 4) and
+must be caught before line 1501, not at it.
+
+Decision: estimate from measurement, not intuition, and record it as TRANSPORT-ESTIMATE.md at
+the repository root. Method: the spec's own counting rule (M5: every `*.zig` under
+`src/parser.zig` and `src/parser/`, `wc -l` summed) measures the current state at 486 of 1500,
+leaving 1014; the existing six parse functions are then decomposed by measured line ranges to
+obtain a cost-per-wire-item ratio (250 lines of parse code over ~51 wire items = ~4.9, or 6.3
+including struct definitions); each new structure's wire items are enumerated from its SPEC
+section (§4.1, §4.3, §4.4, §4.5, §5.1a) and priced at 5–6.5 lines per item plus stated
+overhead. Result: five components 275–387 lines (28–38% of remaining), 345–480 including the
+Cert parse BE-TR-01 and §5.1a require (34–47%). Worst-case headroom 2.1×. Verdict: FITS,
+proceed to transport.
+
+Reasoning: every number in the estimate has a named source — 1500 from BE-SURF-03, 486 from
+the M5 measurement, the ratio from the six existing parse functions, the wire items from the
+spec text — so no denominator is author-chosen, which is the denominator law applied to an
+estimate rather than a gate. The estimate is a separate document rather than a chat message
+because Daniel's autonomous-mode directive requires solo decisions logged in files, and
+because the channels round will need the same discipline against the same budget and should
+inherit a format, not reconstruct one.
+
+Pre-close checks: (1) read against other sections — BE-SURF-01 confirms the estimate adds no
+third pre-auth structure (handshake messages and cookie reply stay the only two, fixed-size);
+BE-TR-07 keeps the msg1 payload empty so there is no payload parsing to price; §11.3 orders
+vectors before the parser they verify, which the task list follows; §11.6's fuzz and coverage
+costs land in `tools/` and `src/coverage.zig`, outside M5, noted in the estimate rather than
+silently excluded; (2) who picked the denominator — nobody; all four inputs are measured or
+spec-stated, as itemized above; (3) does the thing being checked need to exist — only
+spec-mandated structures are priced, and the anti-replay window and reassembly state machines
+are excluded from the parser number because they are not parsing (their costs are listed in
+the estimate's §6 for completeness, not hidden).
+
+This is an estimate and a decision record. It alters no wire format, no declared guarantee,
+and no conformance item. What would reopen it: the D-019 pin adding fields beyond the
+WireGuard shape assumed, or the channels-round estimate plus this total exceeding 1500.
+
+## D-018 — 2026-08-06 — The parser-budget boundary: bytes-to-fields counts, state-over-parsed-values does not
+
+Question: the transport layer mixes byte interpretation (handshake framing, fragment headers,
+lookup encoding) with state machines over authenticated values (the anti-replay window,
+reassembly context tracking, the Noise key schedule). BE-SURF-03 budgets "the isolated
+network-parsing module" at 1500 lines and M5 enforces it by counting `src/parser.zig` and
+`src/parser/`. Which transport code counts?
+
+Decision: code that turns raw bytes into typed fields lives in the parser module and counts
+toward the 1500. Code that tracks state over already-parsed, authenticated values lives in
+transport modules outside the parser and does not count. Concretely: handshake message parse,
+cookie reply parse, data packet header parse (including the u64 counter read), fragment header
+parse, lookup parse, and Cert parse count; the RFC 6479 window bitmap, reassembly context
+tracking, key schedule, and cookie issue/rotation state do not.
+
+Reasoning: BE-SURF-03 exists so the code exposed to hostile bytes stays small enough for one
+person to audit; the window and reassembly logic consume values that AEAD and the parser have
+already validated, so they are not part of that surface. The rule is stated with its gaming
+direction named: moving parsing OUT of the module to flatter M5 is forbidden, because
+BE-SURF-01's closed pre-auth inventory depends on there being exactly one place where network
+bytes become values. Every byte read goes through the parser module; the boundary decides
+where the resulting state lives, never where the bytes are read.
+
+Pre-close checks: (1) read against other sections — BE-SURF-01 requires a closed inventory of
+pre-auth parsing, which a single parser module provides; BE-WIRE-01 and BE-WIRE-02 bind all
+parse functions regardless of which new structures are added; §11.6's coverage counters and
+fuzz entrypoints extend with each new parse function and live outside M5 by construction;
+(2) who picked the denominator — the boundary rule does not pick one; M5's counting rule is
+the spec's and is unchanged; (3) does the thing being checked need to exist — the boundary
+exists because the budget exists; without BE-SURF-03 there would be nothing to police.
+
+This is a module-boundary decision. It alters no wire format and no declared guarantee. What
+would reopen it: any transport code that reads network bytes outside the parser module is a
+violation of this decision and of BE-SURF-01, and stops work.
