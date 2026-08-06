@@ -1050,6 +1050,15 @@ cross-implementation test vectors (§11 item 3). Two conformant implementations 
 class of the same span would produce different confidences from identical evidence, which is the
 failure this whole section exists to remove.
 
+**BE-EVID-16 (the verdict is a record, not a substitution)** — A claim's resolution MUST carry a
+record counting every cited span into exactly one terminal bucket: cited, inline, supportable,
+subject-matched, superseded, unresolved, and non-effect. A span that fails a check is counted, never
+discarded: the state is a summary of the evidence walk, not a substitute for it. When the claim is
+Supported and an unresolved span is pending, the verdict MUST carry a flag that the number may rise
+on backfill, while the number itself stays fail-closed at the strongest resolved ceiling. This is the
+inverse of R3 applied to a verdict routine: every failure records a cause, so a span cannot be
+dropped silently without shifting a count.
+
 ### 7.5 Evidence travels with the claim
 
 **BE-EVID-08 (piggyback is mandatory)** — An `Utterance` MUST carry, inline, the full encoded `Span`

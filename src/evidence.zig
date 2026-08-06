@@ -161,14 +161,34 @@ pub const ResolveContext = struct {
 // BE-EVID-09: three states, not two. A claim resolves to exactly one.
 // ---------------------------------------------------------------------------
 
+// F1/F2/F3 (round-4 review): a claim's verdict carries a resolution record so
+// the state is a SUMMARY of the evidence walk, not a substitute for it. Every
+// cited span lands in exactly one terminal bucket: a span that fails a check is
+// COUNTED (cited-but-not-inline, sig/role failure, subject mismatch, superseded,
+// non-effect origin), never silently dropped. The inverse of R3 (every failure
+// records a cause): a mutation that drops a span silently shifts a count, which
+// a test asserting the record catches.
+
+pub const ResolutionRecord = struct {
+    cited: usize = 0, // total span_ids the claim cites
+    inline_spans: usize = 0, // cited spans present in the envelope (BE-EVID-08 pass)
+    supportable: usize = 0, // inline spans with valid sig + executor role (BE-EVID-01 pass)
+    subject_matched: usize = 0, // supportable spans with resource_id == subject (BE-EVID-03 pass)
+    superseded: usize = 0, // subject_matched spans superseded by a later Effect (BE-EVID-05)
+    unresolved: usize = 0, // subject_matched spans whose origin is absent, pending (BE-EVID-02b)
+    non_effect: usize = 0, // subject_matched spans whose origin is a non-Effect body (BE-EVID-09b)
+};
+
 pub const Supported = struct {
-    effective_q8: u8, // min(stated, strongest ceiling), BE-EVID-02
+    effective_q8: u8, // min(stated, strongest RESOLVED ceiling), BE-EVID-02; fail-closed
+    pending_stronger: bool, // F1: a supporting span is pending; the number may rise on backfill
+    record: ResolutionRecord,
 };
 
 pub const ClaimState = union(enum) {
-    supported: Supported, // ceiling of the strongest resolved, non-superseded span
-    unresolved, // valid matching evidence, origin not yet in the ledger (BE-EVID-02b)
-    unsupported, // no supporting span; 0.00 with the "no mechanical confirmation" marker (BE-EVID-02a)
+    supported: Supported, // strongest resolved, non-superseded span; F1 flag if evidence is pending
+    unresolved: ResolutionRecord, // valid matching evidence, origin not yet in the ledger (BE-EVID-02b)
+    unsupported: ResolutionRecord, // no supporting span; 0.00 with the "no mechanical confirmation" marker (BE-EVID-02a)
 };
 
 // ---------------------------------------------------------------------------
@@ -219,16 +239,22 @@ pub fn resolveClaim(
     ctx: ResolveContext,
     claim_envelope: []const u8,
 ) ClaimState {
+    var rec = ResolutionRecord{};
     var strongest_ceiling: u8 = 0;
     var has_unresolved = false;
 
     var i: usize = 0;
     while (i < claim.span_count) : (i += 1) {
+        rec.cited += 1;
         const sid = claim.span_ids[i * parser.LEN_SPAN_REF .. (i + 1) * parser.LEN_SPAN_REF];
-        const span = matchSpan(spans, sid) orelse continue; // BE-EVID-08: not inline
+        const span = matchSpan(spans, sid) orelse continue; // BE-EVID-08: cited but not inline (counted as cited)
+        rec.inline_spans += 1;
 
-        if (!spanSupportable(span, ctx)) continue; // BE-EVID-01
-        if (!std.mem.eql(u8, span.resource_id, claim.subject)) continue; // BE-EVID-03
+        if (!spanSupportable(span, ctx)) continue; // BE-EVID-01 fail (counted as inline)
+        rec.supportable += 1;
+
+        if (!std.mem.eql(u8, span.resource_id, claim.subject)) continue; // BE-EVID-03 fail (counted as supportable)
+        rec.subject_matched += 1;
 
         switch (ctx.resolve_origin(span.origin)) {
             .effect => {
@@ -236,23 +262,33 @@ pub fn resolveClaim(
                 // spans stay valid indefinitely (BE-EVID-07), so the DAG hook
                 // is never consulted for them.
                 if (isVolatile(span.volatility) and ctx.is_superseded(span.resource_id, span.origin, claim_envelope)) {
-                    continue; // superseded -> contributes zero (BE-EVID-05)
+                    rec.superseded += 1; // BE-EVID-05: counted, contributes zero
+                    continue;
                 }
                 const ceil = ceilingQ8(classOf(span.method_id));
                 if (ceil > strongest_ceiling) strongest_ceiling = ceil;
             },
             .absent => {
-                has_unresolved = true; // BE-EVID-02b
+                rec.unresolved += 1; // BE-EVID-02b: origin pending
+                has_unresolved = true;
             },
             .non_effect => {
-                continue; // BE-EVID-09b: drops out of both states
+                rec.non_effect += 1; // BE-EVID-09b: counted, drops out of both states
+                continue;
             },
         }
     }
 
     if (strongest_ceiling > 0) {
-        return .{ .supported = .{ .effective_q8 = effectiveConfidence(claim.confidence_q8, strongest_ceiling) } };
+        // F1: the number stays fail-closed (min of stated and the strongest
+        // RESOLVED ceiling); pending_stronger says an unresolved span exists and
+        // the number can rise when its origin lands above the current strongest.
+        return .{ .supported = .{
+            .effective_q8 = effectiveConfidence(claim.confidence_q8, strongest_ceiling),
+            .pending_stronger = has_unresolved,
+            .record = rec,
+        } };
     }
-    if (has_unresolved) return .unresolved;
-    return .unsupported;
+    if (has_unresolved) return .{ .unresolved = rec };
+    return .{ .unsupported = rec };
 }

@@ -121,6 +121,12 @@ EVIDENCE_MARKERS = [
      r"BE-EVID-09 \(three states, not two"),
     ("origin-effect", "BE-EVID-09b origin must resolve to an Effect",
      r"BE-EVID-09b \(origin must resolve to an Effect"),
+    # R3-inverse (round-4 review item 4): every cited span is attributed, never
+    # silently dropped. resolveClaim is a verdict routine, so R3 applies to it:
+    # a span that fails a check is COUNTED into a terminal bucket, and the count
+    # is what a silent-drop mutant shifts.
+    ("resolution-record", "R3-inverse: every cited span is attributed, not dropped",
+     r"Every failure records a cause, not just a verdict"),
 ]
 
 
@@ -280,15 +286,37 @@ MUTANTS = [
     # tail makes an absent origin render as 0.00. BE_EVID_02b/09 kill it.
     ("evidence", "evidence.zig", "WRONG-LOGIC", "three-state",
      "unresolved/unsupported tail swapped",
-     "    if (has_unresolved) return .unresolved;\n    return .unsupported;",
-     "    if (has_unresolved) return .unsupported; // MUTANT\n    return .unresolved; // MUTANT"),
+     "    if (has_unresolved) return .{ .unresolved = rec };\n    return .{ .unsupported = rec };",
+     "    if (has_unresolved) return .{ .unsupported = rec }; // MUTANT\n    return .{ .unresolved = rec }; // MUTANT"),
     # BE-EVID-09b: a non-Effect origin drops out of both states. Treating it as
     # Unresolved (set the flag instead of continue) renders it pending.
     # BE_EVID_09b (sole non-Effect span, expects unsupported) kills it.
     ("evidence", "evidence.zig", "WRONG-LOGIC", "origin-effect",
      "non-Effect origin treated as unresolved (continue -> flag)",
-     "                continue; // BE-EVID-09b: drops out of both states",
-     "                has_unresolved = true; // MUTANT"),
+     "                rec.non_effect += 1; // BE-EVID-09b: counted, drops out of both states\n                continue;",
+     "                rec.non_effect += 1; // BE-EVID-09b: counted, drops out of both states\n                has_unresolved = true; // MUTANT"),
+
+    # --- R3-inverse: silent-drop class (round-4 review item 4). Before the
+    # resolution record a span that failed a check was discarded with a bare
+    # `continue` and no test could see it. Now each failure lands in a count,
+    # and these mutants drop the increment: the state and number stay correct
+    # (fail-closed), but a count the BE_EVID_16 assertions pin shifts, killing
+    # the mutant. One per finding F1/F2/F3.
+    # F2: a cited span not carried inline must still be counted as cited.
+    ("evidence", "evidence.zig", "DROP-COUNT", "resolution-record",
+     "cited-but-not-inline span silently dropped (cited count not incremented)",
+     "        rec.cited += 1;",
+     "        rec.cited += 0; // MUTANT"),
+    # F3: a non-Effect origin must still be counted as non_effect.
+    ("evidence", "evidence.zig", "DROP-COUNT", "resolution-record",
+     "non-Effect origin span silently dropped (non_effect count not incremented)",
+     "                rec.non_effect += 1; // BE-EVID-09b: counted, drops out of both states",
+     "                rec.non_effect += 0; // MUTANT"),
+    # F1: an unresolved span must still be counted as unresolved.
+    ("evidence", "evidence.zig", "DROP-COUNT", "resolution-record",
+     "unresolved span silently dropped (unresolved count not incremented)",
+     "                rec.unresolved += 1; // BE-EVID-02b: origin pending",
+     "                rec.unresolved += 0; // MUTANT"),
 
     # --- transport domain: the mac1/cookie DoS gate (src/mac.zig)
     # BE-TR-04 mac1 keying: the derivation label feeds the unkeyed->keyed
