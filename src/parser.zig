@@ -261,6 +261,12 @@ pub fn parseIntent(buf: []const u8) ParseError!Intent {
 // tbs is every byte before sig; sig is Ed25519 over (DOMAIN_GRANT || tbs).
 // Like the Envelope, version is parsed here but refused by the verifier
 // (BE-GRANT-03 step 0), keeping parsing total and policy out of the parser.
+//
+// wire is the full input buffer this Grant was parsed from (tbs || sig). The
+// verifier borrows it to seal the capability by content (BE-GRANT-03c): a
+// keyed digest over wire is frozen at verification time and recomputed over the
+// same live bytes at every access, so a caller write to the buffer between
+// verification and consumption is detected, not silently honored.
 // ---------------------------------------------------------------------------
 
 pub const Grant = struct {
@@ -275,6 +281,7 @@ pub const Grant = struct {
     not_after: u64,
     tbs: []const u8,
     sig: []const u8,
+    wire: []const u8,
 };
 
 pub fn parseGrant(buf: []const u8) ParseError!Grant {
@@ -308,5 +315,6 @@ pub fn parseGrant(buf: []const u8) ParseError!Grant {
         .not_after = not_after,
         .tbs = tbs,
         .sig = sig,
+        .wire = buf,
     };
 }
