@@ -93,21 +93,4 @@ pub fn build(b: *std.Build) void {
     // the toolchain's -ffuzz coverage has no script-readable output.
     const coverage_step = b.step("coverage", "Run fuzz with exit-point coverage on (-Dcoverage -Dfuzz-budget=N)");
     coverage_step.dependOn(&run_fuzz.step);
-
-    // Negative compile test (BE-GRANT-03b). test/negative_capability.zig tries
-    // to forge a VerifiedGrant by value, which MUST fail to compile now that the
-    // capability is opaque {}. We run the compiler on it directly and assert
-    // exit 1: the step PASSES on a compile failure and FAILS the day the file
-    // ever compiles (the forgery hole reopened). Run by tools/prumo-verify
-    // under M8. The compiler's error output on stderr is expected.
-    const neg_cmd = b.addSystemCommand(&.{
-        b.graph.zig_exe,
-        "build-obj",
-        "-fno-emit-bin",
-        "src/negative_capability.zig",
-    });
-    neg_cmd.expectExitCode(1);
-    neg_cmd.setName("negative compile (capability forgery must fail)");
-    const negative_step = b.step("negative", "Negative compile test: capability forgery MUST fail to compile");
-    negative_step.dependOn(&neg_cmd.step);
 }

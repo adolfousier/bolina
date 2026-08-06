@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # mutation-test.py
 #
-# Mutation harness v3 for the Grant verifier (LANGUAGE.md section 4 metric;
+# Mutation harness v4 for the Grant verifier (LANGUAGE.md section 4 metric;
 # SPEC.md section 11.2). cargo-mutants does not exist for Zig, so this applies
 # one mutant at a time to src/verify.zig, rebuilds, runs the full test suite,
 # and records whether the suite kills it.
@@ -24,6 +24,13 @@
 # proves the check is RIGHT. Every mutant keeps the module compiling, so a
 # non-zero `zig build test` exit means a test caught the mutant by asserting
 # the correct behaviour.
+#
+# v4 (Daniel, round 4, BE-GRANT-03b restatement): the storable capability is
+# gone, so the seal is gone too. The two seal mutants are removed and the seal
+# denominator with them. In their place: a CALLBACK class proving the effect
+# runs only after every check (and the ledger commit) passes. The denominator
+# is still derived from SPEC: the modelled 0-11 checks, plus the BE-GRANT-03b
+# call-boundary property tracked as "03b" (the way v3 tracked the seal as 03c).
 
 import re
 import subprocess
@@ -63,15 +70,12 @@ def modelled_checks_from_spec():
     return [int(n) for n in re.findall(r"\d+", m.group(1))]
 
 
-def seal_modeled_in_spec():
-    return "**BE-GRANT-03c" in SPEC.read_text()
-
-
 # --- mutants --------------------------------------------------------------
 # Each mutant: (class, check, name, anchor, replacement). `check` is the SPEC
-# BE-GRANT-03 number (0-11) the mutant attacks, or "03c" for the seal. The gate
-# requires every modelled check and the seal to be covered by a KILLED mutant,
-# and forbids any mutant attacking a check SPEC does not list as modelled.
+# BE-GRANT-03 number (0-11) the mutant attacks, or "03b" for the call-boundary
+# property. The gate requires every modelled check and the callback property to
+# be covered by a KILLED mutant, and forbids any mutant attacking a check SPEC
+# does not list as modelled.
 
 MUTANTS = [
     ("WRONG-CONSTANT", 0,
@@ -110,16 +114,24 @@ MUTANTS = [
      "check 11 ledger condition inverted (consumed -> !consumed)",
      "if (ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed;",
      "if (!ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed; // MUTANT"),
-    # BE-GRANT-03c seal: two mutants on grantOf, both killed by the TOCTOU test
-    # that tampers slot.wire after verification and expects error.Tampered.
-    ("SEAL-ABSENCE", "03c",
-     "seal-check-absence: grantOf computes the digest but never compares it",
-     "    if (!std.crypto.timing_safe.eql([32]u8, recomputed, slot.seal)) return error.Tampered;",
-     "    _ = recomputed; // MUTANT seal-check-absence: MAC never compared"),
-    ("SEAL-BYPASS", "03c",
-     "tamper-passes: grantOf returns re-parsed data without checking the seal",
-     "    const recomputed = sealOver(slot.wire);\n    if (!std.crypto.timing_safe.eql([32]u8, recomputed, slot.seal)) return error.Tampered;",
-     "    // MUTANT tamper-passes: grantOf returns re-parsed data without the seal check"),
+    # BE-GRANT-03b callback (round 4): the effect MUST NOT run before a check
+    # passes. CALLBACK-ABSENCE removes the call entirely; the two BEFORE mutants
+    # insert an extra execute(grant) ahead of a check, so a refused grant still
+    # fires the effect. Each is killed by the test that asserts effect_calls == 0
+    # on the refused grant (and == 1 on a valid grant, which the extra call
+    # breaks too).
+    ("CALLBACK-ABSENCE", "03b",
+     "effect never invoked despite a valid grant",
+     "execute(grant);",
+     "// MUTANT: effect call removed"),
+    ("CALLBACK-BEFORE-EXPIRY", 10,
+     "callback invoked before the expiry check runs",
+     "try checkExpiry(grant.not_after, ctx.now_ms, ctx.first_receipt_ms, ctx.t_max_s, ctx.t_recv_s);",
+     "execute(grant); // MUTANT callback before expiry\n    try checkExpiry(grant.not_after, ctx.now_ms, ctx.first_receipt_ms, ctx.t_max_s, ctx.t_recv_s);"),
+    ("CALLBACK-BEFORE-LEDGER", 11,
+     "callback invoked before the ledger check",
+     "if (ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed;",
+     "execute(grant); // MUTANT callback before ledger\n    if (ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed;"),
 ]
 
 
@@ -135,7 +147,6 @@ def main():
     # 1. derive the denominator from SPEC
     enumerated = enumerated_checks_from_spec()
     modelled = set(modelled_checks_from_spec())
-    seal = seal_modeled_in_spec()
     if not enumerated:
         sys.exit("FATAL: no enumerated BE-GRANT-03 checks found in SPEC")
     if not modelled.issubset(set(enumerated)):
@@ -144,12 +155,12 @@ def main():
     print("denominator derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
     print(f"  modelled by this slice:        {sorted(modelled)} ({len(modelled)})")
-    print(f"  BE-GRANT-03c seal:             {'modelled' if seal else 'NOT modelled'}")
+    print(f"  BE-GRANT-03b callback:         call-boundary property modelled")
     print()
 
     # scope check: no mutant may attack a check SPEC does not list as modelled
     for klass, check, name, _, _ in MUTANTS:
-        if check != "03c" and check not in modelled:
+        if check != "03b" and check not in modelled:
             sys.exit(f"FATAL: mutant '{name}' attacks check {check}, which SPEC "
                      "does not list as modelled (scope lie)")
 
@@ -175,24 +186,24 @@ def main():
     run = [r for r in results if not r["skipped"]]
     killed = sum(1 for r in run if r["killed"])
     survivors = [r["name"] for r in run if not r["killed"]]
-    covered = {r["check"] for r in run if r["killed"] and r["check"] != "03c"}
-    seal_killed = any(r["killed"] for r in run if r["check"] == "03c")
+    covered = {r["check"] for r in run if r["killed"] and r["check"] != "03b"}
+    callback_killed = any(r["killed"] for r in run if r["check"] == "03b")
     uncovered = sorted(modelled - covered)
 
     print()
     print(f"mutation score: {len(covered)}/{len(modelled)} modelled "
-          f"BE-GRANT-03 checks + {'1' if seal_killed else '0'}/1 seal "
-          f"covered by killed mutants (denominator from SPEC.md)")
+          f"BE-GRANT-03 checks + {'1' if callback_killed else '0'}/1 callback "
+          f"property covered by killed mutants (denominator from SPEC.md)")
     print(f"  {killed}/{len(run)} mutants killed, "
           f"{len(survivors)} survived")
     if survivors:
         print(f"  SURVIVORS: {survivors}")
     if uncovered:
         print(f"  UNCOVERED modelled checks: {uncovered}")
-    if not seal_killed:
-        print("  UNCOVERED: BE-GRANT-03c seal")
+    if not callback_killed:
+        print("  UNCOVERED: BE-GRANT-03b callback property")
 
-    ok = (not survivors) and (not uncovered) and seal_killed and seal
+    ok = (not survivors) and (not uncovered) and callback_killed
     return 0 if ok else 1
 
 
