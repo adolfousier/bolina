@@ -94,6 +94,18 @@ Each row is a removal that retired a check site, a gate, or both. The rule is no
 it is "before you write the check, prove the checked thing must exist." A check written where a
 deletion was possible is debt the moment it lands, and debt of this kind has not been repaid late.
 
+### Don't reference the constant under test
+
+The denominator law's testing twin. A test that references the constant it verifies asserts
+nothing about that constant: change the constant and both sides of the check move together, the
+test stays green, and a mutant on the constant survives with the full suite passing. The window
+this opens is exactly the one the denominator law closes on the gate side. So a test MUST NOT
+reference the constant it verifies. Assert the literal value the spec names (`1034`, `1048576`,
+`8388608`), never the module constant (`replay.WINDOW_BITS`, `ras.MAX_MESSAGE`,
+`ras.MEMORY_PER_PEER`); if a mutant then survives, the survivor is the finding and names the
+assertion to harden. Round 4 caught this by keying the window-bits mutant and watching it
+survive a symbolic test, then killing it once the assertions went literal.
+
 ---
 
 ## 3. Judgement rules (a person decides, and writes down why)
