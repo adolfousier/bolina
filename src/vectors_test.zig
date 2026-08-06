@@ -56,14 +56,14 @@ test "vectors: envelope_intent parses and its signature verifies" {
 
     const wire = try decodeHex(al, str(env, "wire_hex"));
     const signer = try decodeHex(al, str(env, "signer_pubkey"));
-    try testing.expectEqual(@as(u8, parser.DOMAIN_ENVELOPE), try hexByte(str(env, "domain_tag")));
+    try testing.expectEqual(@as(u8, parser.channel.DOMAIN_ENVELOPE), try hexByte(str(env, "domain_tag")));
 
-    const e = try parser.parseEnvelope(wire);
+    const e = try parser.channel.parseEnvelope(wire);
     // BE-ENV-02: envelope sig verifies against sender before any body work.
-    try verify.verifySigned(parser.DOMAIN_ENVELOPE, e.tbs, e.sig, signer);
+    try verify.verifySigned(parser.channel.DOMAIN_ENVELOPE, e.tbs, e.sig, signer);
 
     // The body is an Intent whose resource_id and action match the vector.
-    const intent = try parser.parseIntent(e.body);
+    const intent = try parser.channel.parseIntent(e.body);
     const fields = env.get("fields").?.object;
     try testing.expectEqualStrings(str(fields, "body_resource_id"), intent.resource_id);
     try testing.expectEqualStrings(str(fields, "body_action_utf8"), intent.action);
@@ -82,10 +82,10 @@ test "vectors: grant parses and its signature verifies" {
 
     const wire = try decodeHex(al, str(grant, "wire_hex"));
     const approver = try decodeHex(al, str(grant, "signer_pubkey"));
-    try testing.expectEqual(@as(u8, parser.DOMAIN_GRANT), try hexByte(str(grant, "domain_tag")));
+    try testing.expectEqual(@as(u8, parser.channel.DOMAIN_GRANT), try hexByte(str(grant, "domain_tag")));
 
-    const g = try parser.parseGrant(wire);
-    try verify.verifySigned(parser.DOMAIN_GRANT, g.tbs, g.sig, approver);
+    const g = try parser.channel.parseGrant(wire);
+    try verify.verifySigned(parser.channel.DOMAIN_GRANT, g.tbs, g.sig, approver);
 
     // BE-GRANT-02: the stored action_digest is BLAKE2s of the intent action.
     const action_utf8 = str(grant.get("fields").?.object, "action_utf8");
@@ -106,7 +106,7 @@ test "vectors: span signature verifies against executor" {
     const tbs = try decodeHex(al, str(span, "tbs_hex"));
     const sig = try decodeHex(al, str(span, "sig_hex"));
     const signer = try decodeHex(al, str(span, "signer_pubkey"));
-    try verify.verifySigned(parser.DOMAIN_SPAN, tbs, sig, signer);
+    try verify.verifySigned(parser.channel.DOMAIN_SPAN, tbs, sig, signer);
 }
 
 test "vectors: span body parses against the canonical wire" {
@@ -121,7 +121,7 @@ test "vectors: span body parses against the canonical wire" {
     const fields = span.get("fields").?.object;
 
     const wire = try decodeHex(al, str(span, "wire_hex"));
-    const s = try parser.parseSpan(wire);
+    const s = try parser.channel.parseSpan(wire);
 
     try testing.expectEqual(@as(u8, 2), s.version);
     try testing.expectEqual(@as(u8, 1), s.method_id); // 1 -> DirectObservation (SPEC 7.4)
@@ -140,7 +140,7 @@ test "vectors: span body parses against the canonical wire" {
 
     // The parsed tbs and sig must verify under domain 0x03, cross-checked.
     const signer = try decodeHex(al, str(span, "signer_pubkey"));
-    try verify.verifySigned(parser.DOMAIN_SPAN, s.tbs, s.sig, signer);
+    try verify.verifySigned(parser.channel.DOMAIN_SPAN, s.tbs, s.sig, signer);
 }
 
 test "vectors: effect body parses with one inline span" {
@@ -154,10 +154,10 @@ test "vectors: effect body parses with one inline span" {
     const eff = j.value.object.get("structures").?.object.get("effect").?.object;
 
     const env_wire = try decodeHex(al, str(eff, "wire_hex"));
-    const env = try parser.parseEnvelope(env_wire);
-    try testing.expectEqual(parser.BODY_EFFECT, env.body_type);
+    const env = try parser.channel.parseEnvelope(env_wire);
+    try testing.expectEqual(parser.channel.BODY_EFFECT, env.body_type);
 
-    const body = try parser.parseEffect(env.body);
+    const body = try parser.channel.parseEffect(env.body);
     try testing.expectEqual(@as(u8, 1), body.ok);
     try testing.expectEqual(@as(i32, 0), body.exit_code);
     try testing.expectEqual(@as(u8, 1), body.span_count);
@@ -165,10 +165,10 @@ test "vectors: effect body parses with one inline span" {
 
     // The inline span region holds exactly one full Span wire: it parses
     // standalone and its tbs/sig verify against the executor.
-    const inline_span = try parser.parseSpan(body.spans);
+    const inline_span = try parser.channel.parseSpan(body.spans);
     try testing.expectEqual(@as(u8, 1), inline_span.method_id);
     const signer = try decodeHex(al, str(eff, "signer_pubkey"));
-    try verify.verifySigned(parser.DOMAIN_SPAN, inline_span.tbs, inline_span.sig, signer);
+    try verify.verifySigned(parser.channel.DOMAIN_SPAN, inline_span.tbs, inline_span.sig, signer);
 }
 
 test "vectors: claim body parses with one span reference" {
@@ -183,7 +183,7 @@ test "vectors: claim body parses with one span reference" {
     const fields = claim.get("fields").?.object;
 
     const wire = try decodeHex(al, str(claim, "wire_hex"));
-    const c = try parser.parseClaim(wire);
+    const c = try parser.channel.parseClaim(wire);
 
     try testing.expectEqualStrings(str(fields, "text"), c.text);
     try testing.expectEqualStrings(str(fields, "subject"), c.subject);
@@ -205,7 +205,7 @@ test "vectors: refusal signature verifies against approver" {
     const tbs = try decodeHex(al, str(refusal, "tbs_hex"));
     const sig = try decodeHex(al, str(refusal, "sig_hex"));
     const signer = try decodeHex(al, str(refusal, "signer_pubkey"));
-    try verify.verifySigned(parser.DOMAIN_REFUSAL, tbs, sig, signer);
+    try verify.verifySigned(parser.channel.DOMAIN_REFUSAL, tbs, sig, signer);
 }
 
 test "vectors: cert is countersigned by two CAs over domain 0x01" {
@@ -224,7 +224,7 @@ test "vectors: cert is countersigned by two CAs over domain 0x01" {
     for (ca_sigs) |entry| {
         const ca_key = try decodeHex(al, str(entry.object, "ca_key"));
         const ca_sig = try decodeHex(al, str(entry.object, "sig"));
-        try verify.verifySigned(parser.DOMAIN_CERT, tbs, ca_sig, ca_key);
+        try verify.verifySigned(parser.session.DOMAIN_CERT, tbs, ca_sig, ca_key);
     }
 }
 
@@ -238,7 +238,7 @@ test "vectors: truncated envelope trailer is rejected (BE-WIRE-02)" {
     defer j.deinit();
     const items = j.value.object.get("negatives").?.array.items;
     const wire = try decodeHex(al, str(negative(items, "envelope_truncated_sig"), "wire"));
-    try testing.expectError(error.Truncated, parser.parseEnvelope(wire));
+    try testing.expectError(error.Truncated, parser.channel.parseEnvelope(wire));
 }
 
 test "vectors: trailing bytes after an envelope are rejected (BE-WIRE-02)" {
@@ -251,7 +251,7 @@ test "vectors: trailing bytes after an envelope are rejected (BE-WIRE-02)" {
     defer j.deinit();
     const items = j.value.object.get("negatives").?.array.items;
     const wire = try decodeHex(al, str(negative(items, "envelope_trailing_byte"), "wire"));
-    try testing.expectError(error.TrailingBytes, parser.parseEnvelope(wire));
+    try testing.expectError(error.TrailingBytes, parser.channel.parseEnvelope(wire));
 }
 
 test "vectors: envelope signed over wrong domain tag fails verification (BE-SIG-01)" {
@@ -268,8 +268,8 @@ test "vectors: envelope signed over wrong domain tag fails verification (BE-SIG-
     const wire = try decodeHex(al, str(negative(items, "envelope_wrong_domain_tag"), "wire"));
 
     // The wire parses cleanly; only the signature is invalid for this domain.
-    const e = try parser.parseEnvelope(wire);
-    try testing.expectError(error.BadSignature, verify.verifySigned(parser.DOMAIN_ENVELOPE, e.tbs, e.sig, signer));
+    const e = try parser.channel.parseEnvelope(wire);
+    try testing.expectError(error.BadSignature, verify.verifySigned(parser.channel.DOMAIN_ENVELOPE, e.tbs, e.sig, signer));
 }
 
 // Parse a single hex byte (the domain_tag field is "01".."06").

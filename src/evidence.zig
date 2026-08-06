@@ -219,23 +219,23 @@ pub const ClaimState = union(enum) {
 // guarantee change (no rule's stated outcome is altered).
 // ---------------------------------------------------------------------------
 
-fn matchSpan(spans: []const parser.Span, span_id: []const u8) ?parser.Span {
+fn matchSpan(spans: []const parser.channel.Span, span_id: []const u8) ?parser.channel.Span {
     for (spans) |s| {
         if (std.mem.eql(u8, s.span_id, span_id)) return s;
     }
     return null;
 }
 
-fn spanSupportable(span: parser.Span, ctx: ResolveContext) bool {
+fn spanSupportable(span: parser.channel.Span, ctx: ResolveContext) bool {
     // BE-EVID-01 conjunct 1: sig verifies against executor (domain tag 0x03).
-    verify.verifySigned(parser.DOMAIN_SPAN, span.tbs, span.sig, span.executor) catch return false;
+    verify.verifySigned(parser.channel.DOMAIN_SPAN, span.tbs, span.sig, span.executor) catch return false;
     // BE-EVID-01 conjunct 2: the cert carries the executor role.
     return ctx.role_of(span.executor) == .executor;
 }
 
 pub fn resolveClaim(
-    claim: parser.Claim,
-    spans: []const parser.Span,
+    claim: parser.channel.Claim,
+    spans: []const parser.channel.Span,
     ctx: ResolveContext,
     claim_envelope: []const u8,
 ) ClaimState {
@@ -246,7 +246,7 @@ pub fn resolveClaim(
     var i: usize = 0;
     while (i < claim.span_count) : (i += 1) {
         rec.cited += 1;
-        const sid = claim.span_ids[i * parser.LEN_SPAN_REF .. (i + 1) * parser.LEN_SPAN_REF];
+        const sid = claim.span_ids[i * parser.channel.LEN_SPAN_REF .. (i + 1) * parser.channel.LEN_SPAN_REF];
         const span = matchSpan(spans, sid) orelse continue; // BE-EVID-08: cited but not inline (counted as cited)
         rec.inline_spans += 1;
 

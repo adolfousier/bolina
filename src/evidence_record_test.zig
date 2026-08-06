@@ -31,7 +31,7 @@ test "BE_EVID_16 resolution record counts every cited span" {
     // silently dropped. BE-EVID-08 exists so an absent span is attributable to
     // the sender; the record now carries that attribution.
     const sid_orphan = H.idOf(0x21);
-    _ = try parser.parseSpan(try H.spanWire(a, sid_orphan, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
+    _ = try parser.channel.parseSpan(try H.spanWire(a, sid_orphan, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
     const claim_o = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{sid_orphan});
     const r2 = evidence.resolveClaim(claim_o, &.{}, H.ctx(&H.roleExecutor, &H.originEffect, &H.neverSuperseded), &H.ENV);
     try H.expectState(r2, .unsupported);
@@ -41,8 +41,8 @@ test "BE_EVID_16 resolution record counts every cited span" {
     // F3: a span whose origin resolves to a non-Effect body is COUNTED
     // (non_effect=1). A sender citing garbage no longer vanishes with no trace.
     const sid_ne = H.idOf(0x22);
-    const span_ne = try parser.parseSpan(try H.spanWire(a, sid_ne, H.idOf(0x32), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
-    const spans_ne: []const parser.Span = &.{span_ne};
+    const span_ne = try parser.channel.parseSpan(try H.spanWire(a, sid_ne, H.idOf(0x32), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
+    const spans_ne: []const parser.channel.Span = &.{span_ne};
     const claim_ne = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{sid_ne});
     const r3 = evidence.resolveClaim(claim_ne, spans_ne, H.ctx(&H.roleExecutor, &H.originNonEffect, &H.neverSuperseded), &H.ENV);
     try H.expectState(r3, .unsupported);
@@ -58,9 +58,9 @@ test "BE_EVID_16 resolution record counts every cited span" {
     const sid_pending = H.idOf(0x24);
     const origin_resolved = H.seedFrom(0xa1);
     const origin_pending = H.seedFrom(0xa2);
-    const span_r = try parser.parseSpan(try H.spanWire(a, sid_resolved, H.idOf(0x33), H.SUBJECT, 7, 1, origin_resolved, kp));
-    const span_p = try parser.parseSpan(try H.spanWire(a, sid_pending, H.idOf(0x34), H.SUBJECT, 1, 1, origin_pending, kp));
-    const spans_mp: []const parser.Span = &.{ span_r, span_p };
+    const span_r = try parser.channel.parseSpan(try H.spanWire(a, sid_resolved, H.idOf(0x33), H.SUBJECT, 7, 1, origin_resolved, kp));
+    const span_p = try parser.channel.parseSpan(try H.spanWire(a, sid_pending, H.idOf(0x34), H.SUBJECT, 1, 1, origin_pending, kp));
+    const spans_mp: []const parser.channel.Span = &.{ span_r, span_p };
     const claim_mp = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{ sid_resolved, sid_pending });
     const r1 = evidence.resolveClaim(claim_mp, spans_mp, H.ctx(&H.roleExecutor, &H.origin09a, &H.neverSuperseded), &H.ENV);
     try H.expectSupported(r1, 216);

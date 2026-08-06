@@ -96,7 +96,7 @@ fn ledgerCounting(grant_id: []const u8) bool {
 var effect_calls: usize = 0;
 var effect_grant_id: []const u8 = &[_]u8{};
 
-fn recordEffect(grant: parser.Grant) void {
+fn recordEffect(grant: parser.channel.Grant) void {
     effect_calls += 1;
     effect_grant_id = grant.grant_id;
 }
@@ -110,7 +110,7 @@ fn resetEffect() void {
 // approver (BE-GRANT-03 check 1). The canonical vector is the bare grant, so
 // the tests synthesize that envelope around it; verifyGrantThen only reads
 // body_type and sender from it.
-fn grantEnvelope(grant: parser.Grant) parser.Envelope {
+fn grantEnvelope(grant: parser.channel.Grant) parser.channel.Envelope {
     return .{
         .version = 2,
         .channel_id = &[_]u8{},
@@ -119,7 +119,7 @@ fn grantEnvelope(grant: parser.Grant) parser.Envelope {
         .parent_count = 0,
         .parents = &[_]u8{},
         .ts = 0,
-        .body_type = parser.BODY_GRANT,
+        .body_type = parser.channel.BODY_GRANT,
         .body = &[_]u8{},
         .tbs = &[_]u8{},
         .sig = &[_]u8{},
@@ -140,20 +140,20 @@ fn baseContext(action: []const u8, hook: *const fn ([]const u8) bool) verify.Gra
 
 test "BE_ENV_02 envelope sig verifies against sender before body" {
     const env_bytes = decodeHex(ENVELOPE_HEX);
-    const env = try parser.parseEnvelope(&env_bytes);
+    const env = try parser.channel.parseEnvelope(&env_bytes);
     try verify.verifyEnvelope(env);
 }
 
 test "BE_ENV_02 corrupted envelope sig is discarded" {
     var env_bytes = decodeHex(ENVELOPE_HEX);
     env_bytes[220] ^= 0xff; // flip one byte inside the 64-byte sig (216..280)
-    const env = try parser.parseEnvelope(&env_bytes);
+    const env = try parser.channel.parseEnvelope(&env_bytes);
     try std.testing.expectError(error.BadSignature, verify.verifyEnvelope(env));
 }
 
 test "BE_GRANT_03 canonical grant verifies end to end" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
     resetEffect();
@@ -166,7 +166,7 @@ test "BE_GRANT_03 canonical grant verifies end to end" {
 test "BE_GRANT_03 version other than 2 refused first" {
     var grant_bytes = decodeHex(GRANT_HEX);
     grant_bytes[0] = 3; // version field; flipping it also breaks the sig, but
-    const grant = try parser.parseGrant(&grant_bytes); // check 0 runs before check 2
+    const grant = try parser.channel.parseGrant(&grant_bytes); // check 0 runs before check 2
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
     resetEffect();
@@ -177,9 +177,9 @@ test "BE_GRANT_03 version other than 2 refused first" {
 
 test "BE_GRANT_03 grant not delivered as body_type 3 envelope refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     var env = grantEnvelope(grant);
-    env.body_type = parser.BODY_INTENT; // wrong delivery path
+    env.body_type = parser.channel.BODY_INTENT; // wrong delivery path
     const ctx = baseContext(ACTION, &ledgerFresh);
     resetEffect();
     try std.testing.expectError(error.BadEnvelopeBinding, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
@@ -188,7 +188,7 @@ test "BE_GRANT_03 grant not delivered as body_type 3 envelope refused" {
 
 test "BE_GRANT_03 envelope sender not the approver refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     var env = grantEnvelope(grant);
     env.sender = grant.subject; // delivered by the agent, not the approver
     const ctx = baseContext(ACTION, &ledgerFresh);
@@ -200,7 +200,7 @@ test "BE_GRANT_03 envelope sender not the approver refused" {
 test "BE_GRANT_03 corrupted grant sig is refused" {
     var grant_bytes = decodeHex(GRANT_HEX);
     grant_bytes[210] ^= 0xff; // inside the 64-byte sig (207..271)
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
     resetEffect();
@@ -210,7 +210,7 @@ test "BE_GRANT_03 corrupted grant sig is refused" {
 
 test "BE_GRANT_03 executor mismatch refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.own_pubkey = grant.subject; // this executor is not the named one
@@ -221,7 +221,7 @@ test "BE_GRANT_03 executor mismatch refused" {
 
 test "BE_GRANT_02 action digest must match byte for byte" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     // Approving "apt-get install -y sqlite3" does not approve a different
     // command: the recomputed digest over other bytes must not match.
@@ -233,7 +233,7 @@ test "BE_GRANT_02 action digest must match byte for byte" {
 
 test "BE_GRANT_05 not_after in the past is refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.now_ms = grant.not_after + 1; // clock is past the expiry
@@ -247,7 +247,7 @@ test "BE_GRANT_05 not_after in the past is refused" {
 
 test "BE_GRANT_05 not_after beyond T_max from receipt is refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     // First receipt far enough back that not_after exceeds receipt + T_max.
@@ -259,7 +259,7 @@ test "BE_GRANT_05 not_after beyond T_max from receipt is refused" {
 
 test "BE_GRANT_05 more than T_recv since first receipt is refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.now_ms = FIRST_RECEIPT_MS + (T_RECV_S * 1000) + 1;
@@ -273,7 +273,7 @@ test "BE_GRANT_05 more than T_recv since first receipt is refused" {
 // last millisecond before it is the final valid moment.
 test "BE_GRANT_05 not_after exact instant is refused (boundary deny)" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.now_ms = grant.not_after; // equal, not strictly past
@@ -284,7 +284,7 @@ test "BE_GRANT_05 not_after exact instant is refused (boundary deny)" {
 
 test "BE_GRANT_05 not_after minus 1ms is accepted (boundary deny)" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.now_ms = grant.not_after - 1; // the last valid millisecond
@@ -301,7 +301,7 @@ test "BE_GRANT_05 not_after minus 1ms is accepted (boundary deny)" {
 // harness (tools/mutation-test.py): a >= mutant would refuse at equality.
 test "BE_GRANT_05 not_after exactly T_max from receipt is accepted (boundary)" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     // not_after sits exactly first_receipt + T_max. "More than T_max" is the
@@ -316,7 +316,7 @@ test "BE_GRANT_05 not_after exactly T_max from receipt is accepted (boundary)" {
 
 test "BE_GRANT_05 now exactly T_recv since receipt is accepted (boundary)" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     // now sits exactly first_receipt + T_recv. "More than T_recv" is the refuse
@@ -331,7 +331,7 @@ test "BE_GRANT_05 now exactly T_recv since receipt is accepted (boundary)" {
 
 test "BE_GRANT_01 already-consumed grant_id refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerSpent);
     resetEffect();
@@ -345,7 +345,7 @@ test "BE_GRANT_01 already-consumed grant_id refused" {
 test "BE_GRANT_01 ledger hook runs last, after expiry" {
     ledger_calls = 0;
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     // Make expiry fail (check 10). The ledger (check 11) must not be
     // reached, proving the I/O step is ordered after every compute check.
@@ -373,7 +373,7 @@ test "BE_GRANT_01 ledger hook runs last, after expiry" {
 // effect at all.
 test "BE_GRANT_03b valid grant runs the effect exactly once with matching fields" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
     resetEffect();

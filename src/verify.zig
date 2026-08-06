@@ -66,10 +66,10 @@ pub const VerifyError = error{
 
 pub fn verifySigned(tag: u8, tbs: []const u8, sig: []const u8, pubkey: []const u8) VerifyError!void {
     if (pubkey.len != parser.LEN_PUBKEY) return error.MalformedKey;
-    if (sig.len != parser.LEN_SIG) return error.BadSignature;
+    if (sig.len != parser.channel.LEN_SIG) return error.BadSignature;
 
     const pk = Ed.PublicKey.fromBytes(pubkey[0..parser.LEN_PUBKEY].*) catch return error.MalformedKey;
-    const signature = Ed.Signature.fromBytes(sig[0..parser.LEN_SIG].*);
+    const signature = Ed.Signature.fromBytes(sig[0..parser.channel.LEN_SIG].*);
     // A non-canonical R or an identity element in the signature is a bad sig.
     var v = signature.verifier(pk) catch return error.BadSignature;
 
@@ -83,16 +83,16 @@ pub fn verifySigned(tag: u8, tbs: []const u8, sig: []const u8, pubkey: []const u
 // Envelope signature (BE-ENV-02).
 // ---------------------------------------------------------------------------
 
-pub fn verifyEnvelope(env: parser.Envelope) VerifyError!void {
-    try verifySigned(parser.DOMAIN_ENVELOPE, env.tbs, env.sig, env.sender);
+pub fn verifyEnvelope(env: parser.channel.Envelope) VerifyError!void {
+    try verifySigned(parser.channel.DOMAIN_ENVELOPE, env.tbs, env.sig, env.sender);
 }
 
 // ---------------------------------------------------------------------------
 // BE-GRANT-02 helper: recompute the binding digest over the intent's action.
 // ---------------------------------------------------------------------------
 
-pub fn actionDigest(action: []const u8) [parser.LEN_ACTION_DIGEST]u8 {
-    var out: [parser.LEN_ACTION_DIGEST]u8 = undefined;
+pub fn actionDigest(action: []const u8) [parser.channel.LEN_ACTION_DIGEST]u8 {
+    var out: [parser.channel.LEN_ACTION_DIGEST]u8 = undefined;
     B2s.hash(action, &out, .{});
     return out;
 }
@@ -160,17 +160,17 @@ pub const GrantContext = struct {
 // retry (Daniel, round 4).
 // ---------------------------------------------------------------------------
 
-pub fn verifyGrantThen(env: parser.Envelope, grant_ptr: *const parser.Grant, ctx: GrantContext, execute: *const fn (parser.Grant) void) VerifyError!void {
+pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.channel.Grant, ctx: GrantContext, execute: *const fn (parser.channel.Grant) void) VerifyError!void {
     const grant = grant_ptr.*;
     // 0. Grant.version must be 2 (RED-TEAM-08 F6: the field is read, not ignored).
     if (grant.version != 2) return error.BadVersion;
 
     // 1. The grant arrived as a body_type=3 envelope whose sender is the approver.
-    if (env.body_type != parser.BODY_GRANT) return error.BadEnvelopeBinding;
+    if (env.body_type != parser.channel.BODY_GRANT) return error.BadEnvelopeBinding;
     if (!std.mem.eql(u8, env.sender, grant.approver)) return error.BadEnvelopeBinding;
 
     // 2. Grant.sig verifies against Grant.approver (domain tag 0x04).
-    try verifySigned(parser.DOMAIN_GRANT, grant.tbs, grant.sig, grant.approver);
+    try verifySigned(parser.channel.DOMAIN_GRANT, grant.tbs, grant.sig, grant.approver);
 
     // 3 and 4 (approver/subject certificate validity) and 6, 7, 8 (subject,
     // intent_id and resource_id matching against the pending intent) require a

@@ -29,8 +29,8 @@ test "BE_EVID_01 span supports only with verifying sig and executor role" {
     const sid = H.idOf(0x21);
 
     const w = try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp);
-    const span = try parser.parseSpan(w);
-    const spans: []const parser.Span = &.{span};
+    const span = try parser.channel.parseSpan(w);
+    const spans: []const parser.channel.Span = &.{span};
 
     // valid sig + executor role -> supported at the DirectObservation ceiling.
     var claim = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{sid});
@@ -43,8 +43,8 @@ test "BE_EVID_01 span supports only with verifying sig and executor role" {
     // sig no longer verifies against executor, so the span counts for nothing.
     const w_bad = try a.dupe(u8, w);
     w_bad[w_bad.len - 1] ^= 0xff;
-    const span_bad = try parser.parseSpan(w_bad);
-    const spans_bad: []const parser.Span = &.{span_bad};
+    const span_bad = try parser.channel.parseSpan(w_bad);
+    const spans_bad: []const parser.channel.Span = &.{span_bad};
     claim = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{sid});
     try H.expectState(
         evidence.resolveClaim(claim, spans_bad, H.ctx(&H.roleExecutor, &H.originEffect, &H.neverSuperseded), &H.ENV),
@@ -74,8 +74,8 @@ test "BE_EVID_02 receiver recomputes min of stated and strongest ceiling" {
     const a = arena.allocator();
     const kp = H.executorKeypair();
     const sid = H.idOf(0x21);
-    const span = try parser.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
-    const spans: []const parser.Span = &.{span};
+    const span = try parser.channel.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
+    const spans: []const parser.channel.Span = &.{span};
 
     // method_id 1 -> DirectObservation ceiling 242. Stated 200 -> effective 200.
     var claim = try H.buildClaim(a, "deploy ok", H.SUBJECT, 200, &.{sid});
@@ -113,8 +113,8 @@ test "BE_EVID_02a no matching span is zero not a floor" {
     // A claim that cites a span about a different subject (BE-EVID-03 fail) has
     // no matching support, so it is 0.00 with the marker, never the Inference
     // floor.
-    const span = try parser.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), "bol:other/res", 1, 1, H.seedFrom(0xa1), kp));
-    const spans: []const parser.Span = &.{span};
+    const span = try parser.channel.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), "bol:other/res", 1, 1, H.seedFrom(0xa1), kp));
+    const spans: []const parser.channel.Span = &.{span};
     claim = try H.buildClaim(a, "hunch", H.SUBJECT, 242, &.{sid});
     try H.expectState(
         evidence.resolveClaim(claim, spans, H.ctx(&H.roleExecutor, &H.originEffect, &H.neverSuperseded), &H.ENV),
@@ -133,8 +133,8 @@ test "BE_EVID_02b unresolved origin is indeterminate not zero" {
     const a = arena.allocator();
     const kp = H.executorKeypair();
     const sid = H.idOf(0x21);
-    const span = try parser.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
-    const spans: []const parser.Span = &.{span};
+    const span = try parser.channel.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
+    const spans: []const parser.channel.Span = &.{span};
     const claim = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{sid});
     try H.expectState(
         evidence.resolveClaim(claim, spans, H.ctx(&H.roleExecutor, &H.originAbsent, &H.neverSuperseded), &H.ENV),
@@ -154,8 +154,8 @@ test "BE_EVID_03 span supports only when resource equals subject" {
     const sid = H.idOf(0x21);
 
     // resource_id == subject -> supported.
-    const span = try parser.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
-    const spans: []const parser.Span = &.{span};
+    const span = try parser.channel.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
+    const spans: []const parser.channel.Span = &.{span};
     var claim = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{sid});
     try H.expectSupported(
         evidence.resolveClaim(claim, spans, H.ctx(&H.roleExecutor, &H.originEffect, &H.neverSuperseded), &H.ENV),
@@ -164,8 +164,8 @@ test "BE_EVID_03 span supports only when resource equals subject" {
 
     // resource_id != subject -> the span does not raise the ceiling; with no
     // other support the claim is unsupported.
-    const span_other = try parser.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), "bol:other/res", 1, 1, H.seedFrom(0xa1), kp));
-    const spans_other: []const parser.Span = &.{span_other};
+    const span_other = try parser.channel.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), "bol:other/res", 1, 1, H.seedFrom(0xa1), kp));
+    const spans_other: []const parser.channel.Span = &.{span_other};
     claim = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{sid});
     try H.expectState(
         evidence.resolveClaim(claim, spans_other, H.ctx(&H.roleExecutor, &H.originEffect, &H.neverSuperseded), &H.ENV),
@@ -201,8 +201,8 @@ test "BE_EVID_05 superseded volatile span stops supporting" {
     const sid = H.idOf(0x21);
 
     // volatile (1), not superseded -> supported.
-    const span = try parser.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
-    const spans: []const parser.Span = &.{span};
+    const span = try parser.channel.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
+    const spans: []const parser.channel.Span = &.{span};
     var claim = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{sid});
     try H.expectSupported(
         evidence.resolveClaim(claim, spans, H.ctx(&H.roleExecutor, &H.originEffect, &H.neverSuperseded), &H.ENV),
@@ -234,8 +234,8 @@ test "BE_EVID_06 unrecognized volatility is volatile" {
     const sid = H.idOf(0x21);
     // volatility 99 (unrecognized) degrades to volatile, so a superseding
     // Effect removes the support.
-    const span = try parser.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 99, H.seedFrom(0xa1), kp));
-    const spans: []const parser.Span = &.{span};
+    const span = try parser.channel.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 99, H.seedFrom(0xa1), kp));
+    const spans: []const parser.channel.Span = &.{span};
     const claim = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{sid});
     try H.expectState(
         evidence.resolveClaim(claim, spans, H.ctx(&H.roleExecutor, &H.originEffect, &H.alwaysSuperseded), &H.ENV),
@@ -256,8 +256,8 @@ test "BE_EVID_07 stable span is never superseded" {
     const sid = H.idOf(0x21);
     // stable (2) span; the hook claims everything is superseded, but a stable
     // span stays valid indefinitely, so it still supports.
-    const span = try parser.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 2, 2, H.seedFrom(0xa1), kp));
-    const spans: []const parser.Span = &.{span};
+    const span = try parser.channel.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 2, 2, H.seedFrom(0xa1), kp));
+    const spans: []const parser.channel.Span = &.{span};
     const claim = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{sid});
     try H.expectSupported(
         evidence.resolveClaim(claim, spans, H.ctx(&H.roleExecutor, &H.originEffect, &H.alwaysSuperseded), &H.ENV),
@@ -278,7 +278,7 @@ test "BE_EVID_08 referenced span not carried inline supports nothing" {
     const sid = H.idOf(0x21);
     // Build the span so the bytes are well-formed, but hand resolveClaim an
     // empty span set: the cited span_id is not inline, so it cannot support.
-    _ = try parser.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
+    _ = try parser.channel.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
     const claim = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{sid});
     try H.expectState(
         evidence.resolveClaim(claim, &.{}, H.ctx(&H.roleExecutor, &H.originEffect, &H.neverSuperseded), &H.ENV),
@@ -296,8 +296,8 @@ test "BE_EVID_09 three states supported unresolved unsupported" {
     const a = arena.allocator();
     const kp = H.executorKeypair();
     const sid = H.idOf(0x21);
-    const span = try parser.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
-    const spans: []const parser.Span = &.{span};
+    const span = try parser.channel.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
+    const spans: []const parser.channel.Span = &.{span};
     var claim = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{sid});
 
     // Supported: resolved, non-superseded support.
@@ -337,9 +337,9 @@ test "BE_EVID_09a mixed resolution composes per span" {
     const origin_resolved = H.seedFrom(0xa1);
     const origin_pending = H.seedFrom(0xa2);
 
-    const span1 = try parser.parseSpan(try H.spanWire(a, sid_resolved, H.idOf(0x31), H.SUBJECT, 7, 1, origin_resolved, kp));
-    const span2 = try parser.parseSpan(try H.spanWire(a, sid_pending, H.idOf(0x32), H.SUBJECT, 1, 1, origin_pending, kp));
-    const spans: []const parser.Span = &.{ span1, span2 };
+    const span1 = try parser.channel.parseSpan(try H.spanWire(a, sid_resolved, H.idOf(0x31), H.SUBJECT, 7, 1, origin_resolved, kp));
+    const span2 = try parser.channel.parseSpan(try H.spanWire(a, sid_pending, H.idOf(0x32), H.SUBJECT, 1, 1, origin_pending, kp));
+    const spans: []const parser.channel.Span = &.{ span1, span2 };
 
     // The resolved span supports at 216; the pending one contributes nothing,
     // so the claim is Supported (NOT demoted to Unresolved).
@@ -370,8 +370,8 @@ test "BE_EVID_09b origin not resolving to an effect cannot support" {
     const sid = H.idOf(0x21);
 
     // Sole span, origin resolves to a non-Effect -> unsupported (not unresolved).
-    const span = try parser.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
-    const spans: []const parser.Span = &.{span};
+    const span = try parser.channel.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 1, 1, H.seedFrom(0xa1), kp));
+    const spans: []const parser.channel.Span = &.{span};
     var claim = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{sid});
     try H.expectState(
         evidence.resolveClaim(claim, spans, H.ctx(&H.roleExecutor, &H.originNonEffect, &H.neverSuperseded), &H.ENV),
@@ -382,8 +382,8 @@ test "BE_EVID_09b origin not resolving to an effect cannot support" {
     // (drops out). The claim is Supported at the Effect span's ceiling; the
     // non-Effect span contributes nothing and does not demote.
     const sid_eff = H.idOf(0x22);
-    const span_eff = try parser.parseSpan(try H.spanWire(a, sid_eff, H.idOf(0x33), H.SUBJECT, 1, 1, H.seedFrom(0xa3), kp));
-    const spans_mixed: []const parser.Span = &.{ span, span_eff };
+    const span_eff = try parser.channel.parseSpan(try H.spanWire(a, sid_eff, H.idOf(0x33), H.SUBJECT, 1, 1, H.seedFrom(0xa3), kp));
+    const spans_mixed: []const parser.channel.Span = &.{ span, span_eff };
     claim = try H.buildClaim(a, "deploy ok", H.SUBJECT, 242, &.{ sid, sid_eff });
     try H.expectSupported(
         evidence.resolveClaim(claim, spans_mixed, H.ctx(&H.roleExecutor, &H.origin09b, &H.neverSuperseded), &H.ENV),
@@ -422,8 +422,8 @@ test "BE_EVID_13 unknown method id falls to the inference floor" {
     const sid = H.idOf(0x21);
     // method_id 200 is outside the table -> Inference ceiling 165. Stated 255
     // is capped to 165.
-    const span = try parser.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 200, 1, H.seedFrom(0xa1), kp));
-    const spans: []const parser.Span = &.{span};
+    const span = try parser.channel.parseSpan(try H.spanWire(a, sid, H.idOf(0x31), H.SUBJECT, 200, 1, H.seedFrom(0xa1), kp));
+    const spans: []const parser.channel.Span = &.{span};
     const claim = try H.buildClaim(a, "guess", H.SUBJECT, 255, &.{sid});
     try H.expectSupported(
         evidence.resolveClaim(claim, spans, H.ctx(&H.roleExecutor, &H.originEffect, &H.neverSuperseded), &H.ENV),

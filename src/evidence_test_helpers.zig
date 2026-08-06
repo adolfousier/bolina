@@ -93,14 +93,14 @@ pub fn spanWire(
     // Ed25519 over (DOMAIN_SPAN || tbs), matching signTagged (gen-vectors)
     // and the streaming verifier in verify.zig.
     var msg: [1 + 400]u8 = undefined;
-    msg[0] = parser.DOMAIN_SPAN;
+    msg[0] = parser.channel.DOMAIN_SPAN;
     @memcpy(msg[1..][0..n], tbs[0..n]);
     const sig = try Ed.KeyPair.sign(kp, msg[0 .. 1 + n], null);
     const sig_bytes = Ed.Signature.toBytes(sig);
 
-    const wire = try a.alloc(u8, n + parser.LEN_SIG);
+    const wire = try a.alloc(u8, n + parser.channel.LEN_SIG);
     @memcpy(wire[0..n], tbs[0..n]);
-    @memcpy(wire[n..][0..parser.LEN_SIG], &sig_bytes);
+    @memcpy(wire[n..][0..parser.channel.LEN_SIG], &sig_bytes);
     return wire;
 }
 
@@ -110,9 +110,9 @@ pub fn buildClaim(
     subject: []const u8,
     confidence_q8: u8,
     span_ids: []const [16]u8,
-) !parser.Claim {
-    const ids = try a.alloc(u8, span_ids.len * parser.LEN_SPAN_REF);
-    for (span_ids, 0..) |id, i| @memcpy(ids[i * parser.LEN_SPAN_REF ..][0..parser.LEN_SPAN_REF], &id);
+) !parser.channel.Claim {
+    const ids = try a.alloc(u8, span_ids.len * parser.channel.LEN_SPAN_REF);
+    for (span_ids, 0..) |id, i| @memcpy(ids[i * parser.channel.LEN_SPAN_REF ..][0..parser.channel.LEN_SPAN_REF], &id);
     return .{
         .text = text,
         .subject = subject,

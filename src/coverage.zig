@@ -31,7 +31,7 @@ const parser = @import("parser.zig");
 
 pub const ENABLED: bool = opts.coverage_enabled;
 
-// One member per exit point in parser.zig: the shared truncation rejection,
+// One member per exit point in the parser module: the shared truncation rejection,
 // every other rejection site, and every accepted return. Reach is "hit at
 // least once".
 pub const Branch = enum {

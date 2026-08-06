@@ -66,7 +66,7 @@ source.
 - M5 reads the parser module's line count from the source tree.
 - M8 derives the pointer-minting builtin set `{@ptrCast, @ptrFromInt}` from the Zig language
   reference; round 4 deleted the capability value, so the count it gates is zero.
-- M9 counts exit-point call sites from `src/parser.zig` and matches them against the `Branch`
+- M9 counts exit-point call sites from the parser module (`src/parser.zig` and `src/parser/`) and matches them against the `Branch`
   enum one for one.
 
 A literal number in a gate is a smell. If one is unavoidable, it must cite the external source
