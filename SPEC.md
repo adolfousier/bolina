@@ -361,7 +361,7 @@ Sessions use **`Noise_IK_25519_ChaChaPoly_BLAKE2s`** over UDP: the initiator kno
 static X25519 key (from its certificate), the handshake completes in one round trip, and the
 initiator's static key is encrypted to the responder rather than sent in clear. This is the
 WireGuard construction, chosen because it is small enough to implement correctly without a library
-and has had a decade of public analysis.
+and has had a decade of public analysis. The byte-level wire formats are pinned in §4.1a; the construction is adopted, but integers and timestamps serialize per §2.2 and the AEAD per §2.1, so a Bolina packet is not byte-compatible with a WireGuard packet.
 
 The Noise handshake authenticates *X25519 static keys*. Certificates bind an Ed25519 identity key.
 Binding the two:
@@ -371,6 +371,83 @@ session, its certificate together with an Ed25519 signature by `sig_pubkey` over
 handshake hash `h`. A session MUST NOT deliver application data upward until the peer's certificate
 has passed BE-ID-01/02/03 **and** that signature verifies against `h`. An unbound session is a
 session with an authenticated key and an unknown owner, and is useless.
+
+### 4.1a Transport wire formats
+
+The four transport messages follow the WireGuard construction: a one-byte type discriminator, three
+reserved zero bytes, session indices, and, on the two handshake messages, the `mac1`/`mac2` proofs of
+§4.4. Three serialization details are Bolina's own and make a Bolina packet **not byte-compatible**
+with a WireGuard packet: integers are big-endian per §2.2 (WireGuard is little-endian); the initiation
+timestamp is a `u64` Unix-epoch-millisecond value per §2.2 (WireGuard uses a 12-byte TAI64N timestamp);
+and the cookie reply is sealed with ChaCha20-Poly1305 per §2.1 (WireGuard uses XChaCha20-Poly1305,
+which is not a §2.1 primitive). The Noise_IK handshake, the `mac1`/`mac2` DoS design, the field order,
+and the field sizes are otherwise WireGuard's. All four messages fit the 1400-byte transport packet
+limit (§4.4).
+
+The first byte of every message is its type:
+
+| Type | Message | Size |
+|---|---|---|
+| 1 | Handshake initiation | 144 |
+| 2 | Handshake response | 92 |
+| 3 | Cookie reply | 52 |
+| 4 | Transport data | 16-byte header + `len(plaintext) + 16` |
+
+Bytes 1-3 are reserved and MUST be zero; non-zero reserved bytes are a parse failure (§2.2 admits no
+extension mechanism in v0.2). All integers in the tables below are big-endian.
+
+**Handshake initiation (type 1, 144 bytes):**
+
+| Offset | Field | Size | Notes |
+|---|---|---|---|
+| 0 | `message_type` | 1 | = 1 |
+| 1 | `reserved` | 3 | zero |
+| 4 | `sender_index` | 4 | `u32`, initiator-chosen session index |
+| 8 | `unencrypted_ephemeral` | 32 | X25519 ephemeral public key |
+| 40 | `encrypted_static` | 48 | initiator static X25519 public key, ChaCha20-Poly1305 sealed (32 + 16 tag) |
+| 88 | `encrypted_timestamp` | 24 | `u64` millisecond timestamp, ChaCha20-Poly1305 sealed (8 + 16 tag); WG anti-replay role |
+| 112 | `mac1` | 16 | keyed-BLAKE2s, §4.4 |
+| 128 | `mac2` | 16 | keyed-BLAKE2s cookie MAC, §4.4 |
+
+**Handshake response (type 2, 92 bytes):**
+
+| Offset | Field | Size | Notes |
+|---|---|---|---|
+| 0 | `message_type` | 1 | = 2 |
+| 1 | `reserved` | 3 | zero |
+| 4 | `sender_index` | 4 | `u32`, responder-chosen session index |
+| 8 | `receiver_index` | 4 | `u32`, echoes the initiation `sender_index` |
+| 12 | `unencrypted_ephemeral` | 32 | X25519 ephemeral public key |
+| 44 | `encrypted_nothing` | 16 | empty payload, ChaCha20-Poly1305 sealed (0 + 16 tag) |
+| 60 | `mac1` | 16 | keyed-BLAKE2s, §4.4 |
+| 76 | `mac2` | 16 | keyed-BLAKE2s cookie MAC, §4.4 |
+
+The response is smaller than the initiation, preventing amplification.
+
+**Cookie reply (type 3, 52 bytes):**
+
+| Offset | Field | Size | Notes |
+|---|---|---|---|
+| 0 | `message_type` | 1 | = 3 |
+| 1 | `reserved` | 3 | zero |
+| 4 | `receiver_index` | 4 | `u32`, echoes the `sender_index` of the triggering message |
+| 8 | `nonce` | 12 | ChaCha20-Poly1305 nonce (§2.1); WG uses a 24-byte XChaCha20-Poly1305 nonce |
+| 20 | `encrypted_cookie` | 32 | 16-byte cookie (`mac1`-bound, §4.4) + 16 tag |
+
+**Transport data (type 4, 16-byte header):**
+
+| Offset | Field | Size | Notes |
+|---|---|---|---|
+| 0 | `message_type` | 1 | = 4 |
+| 1 | `reserved` | 3 | zero |
+| 4 | `receiver_index` | 4 | `u32`, the peer's session index |
+| 8 | `counter` | 8 | `u64` session-key counter, AEAD nonce variable part (BE-TR-02, §4.3) |
+| 16 | `encrypted_payload` | varies | plaintext + 16-byte Poly1305 tag |
+
+The transport AEAD nonce is the 12-byte value `[0x00 x 4] || counter`: four leading zero bytes and
+the big-endian `u64` counter, so a fresh counter yields a fresh nonce within the 2⁴⁸ rekey bound
+(BE-TR-02). The 16-byte header lets an implementation decrypt in place. An empty payload (16-byte
+header + 16-byte tag = 32 bytes) is a keepalive.
 
 ### 4.2 Session lifetime
 

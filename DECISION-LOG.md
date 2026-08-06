@@ -292,3 +292,50 @@ exists because the budget exists; without BE-SURF-03 there would be nothing to p
 This is a module-boundary decision. It alters no wire format and no declared guarantee. What
 would reopen it: any transport code that reads network bytes outside the parser module is a
 violation of this decision and of BE-SURF-01, and stops work.
+
+## D-019 — 2026-08-06 — Pinning §4.1a transport wire formats: the WireGuard construction serialized under §2.1/§2.2
+
+Question: §4.1 declares Noise_IK_25519_ChaChaPoly_BLAKE2s "the WireGuard construction" and §4.4
+mac1/mac2 "WireGuard's design, adopted unchanged," but gives no byte-level layouts. Pin the four
+message layouts (initiation, response, cookie reply, transport header) and resolve where literal
+WireGuard bytes collide with Bolina's own invariants.
+
+Decision: pin the four layouts as new SPEC §4.1a. The field order and field set are WireGuard's;
+three serialization details are Bolina's and make a Bolina packet not byte-compatible with a
+WireGuard packet. (1) Integers are big-endian per §2.2 (WireGuard is little-endian), applying to
+sender_index, receiver_index, and counter. (2) The initiation timestamp is a u64 Unix-epoch-
+millisecond value per §2.2 "everywhere, without exception" (WireGuard uses a 12-byte TAI64N
+timestamp), so initiation is 144 bytes, not WG's 148. (3) The cookie reply uses ChaCha20-Poly1305
+per §2.1 (WireGuard uses XChaCha20-Poly1305, not a §2.1 primitive), so the cookie reply is 52 bytes
+with a 12-byte nonce, not WG's 64 bytes / 24-byte nonce. Resulting sizes: initiation 144, response
+92, cookie reply 52, transport header 16 (plus plaintext plus 16-byte tag). Reserved bytes 1-3 must
+be zero; non-zero is a parse failure (§2.2 has no v0.2 extension mechanism). Transport AEAD nonce is
+the 12-byte value [0x00 x4] || counter.
+
+Reasoning: each of the three deviations is the only spec-compliant value, not a discretionary
+choice. §2.1 forbids primitives outside its table, forcing ChaCha20-Poly1305 for the cookie; §2.2
+mandates big-endian and u64-ms timestamps "without exception," forcing BE integers and a u64
+timestamp. §0.2 confirms Bolina makes no WireGuard byte-interoperability claim ("not new
+cryptography ... four primitives"), so "adopt the construction" means the Noise_IK handshake plus
+the mac1/mac2 DoS design plus the four-message structure, serialized under Bolina's rules. The
+handshake, the mac1/mac2 design, the field order, and the field set are unchanged; only the
+serialization obeys the invariants. No NEW field is added relative to WireGuard, which answers
+D-017's reopen condition (fields beyond the WG shape): this pin adds none, it only resizes two
+fields per §2.1/§2.2.
+
+Pre-close checks: (1) read against other sections — §2.1 (primitives) and §2.2 (big-endian, u64-ms,
+no extension) are honored, not weakened; §0.2 has no WG-interop claim to break; §4.4 BE-TR-04/04a
+(mac1/mac2) unchanged and cross-referenced; BE-TR-02 bounds the counter at 2⁴⁸, so the
+[0x00 x4] || counter nonce stays unique within the rekey bound; (2) who picked the denominator —
+none chosen; message sizes derive from field sizes, which §2.1/§2.2 force; (3) does the thing need
+to exist — the wire formats ARE the subject of §4 transport; pinning them is the spec completion the
+D-017 estimate assumed.
+
+Relation to D-017: the size deviations (144 vs 148, 52 vs 64) do not change the parser-line
+estimate, which counts fields-to-parse, not bytes; D-017 stands.
+
+This is a spec-completion decision. It alters no declared BE-* guarantee and adds no field beyond
+the WireGuard shape. It is reversible (spec text). What would reopen it: adding fields beyond the
+four WG messages; making Bolina byte-compatible with WireGuard (which would need little-endian
+integers and XChaCha20-Poly1305, both breaking §2.1/§2.2); or dropping the initiation timestamp (an
+anti-replay mechanism, guarantee-adjacent).
