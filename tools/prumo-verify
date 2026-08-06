@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # prumo-verify: Bolina mechanical gates (CONTRIBUTING.md section 2)
 #
-# Prints ALL EIGHT gates on every run. M2/M3/M4 are printed but explicitly
+# Prints ALL NINE gates on every run. M2/M3/M4 are printed but explicitly
 # marked "not yet enforced: no code to check" until the code they target
 # exists. The gap is made visible instead of absent: CONTRIBUTING.md claims
 # seven gates, so seven rows appear even when four have nothing to check.
@@ -41,8 +41,16 @@
 #        so it never happens.
 #   M7: build.zig hardcodes ReleaseSafe and exposes no optimize option
 #        (LANGUAGE.md O1). Compiler version and flags are recorded above.
+#   M9: coverage denominator law: every error exit of src/parser.zig routes
+#        through coverage.reject(), every accepted return through
+#        coverage.accept() (both wrappers in src/coverage.zig); zero raw
+#        error returns remain, no exceptions. The exit-point denominator is
+#        counted from parser.zig wrapper call sites at run time, and the
+#        Branch enum in coverage.zig must match the source one for one: a
+#        new exit fails the gate until the enum grows, a dead enum member
+#        fails it the other way (CONTRIBUTING.md M9).
 #
-# Exit code: number of failing ENFORCED gates (M1, M3, M5, M6, M7, M8).
+# Exit code: number of failing ENFORCED gates (M1, M3, M5, M6, M7, M8, M9).
 # Usage: run from anywhere; ZIG=/path/to/zig overrides PATH lookup.
 
 set -u
@@ -214,41 +222,114 @@ else
     FAILS=$((FAILS + 1))
 fi
 
-# ---- M8: capability forgery wall, @ptrCast confined to verify.zig + negative compile canary ----
-# VerifiedGrant is an opaque type; the only construction path is @ptrCast, so every
-# code-only @ptrCast must live in src/verify.zig at the two named boundary functions
-# (grantOf, verifyGrant return). Comments are stripped before counting so prose cannot
-# mask a cast. The negative compile canary (src/negative_capability.zig) must refuse to
-# compile: the build step wraps it and expects the compiler to exit 1.
-PTRCAST_HITS="$(grep -rn '@ptrCast' src/ 2>/dev/null | sed 's|//.*||' | grep '@ptrCast' || true)"
-PTRCAST_COUNT="$(printf '%s\n' "$PTRCAST_HITS" | grep -c '@ptrCast' || true)"
+# ---- M8: zero pointer-minting builtins (BE-GRANT-03b, round 4 restatement) ----
+# The storable capability is deleted: verification is a call, not a value. No
+# opaque type, no boundary casts, no negative compile canary remain. The
+# pointer-minting builtin set is {@ptrCast, @ptrFromInt} (Zig language reference:
+# @ptrCast reinterprets an existing pointer's type, @ptrFromInt mints a pointer
+# from a raw address). @bitCast is excluded because the compiler refuses a
+# bit-cast whose target is a pointer type ("cannot @bitCast to ...; use
+# @ptrFromInt"), confirmed by compile probe. The count MUST be zero across the
+# whole src/ tree: no code mints or reinterprets a pointer to a capability value
+# that no longer exists. BE-GRANT-03b's round 4 restatement removed the two
+# boundary functions, so the denominator (count 0) traces to "no value
+# representing a verified grant exists outside the call." Comments are stripped
+# before counting so prose cannot mask a cast.
+FORGE_PATTERN='@ptrCast|@ptrFromInt'
+FORGE_HITS="$(grep -rnE "$FORGE_PATTERN" src/ 2>/dev/null | sed 's|//.*||' | grep -E "$FORGE_PATTERN" || true)"
+FORGE_COUNT="$(printf '%s\n' "$FORGE_HITS" | grep -cE "$FORGE_PATTERN" || true)"
 M8_PROBLEMS=""
-PTRCAST_OK="yes"
-if [ -n "$PTRCAST_HITS" ]; then
-    printf '%s\n' "$PTRCAST_HITS" | while IFS= read -r hit; do
-        echo "     @ptrCast at $hit"
+if [ -n "$FORGE_HITS" ]; then
+    printf '%s\n' "$FORGE_HITS" | while IFS= read -r hit; do
+        echo "     pointer-mint builtin at $hit"
     done
-    if printf '%s\n' "$PTRCAST_HITS" | grep -v '^src/verify.zig:' | grep -q '@ptrCast'; then
-        PTRCAST_OK="no"
-        M8_PROBLEMS="$M8_PROBLEMS a code-only @ptrCast exists outside src/verify.zig;"
-    fi
+    M8_PROBLEMS="$M8_PROBLEMS expected 0 pointer-minting builtins (@ptrCast|@ptrFromInt), found $FORGE_COUNT;"
 fi
-if [ "$PTRCAST_COUNT" -ne 2 ]; then
-    PTRCAST_OK="no"
-    M8_PROBLEMS="$M8_PROBLEMS expected exactly 2 code-only @ptrCast, found $PTRCAST_COUNT;"
-fi
-NEG_OUT="$("$ZIG" build negative 2>&1)"; NEG_RC=$?
-if [ "$NEG_RC" -ne 0 ]; then
-    M8_PROBLEMS="$M8_PROBLEMS negative compile canary did not refuse forgery (zig build negative rc=$NEG_RC: $(printf '%s' "$NEG_OUT" | tail -1));"
-fi
-if [ "$PTRCAST_OK" = "yes" ] && [ -z "$M8_PROBLEMS" ]; then
-    row M8 PASS "2 code-only @ptrCast, both in src/verify.zig; negative compile canary refuses forgery (BE-GRANT-03b, SPEC.md section 8.2)"
+if [ -z "$M8_PROBLEMS" ]; then
+    row M8 PASS "0 pointer-minting builtins (@ptrCast|@ptrFromInt) in src/; no capability type to forge (BE-GRANT-03b, SPEC.md section 8.2)"
 else
     row M8 FAIL "${M8_PROBLEMS# } (BE-GRANT-03b, SPEC.md section 8.2)"
     FAILS=$((FAILS + 1))
 fi
 
+# ---- M9: coverage denominator derived from parser.zig, zero raw error returns ----
+# Every parser error exit routes through coverage.reject() and every accepted
+# return through coverage.accept(); both wrappers live in src/coverage.zig.
+# The denominator is counted HERE from parser.zig wrapper call sites at run
+# time, never taken from the enum alone: the Branch enum must match the source
+# one for one (one counter per exit site), a new exit point fails until the
+# enum grows, and a dead enum member fails the other way. Comments are
+# stripped before every count so prose cannot mask an exit. Zero exceptions:
+# one exception is the start of a list, and a list is where M8 once hid a gap.
+M9_STRIP='s|//.*||'
+RAW_RET="$(sed "$M9_STRIP" src/parser.zig | grep -c 'return error\.' || true)"
+REJECT_TAGS="$(sed "$M9_STRIP" src/parser.zig | grep -o 'coverage\.reject(\.[a-z_0-9]*' | sed 's/.*\.//' | sort)"
+ACCEPT_TAGS="$(sed "$M9_STRIP" src/parser.zig | grep -o 'coverage\.accept(\.[a-z_0-9]*' | sed 's/.*\.//' | sort)"
+REJECT_COUNT="$(printf '%s\n' "$REJECT_TAGS" | grep -c '[a-z_]' || true)"
+ACCEPT_COUNT="$(printf '%s\n' "$ACCEPT_TAGS" | grep -c '[a-z_]' || true)"
+SITE_COUNT=$((REJECT_COUNT + ACCEPT_COUNT))
+USED_TAGS="$(printf '%s\n%s\n' "$REJECT_TAGS" "$ACCEPT_TAGS" | grep '[a-z_]' | sort)"
+DUPES="$(printf '%s\n' "$USED_TAGS" | uniq -d | tr '\n' ' ')"
+ENUM_TAGS="$(sed -n '/pub const Branch = enum {/,/};/p' src/coverage.zig | grep -o '^[[:space:]]*[a-z_0-9]*,' | sed 's/[[:space:],]//g' | grep '[a-z_]' | sort)"
+ENUM_COUNT="$(printf '%s\n' "$ENUM_TAGS" | grep -c '[a-z_]' || true)"
+MISSING_IN_ENUM="$(comm -23 <(printf '%s\n' "$USED_TAGS") <(printf '%s\n' "$ENUM_TAGS") | tr '\n' ' ')"
+DEAD_IN_ENUM="$(comm -13 <(printf '%s\n' "$USED_TAGS") <(printf '%s\n' "$ENUM_TAGS") | tr '\n' ' ')"
+M9_PROBLEMS=""
+if [ "$RAW_RET" -ne 0 ]; then
+    M9_PROBLEMS="$M9_PROBLEMS $RAW_RET raw error return(s) in src/parser.zig: every error exit routes through coverage.reject(), zero exceptions;"
+fi
+if [ "$SITE_COUNT" -eq 0 ]; then
+    M9_PROBLEMS="$M9_PROBLEMS no wrapper call sites found in src/parser.zig: the extractor broke or the parser moved;"
+elif [ "$SITE_COUNT" -ne "$ENUM_COUNT" ]; then
+    M9_PROBLEMS="$M9_PROBLEMS $SITE_COUNT wrapper call sites but $ENUM_COUNT Branch enum members: one counter per exit site, one for one;"
+fi
+if [ -n "$DUPES" ]; then
+    M9_PROBLEMS="$M9_PROBLEMS shared counters (tags with more than one call site): $DUPES: a second call site needs its own counter so reach is not over-described;"
+fi
+if [ -n "$MISSING_IN_ENUM" ]; then
+    M9_PROBLEMS="$M9_PROBLEMS call-site tags missing from the Branch enum: $MISSING_IN_ENUM;"
+fi
+if [ -n "$DEAD_IN_ENUM" ]; then
+    M9_PROBLEMS="$M9_PROBLEMS dead Branch enum members with no call site: $DEAD_IN_ENUM;"
+fi
+if [ -z "$M9_PROBLEMS" ]; then
+    row M9 PASS "coverage denominator: $SITE_COUNT exit points derived from src/parser.zig ($REJECT_COUNT reject + $ACCEPT_COUNT accept); Branch enum matches one for one; zero raw error returns (SPEC.md section 11.6)"
+else
+    row M9 FAIL "${M9_PROBLEMS# } (SPEC.md section 11.6)"
+    FAILS=$((FAILS + 1))
+fi
+
+# ---- M10: call-graph wall, effect reachable only from verifyGrantThen ----
+# The effect callback invocation `execute(` must appear exactly once in src/,
+# inside verifyGrantThen in src/verify.zig. No other call site may invoke an
+# effect function, because BE-GRANT-03b (round 4) says the effect starts inside
+# the routine's frame and there is no other reach path to it. Same shape as M9:
+# a zero-exceptions grep whose denominator (count 1) is derived from the source
+# at run time, never taken from a stored number. Comments are stripped before
+# counting so prose cannot mask a call. Daniel, round 4: "the call-graph wall is
+# the only genuinely new mechanism here; if it lands later it lands never."
+EFFECT_PATTERN='execute\('
+EFFECT_HITS="$(grep -rnE "$EFFECT_PATTERN" src/ 2>/dev/null | sed 's|//.*||' | grep -E "$EFFECT_PATTERN" || true)"
+EFFECT_COUNT="$(printf '%s\n' "$EFFECT_HITS" | grep -cE "$EFFECT_PATTERN" || true)"
+M10_PROBLEMS=""
+if [ -n "$EFFECT_HITS" ]; then
+    printf '%s\n' "$EFFECT_HITS" | while IFS= read -r hit; do
+        echo "     effect call at $hit"
+    done
+fi
+if [ "$EFFECT_COUNT" -ne 1 ]; then
+    M10_PROBLEMS="$M10_PROBLEMS expected exactly 1 effect invocation (execute( in verifyGrantThen), found $EFFECT_COUNT;"
+elif printf '%s\n' "$EFFECT_HITS" | grep -vE '^src/verify\.zig:' | grep -qE "$EFFECT_PATTERN"; then
+    M10_PROBLEMS="$M10_PROBLEMS an effect invocation exists outside src/verify.zig;"
+fi
+if [ -z "$M10_PROBLEMS" ]; then
+    row M10 PASS "effect reachable only from verifyGrantThen in src/verify.zig; 1 call site, zero exceptions (BE-GRANT-03b, SPEC.md section 8.2)"
+else
+    row M10 FAIL "${M10_PROBLEMS# } (BE-GRANT-03b, SPEC.md section 8.2)"
+    FAILS=$((FAILS + 1))
+fi
+
 echo
-echo "enforced gates: M1 M3 M5 M6 M7 M8, failing: $FAILS"
+echo "enforced gates: M1 M3 M5 M6 M7 M8 M9 M10, failing: $FAILS"
 echo "not yet enforced: M2 M4, printed above, excluded from the exit code"
 exit "$FAILS"

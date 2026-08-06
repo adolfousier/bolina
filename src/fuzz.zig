@@ -31,6 +31,9 @@ const Seeds = struct {
     env: []const u8,
     grant: []const u8,
     intent: []const u8,
+    span: []const u8,
+    effect: []const u8,
+    claim: []const u8,
 };
 
 fn loadSeeds(a: std.mem.Allocator) !Seeds {
@@ -39,19 +42,34 @@ fn loadSeeds(a: std.mem.Allocator) !Seeds {
     const s = parsed.value.object.get("structures").?.object;
     const env_wire = try decodeHex(a, s.get("envelope_intent").?.object.get("wire_hex").?.string);
     const grant_wire = try decodeHex(a, s.get("grant").?.object.get("wire_hex").?.string);
+    const span_wire = try decodeHex(a, s.get("span").?.object.get("wire_hex").?.string);
+    const claim_wire = try decodeHex(a, s.get("claim").?.object.get("wire_hex").?.string);
+    const eff_env_wire = try decodeHex(a, s.get("effect").?.object.get("wire_hex").?.string);
     const env = try parser.parseEnvelope(env_wire);
-    // The intent seed is the envelope body, which already aliases env_wire.
-    return .{ .env = env_wire, .grant = grant_wire, .intent = env.body };
+    const eff_env = try parser.parseEnvelope(eff_env_wire);
+    // The intent/effect seeds are the envelope bodies, which alias their wires.
+    // The span/claim seeds are full standalone structures (claim carries no sig).
+    return .{
+        .env = env_wire,
+        .grant = grant_wire,
+        .intent = env.body,
+        .span = span_wire,
+        .effect = eff_env.body,
+        .claim = claim_wire,
+    };
 }
 
 // Produce one fuzz input in `buf`; returns the populated slice.
 fn nextInput(rnd: std.Random, seeds: Seeds, buf: []u8) []const u8 {
     if (rnd.uintLessThan(u8, 100) < 40) {
         // Mutate a valid seed.
-        const seed = switch (rnd.uintLessThan(u8, 3)) {
+        const seed = switch (rnd.uintLessThan(u8, 6)) {
             0 => seeds.env,
             1 => seeds.grant,
-            else => seeds.intent,
+            2 => seeds.intent,
+            3 => seeds.span,
+            4 => seeds.effect,
+            else => seeds.claim,
         };
         const len = @min(seed.len, buf.len);
         @memcpy(buf[0..len], seed[0..len]);
@@ -98,10 +116,13 @@ pub fn main() !void {
         _ = parser.parseEnvelope(input) catch {};
         _ = parser.parseGrant(input) catch {};
         _ = parser.parseIntent(input) catch {};
+        _ = parser.parseSpan(input) catch {};
+        _ = parser.parseEffect(input) catch {};
+        _ = parser.parseClaim(input) catch {};
         iter += 1;
         if (iter % 250_000_000 == 0) std.debug.print("fuzz progress: {d}M / {d}M\n", .{ iter / 1_000_000, budget / 1_000_000 });
     }
-    std.debug.print("FUZZ DONE: {d} inputs ({d} parser calls), 0 panics\n", .{ iter, iter * 3 });
+    std.debug.print("FUZZ DONE: {d} inputs ({d} parser calls), 0 panics\n", .{ iter, iter * 6 });
 
     // Coverage report (SPEC section 11.6 / LANGUAGE.md O2). Only emitted when
     // built with -Dcoverage, which sets coverage.ENABLED comptime true. Manual
@@ -112,17 +133,17 @@ pub fn main() !void {
         for (0..coverage.COUNT) |i| {
             if (coverage.hit_count[i] > 0) reached += 1;
         }
-        std.debug.print("COVERAGE: {d}/{d} branches reached\n", .{ reached, coverage.COUNT });
+        std.debug.print("COVERAGE: {d}/{d} exit points reached\n", .{ reached, coverage.COUNT });
         if (reached == coverage.COUNT) {
-            std.debug.print("COVERAGE: no unreached branches\n", .{});
+            std.debug.print("COVERAGE: no unreached exit points\n", .{});
         } else {
-            std.debug.print("COVERAGE: unreached branches:\n", .{});
+            std.debug.print("COVERAGE: unreached exit points:\n", .{});
             for (0..coverage.COUNT) |i| {
                 if (coverage.hit_count[i] == 0) {
                     std.debug.print("  - {s}\n", .{@tagName(@as(coverage.Branch, @enumFromInt(i)))});
                 }
             }
         }
-        std.debug.print("COVERAGE: corpus = 3 seeds (envelope, grant, intent from test/vectors.json), 4 mutation operators (bit flip, byte overwrite, truncate, saturate), 40% mutated-seed / 60% fully-random, 4096-byte input cap\n", .{});
+        std.debug.print("COVERAGE: corpus = 6 seeds (envelope, grant, intent, span, effect, claim from test/vectors.json), 4 mutation operators (bit flip, byte overwrite, truncate, saturate), 40% mutated-seed / 60% fully-random, 4096-byte input cap\n", .{});
     }
 }

@@ -47,10 +47,22 @@ pub fn build(b: *std.Build) void {
     // dedicated *_test.zig module. Source files are production-only; this keeps
     // test code out of the shipped binary while giving the M1 bijection (SPEC
     // section 11.1) one compilation root for all BE-bound tests.
+    // single_threaded pins the test binary to sequential execution. Zig
+    // function pointers cannot capture state, so the callback doubles in
+    // verify_test.zig (ledger_calls, effect_calls, effect_grant_id) and
+    // dag_test.zig (sup_dag, sup_effect) record through package-level
+    // variables the tests read back. Under the default parallel test runner
+    // those variables are shared across concurrently executing test blocks,
+    // which produced nondeterministic counts (a call-ordering test observing
+    // 2 where it asserted 1) and torn reads of the package-level Dag. The
+    // library itself is zero-heap with no global mutable state and no
+    // production concurrency, so parallel test execution buys nothing here
+    // and a deterministic gate is worth more than a faster one.
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
+        .single_threaded = true,
     });
     test_mod.addImport("build_options", opts_mod);
     // The vectors harness (src/vectors_test.zig) embeds test/vectors.json at
@@ -86,28 +98,11 @@ pub fn build(b: *std.Build) void {
 
     // Coverage measurement (LANGUAGE.md O2 / SPEC section 11.6). The same fuzz
     // harness, but built with -Dcoverage so coverage.ENABLED is comptime true
-    // and every parser branch counter is live. Run as
+    // and every parser exit-point counter is live. Run as
     //   zig build coverage -Dcoverage -Dfuzz-budget=4000000
-    // which prints the N/M branch-reach report, the unreached list, and the
-    // corpus description. Manual instrumentation IS the measurement here; the
-    // toolchain's -ffuzz coverage has no script-readable output.
-    const coverage_step = b.step("coverage", "Run fuzz with branch coverage on (-Dcoverage -Dfuzz-budget=N)");
+    // which prints the N/M exit-point-reach report, the unreached list, and
+    // the corpus description. Manual instrumentation IS the measurement here;
+    // the toolchain's -ffuzz coverage has no script-readable output.
+    const coverage_step = b.step("coverage", "Run fuzz with exit-point coverage on (-Dcoverage -Dfuzz-budget=N)");
     coverage_step.dependOn(&run_fuzz.step);
-
-    // Negative compile test (BE-GRANT-03b). test/negative_capability.zig tries
-    // to forge a VerifiedGrant by value, which MUST fail to compile now that the
-    // capability is opaque {}. We run the compiler on it directly and assert
-    // exit 1: the step PASSES on a compile failure and FAILS the day the file
-    // ever compiles (the forgery hole reopened). Run by tools/prumo-verify
-    // under M8. The compiler's error output on stderr is expected.
-    const neg_cmd = b.addSystemCommand(&.{
-        b.graph.zig_exe,
-        "build-obj",
-        "-fno-emit-bin",
-        "src/negative_capability.zig",
-    });
-    neg_cmd.expectExitCode(1);
-    neg_cmd.setName("negative compile (capability forgery must fail)");
-    const negative_step = b.step("negative", "Negative compile test: capability forgery MUST fail to compile");
-    negative_step.dependOn(&neg_cmd.step);
 }

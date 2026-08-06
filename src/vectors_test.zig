@@ -109,6 +109,89 @@ test "vectors: span signature verifies against executor" {
     try verify.verifySigned(parser.DOMAIN_SPAN, tbs, sig, signer);
 }
 
+test "vectors: span body parses against the canonical wire" {
+    const a = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const al = arena.allocator();
+
+    var j = try std.json.parseFromSlice(std.json.Value, a, VectorsJson, .{});
+    defer j.deinit();
+    const span = j.value.object.get("structures").?.object.get("span").?.object;
+    const fields = span.get("fields").?.object;
+
+    const wire = try decodeHex(al, str(span, "wire_hex"));
+    const s = try parser.parseSpan(wire);
+
+    try testing.expectEqual(@as(u8, 2), s.version);
+    try testing.expectEqual(@as(u8, 1), s.method_id); // 1 -> DirectObservation (SPEC 7.4)
+    try testing.expectEqual(@as(u8, 2), s.volatility); // stable
+    try testing.expectEqual(@as(u64, 1700000030000), s.observed_at);
+    try testing.expectEqual(@as(usize, 16), s.span_id.len);
+    try testing.expectEqual(@as(usize, 16), s.trace_id.len);
+    try testing.expectEqual(@as(usize, 32), s.origin.len);
+    try testing.expectEqual(@as(usize, 32), s.digest.len);
+    try testing.expectEqual(@as(usize, 32), s.executor.len);
+    try testing.expectEqual(@as(usize, 64), s.sig.len);
+    // tbs is the prefix, sig the trailer; both alias the input wire (zero heap).
+    try testing.expectEqualSlices(u8, wire[0 .. wire.len - 64], s.tbs);
+    try testing.expectEqualSlices(u8, wire[wire.len - 64 ..], s.sig);
+    try testing.expectEqualStrings(str(fields, "resource_id"), s.resource_id);
+
+    // The parsed tbs and sig must verify under domain 0x03, cross-checked.
+    const signer = try decodeHex(al, str(span, "signer_pubkey"));
+    try verify.verifySigned(parser.DOMAIN_SPAN, s.tbs, s.sig, signer);
+}
+
+test "vectors: effect body parses with one inline span" {
+    const a = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const al = arena.allocator();
+
+    var j = try std.json.parseFromSlice(std.json.Value, a, VectorsJson, .{});
+    defer j.deinit();
+    const eff = j.value.object.get("structures").?.object.get("effect").?.object;
+
+    const env_wire = try decodeHex(al, str(eff, "wire_hex"));
+    const env = try parser.parseEnvelope(env_wire);
+    try testing.expectEqual(parser.BODY_EFFECT, env.body_type);
+
+    const body = try parser.parseEffect(env.body);
+    try testing.expectEqual(@as(u8, 1), body.ok);
+    try testing.expectEqual(@as(i32, 0), body.exit_code);
+    try testing.expectEqual(@as(u8, 1), body.span_count);
+    try testing.expectEqual(@as(usize, 32), body.output_digest.len);
+
+    // The inline span region holds exactly one full Span wire: it parses
+    // standalone and its tbs/sig verify against the executor.
+    const inline_span = try parser.parseSpan(body.spans);
+    try testing.expectEqual(@as(u8, 1), inline_span.method_id);
+    const signer = try decodeHex(al, str(eff, "signer_pubkey"));
+    try verify.verifySigned(parser.DOMAIN_SPAN, inline_span.tbs, inline_span.sig, signer);
+}
+
+test "vectors: claim body parses with one span reference" {
+    const a = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const al = arena.allocator();
+
+    var j = try std.json.parseFromSlice(std.json.Value, a, VectorsJson, .{});
+    defer j.deinit();
+    const claim = j.value.object.get("structures").?.object.get("claim").?.object;
+    const fields = claim.get("fields").?.object;
+
+    const wire = try decodeHex(al, str(claim, "wire_hex"));
+    const c = try parser.parseClaim(wire);
+
+    try testing.expectEqualStrings(str(fields, "text"), c.text);
+    try testing.expectEqualStrings(str(fields, "subject"), c.subject);
+    try testing.expectEqual(@as(u8, 242), c.confidence_q8); // DirectObservation ceiling (SPEC 7.2)
+    try testing.expectEqual(@as(u8, 1), c.span_count);
+    try testing.expectEqual(@as(usize, 16), c.span_ids.len);
+}
+
 test "vectors: refusal signature verifies against approver" {
     const a = testing.allocator;
     var arena = std.heap.ArenaAllocator.init(a);

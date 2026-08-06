@@ -343,7 +343,13 @@ have `≤ 90 days`.
 **BE-REV-02** — A node holding a valid CA-signed revocation for a `sig_pubkey` MUST refuse all
 subsequent envelopes from it, MUST tear down existing sessions with it, and MUST persist the
 revocation across restart. Failure to *receive* a revocation is not preventable at this layer; it
-is bounded by BE-REV-01. This is stated as a limitation, not as a defence.
+is bounded by BE-REV-01. This is stated as a limitation, not as a defence. A *claim* of
+non-receipt is a different matter and is not evidence: any node that processed a revocation can
+assert it did not, buying itself an extra window, so non-receipt claims are settled by the node's
+causal position in the ledger (BE-HIST-03), not by the node's own report. *(Empirical basis:
+INC-001, Bolina 2026-08-06: a party claimed non-receipt of input it demonstrably processed. The
+claim-shape generalises to revocation, and BE-HIST-03 was doing the work but was not pointed at
+it.)*
 
 ---
 
@@ -355,7 +361,7 @@ Sessions use **`Noise_IK_25519_ChaChaPoly_BLAKE2s`** over UDP: the initiator kno
 static X25519 key (from its certificate), the handshake completes in one round trip, and the
 initiator's static key is encrypted to the responder rather than sent in clear. This is the
 WireGuard construction, chosen because it is small enough to implement correctly without a library
-and has had a decade of public analysis.
+and has had a decade of public analysis. The byte-level wire formats are pinned in §4.1a; the construction is adopted, but integers and timestamps serialize per §2.2 and the AEAD per §2.1, so a Bolina packet is not byte-compatible with a WireGuard packet.
 
 The Noise handshake authenticates *X25519 static keys*. Certificates bind an Ed25519 identity key.
 Binding the two:
@@ -365,6 +371,83 @@ session, its certificate together with an Ed25519 signature by `sig_pubkey` over
 handshake hash `h`. A session MUST NOT deliver application data upward until the peer's certificate
 has passed BE-ID-01/02/03 **and** that signature verifies against `h`. An unbound session is a
 session with an authenticated key and an unknown owner, and is useless.
+
+### 4.1a Transport wire formats
+
+The four transport messages follow the WireGuard construction: a one-byte type discriminator, three
+reserved zero bytes, session indices, and, on the two handshake messages, the `mac1`/`mac2` proofs of
+§4.4. Three serialization details are Bolina's own and make a Bolina packet **not byte-compatible**
+with a WireGuard packet: integers are big-endian per §2.2 (WireGuard is little-endian); the initiation
+timestamp is a `u64` Unix-epoch-millisecond value per §2.2 (WireGuard uses a 12-byte TAI64N timestamp);
+and the cookie reply is sealed with ChaCha20-Poly1305 per §2.1 (WireGuard uses XChaCha20-Poly1305,
+which is not a §2.1 primitive). The Noise_IK handshake, the `mac1`/`mac2` DoS design, the field order,
+and the field sizes are otherwise WireGuard's. All four messages fit the 1400-byte transport packet
+limit (§4.4).
+
+The first byte of every message is its type:
+
+| Type | Message | Size |
+|---|---|---|
+| 1 | Handshake initiation | 144 |
+| 2 | Handshake response | 92 |
+| 3 | Cookie reply | 52 |
+| 4 | Transport data | 16-byte header + `len(plaintext) + 16` |
+
+Bytes 1-3 are reserved and MUST be zero; non-zero reserved bytes are a parse failure (§2.2 admits no
+extension mechanism in v0.2). All integers in the tables below are big-endian.
+
+**Handshake initiation (type 1, 144 bytes):**
+
+| Offset | Field | Size | Notes |
+|---|---|---|---|
+| 0 | `message_type` | 1 | = 1 |
+| 1 | `reserved` | 3 | zero |
+| 4 | `sender_index` | 4 | `u32`, initiator-chosen session index |
+| 8 | `unencrypted_ephemeral` | 32 | X25519 ephemeral public key |
+| 40 | `encrypted_static` | 48 | initiator static X25519 public key, ChaCha20-Poly1305 sealed (32 + 16 tag) |
+| 88 | `encrypted_timestamp` | 24 | `u64` millisecond timestamp, ChaCha20-Poly1305 sealed (8 + 16 tag); WG anti-replay role |
+| 112 | `mac1` | 16 | keyed-BLAKE2s, §4.4 |
+| 128 | `mac2` | 16 | keyed-BLAKE2s cookie MAC, §4.4 |
+
+**Handshake response (type 2, 92 bytes):**
+
+| Offset | Field | Size | Notes |
+|---|---|---|---|
+| 0 | `message_type` | 1 | = 2 |
+| 1 | `reserved` | 3 | zero |
+| 4 | `sender_index` | 4 | `u32`, responder-chosen session index |
+| 8 | `receiver_index` | 4 | `u32`, echoes the initiation `sender_index` |
+| 12 | `unencrypted_ephemeral` | 32 | X25519 ephemeral public key |
+| 44 | `encrypted_nothing` | 16 | empty payload, ChaCha20-Poly1305 sealed (0 + 16 tag) |
+| 60 | `mac1` | 16 | keyed-BLAKE2s, §4.4 |
+| 76 | `mac2` | 16 | keyed-BLAKE2s cookie MAC, §4.4 |
+
+The response is smaller than the initiation, preventing amplification.
+
+**Cookie reply (type 3, 52 bytes):**
+
+| Offset | Field | Size | Notes |
+|---|---|---|---|
+| 0 | `message_type` | 1 | = 3 |
+| 1 | `reserved` | 3 | zero |
+| 4 | `receiver_index` | 4 | `u32`, echoes the `sender_index` of the triggering message |
+| 8 | `nonce` | 12 | ChaCha20-Poly1305 nonce (§2.1); WG uses a 24-byte XChaCha20-Poly1305 nonce |
+| 20 | `encrypted_cookie` | 32 | 16-byte cookie (`mac1`-bound, §4.4) + 16 tag |
+
+**Transport data (type 4, 16-byte header):**
+
+| Offset | Field | Size | Notes |
+|---|---|---|---|
+| 0 | `message_type` | 1 | = 4 |
+| 1 | `reserved` | 3 | zero |
+| 4 | `receiver_index` | 4 | `u32`, the peer's session index |
+| 8 | `counter` | 8 | `u64` session-key counter, AEAD nonce variable part (BE-TR-02, §4.3) |
+| 16 | `encrypted_payload` | varies | plaintext + 16-byte Poly1305 tag |
+
+The transport AEAD nonce is the 12-byte value `[0x00 x 4] || counter`: four leading zero bytes and
+the big-endian `u64` counter, so a fresh counter yields a fresh nonce within the 2⁴⁸ rekey bound
+(BE-TR-02). The 16-byte header lets an implementation decrypt in place. An empty payload (16-byte
+header + 16-byte tag = 32 bytes) is a keepalive.
 
 ### 4.2 Session lifetime
 
@@ -893,6 +976,14 @@ is strictly sharper than any window: a one-hour window both discards good eviden
 accepts stale evidence at 59, while causal supersession is exact in both directions and identical
 for every member without agreement.*
 
+**BE-EVID-05a (supersession is strict descent)** — In BE-EVID-05, the superseding `Effect` MUST be
+a STRICT causal descendant of the span's own `origin` Effect: the Effect that published a span
+does not supersede the span it published. *If descent were reflexive, every volatile span would be
+superseded by its own publishing Effect at birth, volatile evidence would be worthless by
+construction, and the rule would contradict its own purpose — invalidation by a LATER observed
+change. The claim side needs no strictness pin: a claim travels in an `Utterance`, which cannot be
+a superseding `Effect`. (RED-TEAM-09, F3.)*
+
 **BE-EVID-06 (volatility is the executor's declaration and the receiver's floor)** — `volatility` is
 set by the executor that made the observation, which is the only party that knows what it observed.
 A receiver MUST treat an unrecognized value as `volatile`. *Fail-closed: an implementation that
@@ -959,6 +1050,15 @@ cross-implementation test vectors (§11 item 3). Two conformant implementations 
 class of the same span would produce different confidences from identical evidence, which is the
 failure this whole section exists to remove.
 
+**BE-EVID-16 (the verdict is a record, not a substitution)** — A claim's resolution MUST carry a
+record counting every cited span into exactly one terminal bucket: cited, inline, supportable,
+subject-matched, superseded, unresolved, and non-effect. A span that fails a check is counted, never
+discarded: the state is a summary of the evidence walk, not a substitute for it. When the claim is
+Supported and an unresolved span is pending, the verdict MUST carry a flag that the number may rise
+on backfill, while the number itself stays fail-closed at the strongest resolved ceiling. This is the
+inverse of R3 applied to a verdict routine: every failure records a cause, so a span cannot be
+dropped silently without shifting a count.
+
 ### 7.5 Evidence travels with the claim
 
 **BE-EVID-08 (piggyback is mandatory)** — An `Utterance` MUST carry, inline, the full encoded `Span`
@@ -989,6 +1089,20 @@ function of delivery luck and hides the difference between "the network is behin
 has no proof".* `origin` is what makes the distinction computable: without it an inline span is
 authentic but has no position in the causal order, so BE-EVID-05's supersession check has nothing to
 anchor to.
+
+**BE-EVID-09a (mixed resolution composes per span)** — A claim citing several spans where some
+`origin`s are in the local ledger and some are not: the resolved, non-superseded spans support the
+claim at the ceiling of the **strongest** among them (BE-EVID-02), and the unresolved ones contribute
+nothing yet. The claim is **Unresolved** only when every cited span is either valid-and-matching but
+unresolved or has zero resolved origins, and **Unsupported** only when it has no valid matching span
+at all. *Without this rule a single absent origin would demote a fully-supported claim to
+Unresolved, paying for one late delivery with every honest claim the member has. (RED-TEAM-09, F4.)*
+
+**BE-EVID-09b (origin must resolve to an Effect)** — A span whose `origin` resolves to an envelope
+of any body type other than `Effect` cannot support a claim; it falls out of the Supported and
+Unresolved states alike. *§7.1 declares `origin` as the hash of the Effect envelope that published
+the span, so a span whose origin resolves to anything else contradicts its own declared structure
+and fails closed. (RED-TEAM-09, F7.)*
 
 **BE-EVID-10 (bounded piggyback)** — An `Utterance` MUST carry at most 32 claims and at most 64
 spans, and MUST be rejected if it exceeds either. Receivers MUST deduplicate spans by `span_id` in
@@ -1106,21 +1220,31 @@ performance detail.
 and 8 (subject, intent_id and resource_id matching against the pending intent) are delegated to the
 executor until a certificate store and a pending-intent table exist. This is provisional debt, not a
 relaxation of the rule above: BE-GRANT-03 requires all twelve checks in the routine, and the
-repayment condition is that 3, 4, 6, 7 and 8 fold into `verifyGrant` the moment their backing state
+repayment condition is that 3, 4, 6, 7 and 8 fold into `verifyGrantThen` (the routine) the moment
+their backing state
 is available. Recorded here so the debt survives being forgotten.
 
-**BE-GRANT-03b (capability type, language-portable property).** The verified capability MUST be
-represented by a type with this property: no code outside the verification routine can construct a
-value of it or obtain one by any means the language makes available to safe code. Fabricating a
-reference to one MUST require the language's unsafe equivalent, and every such escape MUST be
-confined to a fixed set of boundary functions gated mechanically (§11.2, gate M8). The mechanism is
+**BE-GRANT-03b (verification is a call, not a value; language-portable property).** The grant's
+effect MUST be reachable only through the single verification routine, and the routine MUST invoke
+execution itself: it runs the checks in the enumerated order, commits the ledger (check 11), and
+calls the effect inside one call frame. No value representing a verified grant — capability, token,
+handle, seal, slot — MUST exist outside that frame. Verification and the start of execution are one
+function call, not a span of time. The caller supplies the effect as a callback the routine
+invokes; the routine passes it the grant it just verified, and the frame ends when the effect has
+started. *Every defect this rule accumulated came from the verified state being a value you can
+keep: aliasing TOCTOU (verify A, consume B), the expiry that does not expire (checks run at mint
+time, consumption at any time), use-after-free. If the verified state never exists as a value
+outside the call, none of them has an interval to drift in. The window is deleted rather than
+defended; the seal that defended it (BE-GRANT-03c) was superseded by that deletion. The Grant on
+the wire remains an object capability (§8.1) — signed authority still travels as bytes — and what
+this rule removes is only the executor-side storable form of the verified grant.* The mechanism is
 per language:
 
-| Language | Mechanism | Unsafe escape, gated |
+| Language | Mechanism | What keeps the wall |
 |---|---|---|
-| Rust | private field, no exported constructor | none in safe code |
-| Zig | `opaque {}` behind a pointer, constructor inside the module | `@ptrCast`, two boundary functions (M8) |
-| Go | unexported field, exported constructor | `unsafe.Pointer`, audited |
+| Zig | continuation-passing routine `verifyGrantThen(env, grant, ctx, execute)` invokes `execute` inside the frame | gate M10 (effect reach confined to the routine, zero exceptions) + gate M8 (zero pointer-minting builtins anywhere, so no handle to forge) |
+| Rust | routine takes a closure; effect functions private to the executor module | privacy makes the bypass unwriteable outside the module |
+| Go | routine takes a func value; effect functions unexported | same shape, unexported scope |
 
 *§8.1's prose says a Grant is bound to one agent, one executor, one resource, one intent, and one
 exact action. Checks 5 to 9 are what make that sentence true; before they were enumerated, only the
@@ -1128,7 +1252,37 @@ last of the five had an enforcing rule. This is the invariant mutation testing m
 (§11.2).*
 
 *Rust's guarantee is safe code cannot forge; Zig's honest translation is code that passes the gates
-cannot forge.*
+cannot forge.* The property this rule protects is reach, not construction: no code path arrives at
+the effect without passing through the checks, because the checks and the effect live in the same
+frame. Single-shot is part of the shape: the ledger commit (check 11) runs before the callback, so
+a callback that fails does not un-consume the grant. The `grant_id` is spent; a failed effect is
+BE-GRANT-01a's interrupted case, reported as unknown, never retried. *Write it down or the first
+person who hits a failed effect will "fix" it into a retry and un-spend a grant the ledger already
+committed (BE-GRANT-01: durable before the effect is attempted).*
+
+**Provisional debt (call-graph wall).** In the slice the callback is caller-supplied, so nothing
+structural stops a caller from running its own effect code without calling the routine. The wall
+inside the slice is honesty plus gate M10: the routine is the only modeled path to an effect, and
+M10 confines effect reach with a zero-exceptions grep the way M9 confines raw parser exits. In the
+real executor the effect functions (the durable ledger commit, the resource lock, the action
+itself) MUST be reachable only from the routine, enforced by that same gate. Repayment condition:
+the moment effect functions exist outside the slice, they move behind the routine and M10's grep
+covers their call sites. Recorded here so the debt survives being forgotten.
+
+**BE-GRANT-03c (seal by content, capability lifetime).** SUPERSEDED BY REMOVAL (round 4 review,
+2026-08-06). The original requirement read: *a capability MUST be sealed by content at
+verification time — a keyed digest over the exact grant bytes the routine verified, recomputed at
+every access, refusing on mismatch — because holding a capability proves the checks passed at time
+T over specific bytes, and without the seal consumption at T+n reads state that may have changed
+since.* The seal defended the window between verification and consumption. BE-GRANT-03b's
+restatement deletes the window: verification is a call, not a value, and the effect starts inside
+the routine's frame, so there is no interval left for the bytes to drift in and nothing outside
+the frame for a seal to protect. A seal over a nonexistent interval has nothing to recompute.
+Numbers in this specification are grow-only, so the requirement keeps its number and its epitaph:
+*the window was removed, not sealed. The seal was not wasted — it made the storable form's cost
+visible enough to question, and the question deleted it.* The keyed-digest machinery, the
+caller-owned slot, the opaque capability type, the two pointer-mint casts, and the negative
+compile canary were all deleted with it (LANGUAGE.md §4.1, cost two restated).
 
 **BE-GRANT-03a (frozen during verification)** — From the moment the verification routine begins
 for an intent until it either refuses or the intent enters `EXECUTING`, the intent's lifecycle

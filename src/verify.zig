@@ -16,10 +16,23 @@
 //     to the executor to wire around this routine. Check 11 (the BE-GRANT-01
 //     durable ledger) is exposed as a hook supplied by the caller and, by the
 //     shape of this function, it is always the last thing that runs.
+//   * BE-GRANT-03b (round 4 restatement): verification is a call, not a value.
+//     The routine does not hand back a capability. It runs the checks, commits
+//     the ledger (check 11), and invokes the effect itself, inside its own
+//     frame, passing the grant by value. No value representing a verified
+//     grant exists outside that call, so there is nothing to keep, replay,
+//     seal, or use after the routine returns. The forgery wall of the earlier
+//     draft (an opaque capability type plus two pointer-mint casts) left with
+//     the window: with no capability value, there is nothing to forge, and the
+//     pointer-minting builtin set is empty across the whole tree (M8). The
+//     single reach path to the effect is the callback invocation in this
+//     routine, which the call-graph wall M10 makes load-bearing.
 //
 // Verification is zero-heap. Ed25519 is checked with the stdlib's streaming
 // Verifier so the domain tag and the to-be-signed region are fed as two
-// separate chunks; no buffer is allocated to prepend the tag (BE-SIG-01).
+// separate chunks; no buffer is allocated to prepend the tag (BE-SIG-01). The
+// grant the routine verifies is the caller's parsed struct, read by value; the
+// effect runs on that value inside the frame, never on a storable handle.
 
 const std = @import("std");
 const parser = @import("parser.zig");
@@ -29,7 +42,7 @@ const B2s = std.crypto.hash.blake2.Blake2s256;
 
 // ---------------------------------------------------------------------------
 // Errors. One distinct class per failed BE check so tests assert the reason a
-// capability was refused, not a generic "invalid".
+// grant was refused, not a generic "invalid".
 // ---------------------------------------------------------------------------
 
 pub const VerifyError = error{
@@ -129,41 +142,25 @@ pub const GrantContext = struct {
 };
 
 // ---------------------------------------------------------------------------
-// VerifiedGrant: the capability this routine produces (BE-GRANT-03b).
-//
-// opaque {} is the forgery wall. It has no fields and no size, so no code
-// anywhere can construct one by value: the struct-literal mint that a plain
-// public-field struct would allow is a compile error. The ONLY way to obtain
-// a *const VerifiedGrant is the verification routine below, and the ONLY way
-// to fabricate the pointer is @ptrCast, confined to the two boundary
-// functions here (verifyGrant, grantOf) and gated mechanically by M8
-// (tools/prumo-verify, CONTRIBUTING.md). test/negative_capability.zig is the
-// canary: it tries the old struct-literal mint and MUST fail to compile; the
-// `zig build negative` step asserts on it.
-//
-// The backing data is the caller's Grant (parser slices alias the input bytes,
-// never the heap, BE-WIRE-01), so the capability carries no allocation.
-// ---------------------------------------------------------------------------
-
-pub const VerifiedGrant = opaque {};
-
-// Boundary accessor (the @ptrCast here is one of exactly two in the module;
-// M8). Consumers read the grant through this, never by constructing the
-// capability.
-pub fn grantOf(v: *const VerifiedGrant) *const parser.Grant {
-    return @ptrCast(@alignCast(v));
-}
-
-// ---------------------------------------------------------------------------
-// verifyGrant: the single BE-GRANT-03 verification routine (slice subset).
+// verifyGrantThen: the single BE-GRANT-03 verification routine (slice subset).
 //
 // Checks run in the enumerated order and refuse on the first failure. The
-// ledger hook (check 11) is the last statement, so any earlier refusal short-
+// ledger hook (check 11) is the last check, so any earlier refusal short-
 // circuits before the durable commit would happen, matching the normative
-// ordering from RED-TEAM-08 (F3).
+// ordering from RED-TEAM-08 (F3). On success the effect runs: the caller's
+// callback is invoked ONCE, inside this frame, with the grant passed by value.
+// No verified-grant value leaves the routine, so there is nothing to keep,
+// replay, or use later (BE-GRANT-03b, round 4 restatement).
+//
+// Single-shot ordering (BE-GRANT-01): the durable ledger commit is the last
+// check and runs BEFORE the callback. A failed effect therefore leaves the
+// grant_id spent: the commit is already durable, and a failed effect is the
+// interrupted case of BE-GRANT-01a, never retried, never un-consumed. Pinned
+// here so the first reader who hits a failed effect does not "fix" it into a
+// retry (Daniel, round 4).
 // ---------------------------------------------------------------------------
 
-pub fn verifyGrant(env: parser.Envelope, grant_ptr: *const parser.Grant, ctx: GrantContext) VerifyError!*const VerifiedGrant {
+pub fn verifyGrantThen(env: parser.Envelope, grant_ptr: *const parser.Grant, ctx: GrantContext, execute: *const fn (parser.Grant) void) VerifyError!void {
     const grant = grant_ptr.*;
     // 0. Grant.version must be 2 (RED-TEAM-08 F6: the field is read, not ignored).
     if (grant.version != 2) return error.BadVersion;
@@ -194,7 +191,10 @@ pub fn verifyGrant(env: parser.Envelope, grant_ptr: *const parser.Grant, ctx: Gr
     // 11. grant_id is not already consumed (BE-GRANT-01). Only I/O step; last.
     if (ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed;
 
-    // Boundary constructor (the @ptrCast here is one of exactly two in the
-    // module; M8). The pointer aliases the caller's Grant storage directly.
-    return @ptrCast(grant_ptr);
+    // The effect runs inside this frame on the verified grant (BE-GRANT-03b).
+    // The ledger commit above is durable before this call, so a failed effect
+    // leaves grant_id spent (BE-GRANT-01a interrupted), never retried. This
+    // single invocation is the only reach path to the effect in the tree, which
+    // the call-graph wall M10 makes load-bearing.
+    execute(grant);
 }

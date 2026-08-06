@@ -312,6 +312,53 @@ pub fn main(init: std.process.Init) !void {
     try span_wire.appendSlice(a, span_tbs.items);
     try putFixed(&span_wire, a, &span_sig);
 
+    // ---- EFFECT: executor performed the granted action and published the span inline. The Effect
+    // is a body (body_type 4) carried in an executor-signed Envelope; this envelope is the span's
+    // origin and is a causal child of the Intent envelope (parent[0] = BLAKE2s of the Intent
+    // envelope). The inline span's `origin` field uses the opaque anchor above, matching the
+    // standalone span vector; see DECISION-LOG D-013 for the origin-computation question. (SPEC 6.4.)
+    const effect_output_digest = blake2s(OBSERVED_OUTPUT);
+    var effect_body = Alist.empty;
+    defer effect_body.deinit(a);
+    try putFixed(&effect_body, a, &intent_id);
+    try putFixed(&effect_body, a, &grant_id);
+    try putU8(&effect_body, a, 1); // ok = true
+    try putU32be(&effect_body, a, 0); // exit_code = 0 (i32; 0 is identical in u32 and i32)
+    try putU8(&effect_body, a, 1); // span_count = 1
+    try effect_body.appendSlice(a, span_wire.items); // published span, full wire (tbs || sig)
+    try putFixed(&effect_body, a, &effect_output_digest); // [32] output_digest
+    const intent_env_hash = blake2s(env_wire.items);
+    var eff_env_tbs = Alist.empty;
+    defer eff_env_tbs.deinit(a);
+    try putU8(&eff_env_tbs, a, 2);
+    try putFixed(&eff_env_tbs, a, &channel_id);
+    try putFixed(&eff_env_tbs, a, &executor.sig_pubkey); // sender = executor
+    try putU64be(&eff_env_tbs, a, SEQ + 1); // after the Intent envelope
+    try putU8(&eff_env_tbs, a, 1); // parent_count = 1
+    try putFixed(&eff_env_tbs, a, &intent_env_hash); // parent[0] = Intent envelope hash
+    try putU64be(&eff_env_tbs, a, T_OBSERVED); // ts
+    try putU8(&eff_env_tbs, a, 4); // body_type = Effect
+    try putU32be(&eff_env_tbs, a, @intCast(effect_body.items.len));
+    try eff_env_tbs.appendSlice(a, effect_body.items);
+    const eff_env_sig = try signTagged(executor.kp, DOMAIN_ENVELOPE, eff_env_tbs.items);
+    var eff_env_wire = Alist.empty;
+    defer eff_env_wire.deinit(a);
+    try eff_env_wire.appendSlice(a, eff_env_tbs.items);
+    try putFixed(&eff_env_wire, a, &eff_env_sig);
+
+    // ---- CLAIM: agent asserts the deploy succeeded and cites the span. A Claim carries NO
+    // signature of its own; it is authenticated only inside a signed Utterance envelope
+    // (BE-EVID-08). The Utterance vector is deferred to F1 (RED-TEAM-09), so this vector fixes the
+    // Claim wire layout and field values for the byte-layout cross-check, not an independent sig.
+    const claim_text = "sqlite3 installed; version verified against the deploy log";
+    var claim_tbs = Alist.empty;
+    defer claim_tbs.deinit(a);
+    try putU16Len(&claim_tbs, a, claim_text);
+    try putU16Len(&claim_tbs, a, resource_id); // subject == resource_id (BE-EVID-03)
+    try putU8(&claim_tbs, a, 242); // confidence_q8 = DirectObservation ceiling (BE-EVID-02)
+    try putU8(&claim_tbs, a, 1); // span_count = 1
+    try putFixed(&claim_tbs, a, &span_id); // span_ids[0]
+
     // ---- GRANT, signed by approver ----
     var grant_tbs = Alist.empty;
     defer grant_tbs.deinit(a);
@@ -718,6 +765,92 @@ pub fn main(init: std.process.Init) !void {
     try fHex(&j, a, "signer_pubkey", &approver.sig_pubkey);
     try sep(&j, a);
     try fHex(&j, a, "wire_hex", refusal_wire.items);
+    try sep(&j, a);
+    try fStr(&j, a, "verify", "true");
+    try w(&j, a, "}");
+    try sep(&j, a);
+
+    // effect (executor-signed envelope carrying an Effect body with one inline span)
+    try w(&j, a, "\"effect\":{");
+    try fStr(&j, a, "desc", "Effect: executor performed the granted action (ok=true, exit_code=0), published one span inline, and reported the action output digest. The Effect is a body (body_type 4) inside an executor-signed Envelope; this envelope is the span's origin and is a causal child of the Intent envelope (parent[0] = BLAKE2s of the Intent envelope). Signed by the executor as the envelope sender (envelope domain tag 0x02).");
+    try sep(&j, a);
+    try fStr(&j, a, "domain_tag", "02");
+    try sep(&j, a);
+    try fStr(&j, a, "envelope_kind", "effect");
+    try sep(&j, a);
+    try w(&j, a, "\"fields\":{");
+    try fU8(&j, a, "version", 2);
+    try sep(&j, a);
+    try fHex(&j, a, "channel_id", &channel_id);
+    try sep(&j, a);
+    try fHex(&j, a, "sender_executor", &executor.sig_pubkey);
+    try sep(&j, a);
+    try fU64(&j, a, "seq", SEQ + 1);
+    try sep(&j, a);
+    try fU8(&j, a, "parent_count", 1);
+    try sep(&j, a);
+    try fHex(&j, a, "parent_0_intent_env", &intent_env_hash);
+    try sep(&j, a);
+    try fU64(&j, a, "ts", T_OBSERVED);
+    try sep(&j, a);
+    try fStr(&j, a, "body_type", "4(Effect)");
+    try sep(&j, a);
+    try fHex(&j, a, "body_intent_id", &intent_id);
+    try sep(&j, a);
+    try fHex(&j, a, "body_grant_id", &grant_id);
+    try sep(&j, a);
+    try fU8(&j, a, "body_ok", 1);
+    try sep(&j, a);
+    try fU8(&j, a, "body_exit_code", 0);
+    try sep(&j, a);
+    try fU8(&j, a, "body_span_count", 1);
+    try sep(&j, a);
+    try fHex(&j, a, "body_output_digest", &effect_output_digest);
+    try w(&j, a, "}");
+    try sep(&j, a);
+    try fHex(&j, a, "tbs_hex", eff_env_tbs.items);
+    try sep(&j, a);
+    try w(&j, a, "\"sig_input_hex\":\"02");
+    try jHexRaw(&j, a, eff_env_tbs.items);
+    try w(&j, a, "\"");
+    try sep(&j, a);
+    try fHex(&j, a, "sig_hex", &eff_env_sig);
+    try sep(&j, a);
+    try fStr(&j, a, "signer", "executor");
+    try sep(&j, a);
+    try fHex(&j, a, "signer_pubkey", &executor.sig_pubkey);
+    try sep(&j, a);
+    try fHex(&j, a, "wire_hex", eff_env_wire.items);
+    try sep(&j, a);
+    try fHex(&j, a, "inline_span_origin_anchor", &origin);
+    try sep(&j, a);
+    try fStr(&j, a, "verify", "true");
+    try w(&j, a, "}");
+    try sep(&j, a);
+
+    // claim (unsigned sub-structure; authenticated inside a Utterance envelope, pending F1)
+    try w(&j, a, "\"claim\":{");
+    try fStr(&j, a, "desc", "Claim: agent asserts the deploy succeeded and cites one span. subject == span.resource_id (BE-EVID-03). confidence_q8 = 242, the DirectObservation ceiling; the receiver recomputes min(242, ceiling(strongest matching span)) = 242 (BE-EVID-02). A Claim carries no signature of its own; it is authenticated only inside a signed Utterance envelope (BE-EVID-08). The Utterance vector is deferred to F1 (RED-TEAM-09); this vector fixes the Claim wire layout and field values for the byte-layout cross-check.");
+    try sep(&j, a);
+    try fStr(&j, a, "kind", "claim_body");
+    try sep(&j, a);
+    try fStr(&j, a, "signature", "none (authenticated transitively via the Utterance envelope)");
+    try sep(&j, a);
+    try w(&j, a, "\"fields\":{");
+    try fStr(&j, a, "text", claim_text);
+    try sep(&j, a);
+    try fStr(&j, a, "subject", resource_id);
+    try sep(&j, a);
+    try fU8(&j, a, "confidence_q8", 242);
+    try sep(&j, a);
+    try fStr(&j, a, "confidence_class", "DirectObservation(ceiling 242)");
+    try sep(&j, a);
+    try fU8(&j, a, "span_count", 1);
+    try sep(&j, a);
+    try fHex(&j, a, "span_ids_0", &span_id);
+    try w(&j, a, "}");
+    try sep(&j, a);
+    try fHex(&j, a, "wire_hex", claim_tbs.items);
     try sep(&j, a);
     try fStr(&j, a, "verify", "true");
     try w(&j, a, "}");

@@ -128,6 +128,67 @@ def main() -> int:
     verify_struct("span", st["span"], "executor")
     verify_struct("grant", st["grant"], "approver")
     verify_struct("refusal", st["refusal"], "approver")
+    verify_struct("effect", st["effect"], "executor")
+
+    # ---- 5b. Claim wire-layout cross-check (no independent sig; BE-EVID-08) ----
+    print("[5b] Claim wire layout (unsigned body, authenticated inside a Utterance)")
+    claim = st["claim"]
+    cw = hx(claim["wire_hex"])
+    off = 0
+    text_len = int.from_bytes(cw[off:off + 2], "big"); off += 2
+    text = cw[off:off + text_len]; off += text_len
+    subj_len = int.from_bytes(cw[off:off + 2], "big"); off += 2
+    subject = cw[off:off + subj_len]; off += subj_len
+    conf_q8 = cw[off]; off += 1
+    span_count = cw[off]; off += 1
+    span_ids = [cw[off + i * 16:off + (i + 1) * 16] for i in range(span_count)]
+    off += 16 * span_count
+    cf = claim["fields"]
+    check("claim text", text.decode("utf-8", "replace") == cf["text"], repr(text[:40]))
+    check("claim subject", subject.decode("utf-8", "replace") == cf["subject"], repr(subject[:40]))
+    check("claim confidence_q8", conf_q8 == cf["confidence_q8"], str(conf_q8))
+    check("claim span_count", span_count == cf["span_count"], str(span_count))
+    check("claim span_ids[0]", span_count >= 1 and span_ids[0] == hx(cf["span_ids_0"]))
+    check("claim no trailing bytes", off == len(cw), f"trailing {len(cw) - off} bytes")
+
+    # ---- 5c. Effect envelope body layout + inline span (SPEC 6.4) ----
+    print("[5c] Effect envelope body layout (inline span + output_digest)")
+    eff = st["effect"]
+    ew = hx(eff["wire_hex"])
+    off = 0
+    check("effect env version", ew[off] == 2); off += 1
+    off += 32  # channel_id
+    sender = ew[off:off + 32]; off += 32
+    check("effect sender == executor", sender == hx(eff["fields"]["sender_executor"]))
+    seq = int.from_bytes(ew[off:off + 8], "big"); off += 8
+    check("effect seq", seq == eff["fields"]["seq"], str(seq))
+    pcount = ew[off]; off += 1
+    check("effect parent_count == 1", pcount == 1, str(pcount))
+    off += 32 * pcount  # parents
+    off += 8  # ts
+    check("effect body_type == 4", ew[off] == 4); off += 1
+    body_len = int.from_bytes(ew[off:off + 4], "big"); off += 4
+    body = ew[off:off + body_len]
+    ef = eff["fields"]
+    bo = 0
+    check("effect body intent_id", body[bo:bo + 16] == hx(ef["body_intent_id"])); bo += 16
+    check("effect body grant_id", body[bo:bo + 16] == hx(ef["body_grant_id"])); bo += 16
+    check("effect body ok", body[bo] == ef["body_ok"]); bo += 1
+    exit_code = int.from_bytes(body[bo:bo + 4], "big", signed=True); bo += 4
+    check("effect body exit_code", exit_code == ef["body_exit_code"], str(exit_code))
+    body_span_count = body[bo]; bo += 1
+    check("effect body span_count == 1", body_span_count == ef["body_span_count"])
+    # The inline span must be byte-identical to the standalone span vector.
+    span_wire_bytes = hx(st["span"]["wire_hex"])
+    check("effect inline span == standalone span wire",
+          body[bo:bo + len(span_wire_bytes)] == span_wire_bytes)
+    bo += len(span_wire_bytes)
+    check("effect output_digest", body[bo:bo + 32] == hx(ef["body_output_digest"])); bo += 32
+    check("effect body no trailing bytes", bo == len(body), f"trailing {len(body) - bo} bytes")
+    # Envelope tail: after the body, exactly the 64-byte signature.
+    off += body_len
+    check("effect env sig placement", ew[off:off + 64] == hx(eff["sig_hex"]))
+    check("effect wire fully consumed", off + 64 == len(ew))
 
     # cert is special: signed by CAs over (0x01 || tbs), multiple sigs.
     print("[6] Cert CA signatures")
