@@ -148,29 +148,46 @@ produces findings in the first hour, that is the answer, arrived at cheaply.
 The slice was built once, in Zig. §6 decided Zig ahead of this measurement, so the
 experiment's surviving role was the one §6.2 assigns to it: falsification. The Rust and Go
 repetitions named above were therefore not built, and the numbers below measure the Zig
-implementation only; they carry no comparison against the other candidates.
+implementation only; they carry no comparison against the other candidates. Everything
+validated here is the §8 capability half: the Grant verifier (BE-GRANT-03) and the capability
+type (BE-GRANT-03b/03c). §7 (attestation) has no code in this slice and was not red-teamed, so
+the verdict below confirms the capability design, not the attestation layer.
 
 | Metric | Measured |
 |---|---|
 | Third-party code in the build | **0 lines.** `build.zig.zon` declares `.dependencies = .{}`; all four primitives come from `std.crypto`; nothing vendored. |
 | Clean build, network disabled | **11.0 s** from an empty cache, zero fetch attempts. |
 | Implementation lines | **490** (`parser.zig` 284, `verify.zig` 182, `main.zig` 13, `tests.zig` 11). Fuzz and vector harnesses excluded. |
-| `@ptrCast` (Zig has no `unsafe` blocks) | **2**, both at the capability boundary in `src/verify.zig` (lines 154, 199), the only place a forged `VerifiedGrant` can be rebuilt from a raw pointer. Gated by M8 (`tools/prumo-verify`): code-only `@ptrCast` must be exactly these two and nowhere else, and a negative-compile canary refuses value-construction of the opaque capability. |
+| Pointer-minting builtins (Zig has no `unsafe` blocks) | **2**: one `@ptrCast` at `grantOf` entry and one at `verifyGrant` return, both in `src/verify.zig`, the only place a forged `VerifiedGrant` can be rebuilt from a raw pointer. Zero `@ptrFromInt`. Gated by M8 (`tools/prumo-verify`): the set `{@ptrCast, @ptrFromInt}` (Zig language reference) must total exactly these two and nowhere else; a negative-compile canary refuses value-construction of the opaque capability. |
+| Capability seal (BE-GRANT-03c) | **Keyed Blake2s over the exact grant bytes, recomputed at every access.** `grantOf` re-parses from the sealed bytes and refuses on digest mismatch, so a caller that mutates its own buffer between verification and consumption cannot reach an effect reading stale-approved bytes. |
 | Crashes and OOB reads after 1 h of fuzzing | **0.** 7,300,000,000 inputs (measured loop budget), 59 min 11 s wall, ReleaseSafe: zero panics, zero macOS crash reports. The earlier "21,900,000,000 parser calls" figure was a derived product (inputs times three parsers), not a measurement, and is dropped here. |
-| Branch coverage (SPEC §11.6) | **11/11 enumerated parser branches reached** over a bounded run of 4,000,000 inputs (12,000,000 parser calls), zero unreached. Measured by hand-instrumented counters (`src/coverage.zig`), reproduced with `zig build coverage -Dcoverage -Dfuzz-budget=4000000`. Native toolchain coverage has no script-readable output on this toolchain, so manual instrumentation is the measurement, not a proxy (residual in `THREAT-MODEL.md` §4.6). Corpus: 3 seeds (envelope, grant, intent from `test/vectors.json`), 4 mutation operators (bit flip, byte overwrite, truncate, saturate), 40% mutated-seed / 60% fully-random, 4096-byte input cap. |
-| Mutation kill on the Grant verifier | **9/9 check-correctness mutants killed** (100% of the modeled set). `tools/mutation-test.py` v2: two WRONG-CONSTANT, three WRONG-FIELD, three WRONG-OPERATOR, one WRONG-LOGIC, full test suite rebuilt per mutant. Honest denominator: this covers 7 of the 12 BE-GRANT-03 modeled checks (c0, c1, c2, c5, c9, c10, c11); the other 5 are check-absence checks deferred to a later slice. |
+| Exit-point coverage (SPEC §11.6) | **11/11 enumerated parser exit points reached** over a bounded run of 4,000,000 inputs (12,000,000 parser calls), zero unreached. Measured by hand-instrumented counters (`src/coverage.zig`), reproduced with `zig build coverage -Dcoverage -Dfuzz-budget=4000000`. Native toolchain coverage has no script-readable output on this toolchain, so manual instrumentation is the measurement, not a proxy (residual in `THREAT-MODEL.md` §4.6). Corpus: 3 seeds (envelope, grant, intent from `test/vectors.json`), 4 mutation operators (bit flip, byte overwrite, truncate, saturate), 40% mutated-seed / 60% fully-random, 4096-byte input cap. |
+| Mutation kill on the Grant verifier | **11/11 mutants killed**, covering 7/7 modelled BE-GRANT-03 checks plus the BE-GRANT-03c seal. `tools/mutation-test.py` v3: the modelled-check set is derived from `SPEC.md` at run time (the enumerated 0-11 list and the conformance sentence), not stated by the harness. Two WRONG-CONSTANT, three WRONG-FIELD, three WRONG-OPERATOR, one WRONG-LOGIC, and two seal mutants (check-absence, tamper-passes); full test suite rebuilt per mutant. The 5 unmodelled checks (3, 4, 6, 7, 8) need a certificate store and a pending-intent table the slice defers. |
 | Wall-clock time to write it | **One session** (~3 h, evening of 2026-08-05): vectors, parser, verifier, harnesses, this measurement. |
 
 **Verdict: the measurement confirms §6, with one residual named below.** The §6.2 trigger for
 reopening was parser findings in the first hour of fuzzing; the hour produced none, under ReleaseSafe
 bounds checking, against vector-seeded mutations and raw random bytes. The parser is 284 lines,
-readable in one sitting, allocates nothing (BE-WIRE-01, O3), and the Grant verifier reached 9/9
-mutant kill on the modeled checks with plain tooling. The coverage gate (SPEC §11.6) now reports
-11/11 branches and the corpus, where the first merge reported neither. **Residual:** the coverage is
+readable in one sitting, allocates nothing (BE-WIRE-01, O3), and the Grant verifier reached 11/11
+mutant kill over the modelled checks and the seal with plain tooling. The coverage gate (SPEC §11.6) now reports
+11/11 exit points and the corpus, where the first merge reported neither. **Residual:** the coverage is
 hand-instrumented, not native; that is weaker than a compiler-backed edge map, and by how much is
 itself unknown. This residual is stated in `THREAT-MODEL.md` §4.6 and tracked in a follow-up issue
 for re-run on the first stable toolchain pin that exposes native coverage. No §6.2 condition fired.
 The decision stands.
+
+**Costs of Zig this slice surfaced (beyond §2.1's three).** The capability type exposed two
+language-level deficits the responsible-build list did not name. Cost one: Zig structs have no
+field privacy (probed empirically: external code can both initialize and read any field), so the
+unforgeability Rust gets from a private field is paid for here with an `opaque {}` type behind a
+pointer and M8's confinement of the two pointer-minting builtins. Cost two: Zig has no aliasing
+discipline, so the caller owns both the parsed struct and the buffer its fields alias, and a write
+to either would defeat every check with no unsafe builtin at all. Rust makes that bug unwriteable;
+this slice pays for it with a runtime check at every access, a keyed digest recomputed over the
+sealed bytes in `grantOf` (BE-GRANT-03c). Prevention becomes detection; bypassing the detection
+requires bypassing the accessor, which M8 makes visible. These are not optional extras: they are
+the price of a capability type in a language without field privacy or aliasing control, and they
+are why §6.1's obligations are binding.
 
 ---
 
