@@ -208,11 +208,13 @@ unauthenticated input: the Noise handshake messages and the cookie reply (§4). 
 and contain no variable-length field.** Every other structure in this specification — certificates,
 lookups, envelopes, control messages, sync messages — MUST be parsed only inside an established,
 bound session (BE-TR-01). Adding a third structure to the pre-authentication list is a protocol
-version change, not an implementation decision. The fixed-size data and fragment packet headers are
-read before session lookup because a packet cannot be routed until its receiver index is known; they
-carry no parseable payload outside an established session, and together with the two structures above
-they are the only bytes touched before authentication. Any other byte touched before authentication
-is a protocol version change, exactly as adding a third structure to the inventory would be (D-031).
+version change, not an implementation decision. The fixed-size data packet header is read before
+session lookup because a packet cannot be routed until its receiver index is known; it carries no
+parseable payload outside an established session, and together with the two structures above it is
+the only byte touched before authentication. The fragment header is not among them: fragments are
+session AEAD plaintext (§4.5), so the fragment header is parsed only after decryption, inside a
+bound session. Any other byte touched before authentication is a protocol version change, exactly
+as adding a third structure to the inventory would be (D-031, corrected by D-032).
 
 *This is what the correctness fixes cost and why the cost has to be paid back here. Adding the CA
 quorum turned `Cert` from a fixed-size record into one carrying a variable-length signature list;
