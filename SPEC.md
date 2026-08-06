@@ -343,7 +343,13 @@ have `≤ 90 days`.
 **BE-REV-02** — A node holding a valid CA-signed revocation for a `sig_pubkey` MUST refuse all
 subsequent envelopes from it, MUST tear down existing sessions with it, and MUST persist the
 revocation across restart. Failure to *receive* a revocation is not preventable at this layer; it
-is bounded by BE-REV-01. This is stated as a limitation, not as a defence.
+is bounded by BE-REV-01. This is stated as a limitation, not as a defence. A *claim* of
+non-receipt is a different matter and is not evidence: any node that processed a revocation can
+assert it did not, buying itself an extra window, so non-receipt claims are settled by the node's
+causal position in the ledger (BE-HIST-03), not by the node's own report. *(Empirical basis:
+INC-001, Bolina 2026-08-06: a party claimed non-receipt of input it demonstrably processed. The
+claim-shape generalises to revocation, and BE-HIST-03 was doing the work but was not pointed at
+it.)*
 
 ---
 
@@ -1128,7 +1134,21 @@ last of the five had an enforcing rule. This is the invariant mutation testing m
 (§11.2).*
 
 *Rust's guarantee is safe code cannot forge; Zig's honest translation is code that passes the gates
-cannot forge.*
+cannot forge.* The property has two halves: cannot construct (this rule); cannot consume a mutated
+grant undetected through the only accessor (BE-GRANT-03c).
+
+**BE-GRANT-03c (seal by content, capability lifetime).** A capability MUST be sealed by content
+at verification time: a keyed digest over the exact grant bytes the routine verified, the key
+generated at startup, module-private, never exported. Every accessor MUST recompute the digest
+over the bytes it is about to read, MUST refuse on mismatch, and MUST obtain those bytes by
+re-parsing the sealed region, never by returning caller-owned parsed state. *Holding a capability
+proves the checks passed at time T over specific bytes. Without the seal, consumption at T+n
+reads state that may have changed since: the caller owns the parsed struct and the buffer its
+fields alias, and a write to either defeats every check with no unsafe builtin at all. Verify A,
+consume B: the action_digest lesson one layer down. Rust's borrow checker makes this bug
+unwriteable by accident; a language without aliasing discipline pays for it with a runtime check
+at every access (LANGUAGE.md §4.1, cost two). Prevention becomes detection, and bypassing the
+detection requires bypassing the accessor itself, which §11.2 gate M8 makes visible.*
 
 **BE-GRANT-03a (frozen during verification)** — From the moment the verification routine begins
 for an intent until it either refuses or the intent enters `EXECUTING`, the intent's lifecycle
