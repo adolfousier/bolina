@@ -222,35 +222,43 @@ else
     FAILS=$((FAILS + 1))
 fi
 
-# ---- M8: capability forgery wall, @ptrCast confined to verify.zig + negative compile canary ----
-# VerifiedGrant is an opaque type; the only construction path is @ptrCast, so every
-# code-only @ptrCast must live in src/verify.zig at the two named boundary functions
-# (grantOf, verifyGrant return). Comments are stripped before counting so prose cannot
-# mask a cast. The negative compile canary (src/negative_capability.zig) must refuse to
-# compile: the build step wraps it and expects the compiler to exit 1.
-PTRCAST_HITS="$(grep -rn '@ptrCast' src/ 2>/dev/null | sed 's|//.*||' | grep '@ptrCast' || true)"
-PTRCAST_COUNT="$(printf '%s\n' "$PTRCAST_HITS" | grep -c '@ptrCast' || true)"
+# ---- M8: capability forgery wall, pointer-minting builtins confined to verify.zig + negative compile canary ----
+# VerifiedGrant is an opaque type; the only way to obtain a value of it is to mint a
+# pointer to it with a builtin and dereference, so every code-only pointer-minting
+# builtin must live in src/verify.zig at the two named boundary functions (grantOf
+# entry, verifyGrant return). The pointer-minting builtin set is {@ptrCast, @ptrFromInt}
+# (Zig language reference: @ptrCast reinterprets an existing pointer's type; @ptrFromInt
+# mints a pointer from a raw address). @bitCast is excluded because the compiler refuses
+# a bit-cast whose target is a pointer type ("cannot @bitCast to ...; use @ptrFromInt"),
+# confirmed by compile probe. The count is 2 because SPEC.md BE-GRANT-03b states "two
+# boundary functions"; the literal mirrors that external count. Comments are stripped
+# before counting so prose cannot mask a cast. The negative compile canary
+# (src/negative_capability.zig) must refuse to compile: the build step wraps it and
+# expects the compiler to exit 1.
+FORGE_PATTERN='@ptrCast|@ptrFromInt'
+FORGE_HITS="$(grep -rnE "$FORGE_PATTERN" src/ 2>/dev/null | sed 's|//.*||' | grep -E "$FORGE_PATTERN" || true)"
+FORGE_COUNT="$(printf '%s\n' "$FORGE_HITS" | grep -cE "$FORGE_PATTERN" || true)"
 M8_PROBLEMS=""
-PTRCAST_OK="yes"
-if [ -n "$PTRCAST_HITS" ]; then
-    printf '%s\n' "$PTRCAST_HITS" | while IFS= read -r hit; do
-        echo "     @ptrCast at $hit"
+FORGE_OK="yes"
+if [ -n "$FORGE_HITS" ]; then
+    printf '%s\n' "$FORGE_HITS" | while IFS= read -r hit; do
+        echo "     pointer-mint builtin at $hit"
     done
-    if printf '%s\n' "$PTRCAST_HITS" | grep -v '^src/verify.zig:' | grep -q '@ptrCast'; then
-        PTRCAST_OK="no"
-        M8_PROBLEMS="$M8_PROBLEMS a code-only @ptrCast exists outside src/verify.zig;"
+    if printf '%s\n' "$FORGE_HITS" | grep -vE '^src/verify\.zig:' | grep -qE "$FORGE_PATTERN"; then
+        FORGE_OK="no"
+        M8_PROBLEMS="$M8_PROBLEMS a code-only pointer-minting builtin exists outside src/verify.zig;"
     fi
 fi
-if [ "$PTRCAST_COUNT" -ne 2 ]; then
-    PTRCAST_OK="no"
-    M8_PROBLEMS="$M8_PROBLEMS expected exactly 2 code-only @ptrCast, found $PTRCAST_COUNT;"
+if [ "$FORGE_COUNT" -ne 2 ]; then
+    FORGE_OK="no"
+    M8_PROBLEMS="$M8_PROBLEMS expected exactly 2 code-only pointer-minting builtins (@ptrCast|@ptrFromInt), found $FORGE_COUNT;"
 fi
 NEG_OUT="$("$ZIG" build negative 2>&1)"; NEG_RC=$?
 if [ "$NEG_RC" -ne 0 ]; then
     M8_PROBLEMS="$M8_PROBLEMS negative compile canary did not refuse forgery (zig build negative rc=$NEG_RC: $(printf '%s' "$NEG_OUT" | tail -1));"
 fi
-if [ "$PTRCAST_OK" = "yes" ] && [ -z "$M8_PROBLEMS" ]; then
-    row M8 PASS "2 code-only @ptrCast, both in src/verify.zig; negative compile canary refuses forgery (BE-GRANT-03b, SPEC.md section 8.2)"
+if [ "$FORGE_OK" = "yes" ] && [ -z "$M8_PROBLEMS" ]; then
+    row M8 PASS "$FORGE_COUNT code-only pointer-minting builtins (@ptrCast|@ptrFromInt), both in src/verify.zig; negative compile canary refuses forgery (BE-GRANT-03b, SPEC.md section 8.2)"
 else
     row M8 FAIL "${M8_PROBLEMS# } (BE-GRANT-03b, SPEC.md section 8.2)"
     FAILS=$((FAILS + 1))
