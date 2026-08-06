@@ -488,3 +488,13 @@ BE-EVID-16 is added to SPEC section 7.4 so the test binds in the M1 bijection (b
 Pre-close checks: (1) read against other sections: R3 lives in the quality section and section 11.2 defines the mutation metric; no other guarantee is touched, the record is pure attribution; (2) who picked the denominator: the resolution-record key is detected from the R3 sentence at run time by evidence_properties_from_spec, and the scope-lie check aborts on any mutant key a SPEC marker does not list; (3) does the thing need to exist: all three DROP-COUNT mutants are genuine kills by BE_EVID_16 count assertions, so the key is not theatrical.
 
 Changes no wire byte and no guarantee; adds an attribution record to the verdict and a silent-drop mutation class. Reversible (restore the bare ClaimState union and drop the three mutants). What would reopen it: a reviewer wanting the record exposed on the wire for a debugging surface (out of scope here — the record is a receiver-internal verdict summary), or a richer record (e.g. per-span failure causes beyond counts).
+
+## D-029 — 2026-08-06 — additive conformance obligations are spec changes; flag before commit, not after (round-5 item 2)
+
+Daniel's round-5 item 2: D-028 added BE-EVID-16 to SPEC section 7.4, a new MUST. The report flagged it as additive and guarantee-preserving, but flagged it AFTER the commit. Adding a conformance obligation is a spec change even when it strengthens nothing existing: it creates an obligation future implementations must satisfy and the M1 binding must bind, and the moment it lands is the moment it needed review, not a round later.
+
+Decision: every SPEC.md edit that adds, removes, or rewords a MUST/MUST NOT gets flagged BEFORE the commit, with the proposed normative text, whether or not it touches an existing guarantee. "Does not change a declared guarantee" decides whether the work may proceed without stopping (reversible spec fixes that change no guarantee are free to decide under the autonomous mode), not whether the change gets seen. BE-EVID-16 stands with no rework (Daniel: "No rework on this one"); the rule is prospective. CONTRIBUTING.md section 4 carries the rule.
+
+Pre-close checks: (1) read against other sections: process only; it interacts with section 11's binding in that a new MUST joins the declared set M1 counts, which is exactly why a reviewer sees it first; (2) who picked the denominator: n/a, no gate changes; (3) does the thing need to exist: BE-EVID-16 is the existence proof of the failure mode, an additive MUST reviewed after the fact.
+
+Changes no wire byte and no guarantee; process only. Reversible (delete the rule). What would reopen it: a reviewer deciding additive MUSTs do not need pre-flagging.
