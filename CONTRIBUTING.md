@@ -127,6 +127,14 @@ survive a symbolic test, then killing it once the assertions went literal.
 
 ## 4. Changing the specification
 
+**Every normative change is a spec change, including additive ones.** A new `MUST`/`MUST NOT`
+creates an obligation even when it strengthens nothing existing: future implementations must
+satisfy it and the M1 binding must bind it, so a reviewer sees it *before* the commit, not in the
+report after. *Incident: BE-EVID-16 (resolution-record attribution, D-028) was added and flagged
+only in the post-commit report; the fix stood, but the review happened a commit late (D-029).*
+"Changes no declared guarantee" decides whether the work may proceed without stopping; it does not
+decide whether the change gets seen.
+
 1. Say what is wrong with the current text, concretely. "Unclear" is not a defect report; "these
    two rules contradict each other and here is the sequence that breaks" is.
 2. Write the fix as normative text, in the existing style: `MUST`/`MUST NOT`, a `BE-*` where a rule
