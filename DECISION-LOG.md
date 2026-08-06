@@ -125,3 +125,15 @@ to an Intent, Grant, Utterance, Control, or Refusal envelope contradicts its own
 before any trust question is asked. Leaving this case undefined would let a member treat such a span
 as supported by default; the only safe reading is fail-closed. This pins the existing structural
 declaration from §7.1, it does not add a new guarantee. Recorded in RED-TEAM-09.md F7.
+
+## D-013 — 2026-08-06 — Origin computation is underspecified (open question, not a stop)
+
+Question: §7.1 defines a span's `origin` as the hash of the Effect envelope "in which this span was
+published". The span travels inside that Effect body, which is inside the envelope, so a literal
+reading makes `origin = hash(envelope containing the span's own origin bytes)` circular. The SPEC
+does not state whether the hash excludes the span's own `origin` field, or whether `origin` instead
+points at a prior envelope. Decision for now: in the vectors, `origin` is a deterministic opaque
+anchor (`blake2s("bolina/example-effect-envelope")`), matching the pre-existing standalone span
+vector that shipped in round 3. This does not change the wire format (origin is still a 32-byte
+field) or any guarantee; it leaves the executor's real construction protocol as an open question for
+Daniel. Not a stop: nothing irreversible and no promise changes. Flagged in RED-TEAM-09.md (open).
