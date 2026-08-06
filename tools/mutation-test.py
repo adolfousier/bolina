@@ -1,24 +1,33 @@
 #!/usr/bin/env python3
 # mutation-test.py
 #
-# Mutation harness v5 for the Grant verifier AND the attestation layer
-# (LANGUAGE.md section 4 metric; SPEC.md section 11.2). cargo-mutants does not
-# exist for Zig, so this applies one mutant at a time to a source file, rebuilds,
-# runs the full test suite, and records whether the suite kills it.
+# Mutation harness v6 for the Grant verifier, the attestation layer, AND the
+# transport DoS gate (LANGUAGE.md section 4 metric; SPEC.md section 11.2).
+# cargo-mutants does not exist for Zig, so this applies one mutant at a time to
+# a source file, rebuilds, runs the full test suite, and records whether the
+# suite kills it.
 #
-# v5 (round 4, section 7 lands): the attestation layer now has code
-# (src/evidence.zig, src/dag.zig), so it gets its own mutant class alongside
-# the Grant verifier. The check set for BOTH domains is DERIVED from SPEC.md at
-# run time, never stated by this script (the denominator law, CONTRIBUTING.md):
+# v6 (round 4, transport lands): the mac1/cookie DoS gate now has code
+# (src/mac.zig), so it gets its own mutant class alongside Grant and Evidence.
+# The check set for ALL THREE domains is DERIVED from SPEC.md at run time,
+# never stated by this script (the denominator law, CONTRIBUTING.md):
 #   - Grant domain: the modelled subset of BE-GRANT-03 (parsed from SPEC's
 #     conformance sentence) plus the BE-GRANT-03b callback property.
 #   - Evidence domain: the section-7 properties the slice implements, each
 #     detected from a table or a BE-EVID marker in section 7 (ceiling integers,
 #     the method_id->class table, BE-EVID-02/03/05/05a/09/09b).
+#   - Transport domain: the section-4 properties the slice implements, each
+#     detected from a bold BE-TR marker. Only properties whose tests assert the
+#     exact correct value with HARDCODED expectations are keys (the mac1 KAT
+#     feeds mac1-label; the 120s boundary tests feed cookie-rotate). Constants
+#     referenced SYMBOLICALLY in their own tests (WINDOW_BITS, MAX_MESSAGE,
+#     MEMORY_PER_PEER) are deliberately excluded: they shift source and
+#     reference together, survive their mutant, and would break the gate.
 # A killed mutant must cover every modelled grant check, the callback property,
-# AND every detected evidence property; a mutant attacking a property SPEC does
-# not list is a scope lie and aborts. Dropping a rule from SPEC removes its key
-# from the denominator, so hiding a gap means editing the SPEC line it traces to.
+# AND every detected evidence and transport property; a mutant attacking a
+# property SPEC does not list is a scope lie and aborts. Dropping a rule from
+# SPEC removes its key from the denominator, so hiding a gap means editing the
+# SPEC line it traces to.
 #
 # v4 (kept) removed the BE-GRANT-03c seal mutants when the storable capability
 # was deleted, replacing them with the CALLBACK class proving the effect runs
@@ -49,6 +58,7 @@ TARGETS = {
     "verify.zig": SRC / "verify.zig",
     "evidence.zig": SRC / "evidence.zig",
     "dag.zig": SRC / "dag.zig",
+    "mac.zig": SRC / "mac.zig",
 }
 ORIGINALS = {name: path.read_text() for name, path in TARGETS.items()}
 
@@ -113,6 +123,38 @@ def evidence_properties_from_spec():
     props = set()
     for key, _what, pattern in EVIDENCE_MARKERS:
         if re.search(pattern, text, re.DOTALL):
+            props.add(key)
+    return props
+
+
+# --- transport denominator, derived from SPEC.md section 4 -----------------
+#
+# Each property is DETECTED from a bold BE-TR marker in section 4. Only
+# properties whose test assertions use HARDCODED expectations (KATs and literal
+# boundaries) are eligible as keys: a mutant is killed only by a test asserting
+# the exact correct value. Constants referenced SYMBOLICALLY in their own tests
+# (WINDOW_BITS in replay.zig, MAX_MESSAGE/MEMORY_PER_PEER in reassembly.zig)
+# shift source and reference together and survive their mutant, so they are
+# deliberately NOT keys here. Adding one would create a survivor and break the
+# gate, which is exactly the failure the denominator law exists to prevent.
+
+TRANSPORT_MARKERS = [
+    # (denominator key, what SPEC says, marker text that must be present)
+    ("mac1-label", "BE-TR-04 mac1 keying (the derivation label feeds the KAT)",
+     r"\*\*BE-TR-04"),
+    ("cookie-rotate", "BE-TR-04a cookie secret rotation (the 120s boundary)",
+     r"\*\*BE-TR-04a"),
+]
+
+
+def transport_properties_from_spec():
+    """The set of section-4 transport properties the slice must prove, each
+    detected from a bold BE-TR marker. Removing a rule from SPEC removes its
+    key here, so the gate cannot hide an untested property without editing SPEC."""
+    text = SPEC.read_text()
+    props = set()
+    for key, _what, pattern in TRANSPORT_MARKERS:
+        if re.search(pattern, text):
             props.add(key)
     return props
 
@@ -230,6 +272,23 @@ MUTANTS = [
      "non-Effect origin treated as unresolved (continue -> flag)",
      "                continue; // BE-EVID-09b: drops out of both states",
      "                has_unresolved = true; // MUTANT"),
+
+    # --- transport domain: the mac1/cookie DoS gate (src/mac.zig)
+    # BE-TR-04 mac1 keying: the derivation label feeds the unkeyed->keyed
+    # BLAKE2s chain. A wrong label yields a wrong mac1 digest. The BE_TR_04 KAT
+    # in mac_test.zig asserts the exact expected_mac1 bytes from an independent
+    # Python hashlib.blake2s run, so a relabelled key kills it on mismatch.
+    ("transport", "mac.zig", "WRONG-CONSTANT", "mac1-label",
+     "mac1 derivation label changed (bolina-mac1-v2 -> v3)",
+     'pub const MAC1_LABEL: []const u8 = "bolina-mac1-v2";',
+     'pub const MAC1_LABEL: []const u8 = "bolina-mac1-v3"; // MUTANT'),
+    # BE-TR-04a cookie rotation: the 120s boundary. Bumping it one ms makes
+    # needsRotate(121_000) return false (the test expects true) while leaving
+    # needsRotate(120_999) false; the boundary tests in mac_test.zig kill it.
+    ("transport", "mac.zig", "WRONG-CONSTANT", "cookie-rotate",
+     "cookie rotation interval (120000 -> 120001) shifts the boundary",
+     "pub const COOKIE_ROTATE_MS: u64 = 120_000;",
+     "pub const COOKIE_ROTATE_MS: u64 = 120_001; // MUTANT"),
 ]
 
 
@@ -253,12 +312,16 @@ def main():
     evidence_props = evidence_properties_from_spec()
     if not evidence_props:
         sys.exit("FATAL: no evidence properties detected in section 7 of SPEC")
+    transport_props = transport_properties_from_spec()
+    if not transport_props:
+        sys.exit("FATAL: no transport properties detected in section 4 of SPEC")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
     print(f"  grant modelled by this slice:  {sorted(modelled)} ({len(modelled)})")
     print(f"  BE-GRANT-03b callback:         call-boundary property modelled")
     print(f"  section-7 evidence properties: {sorted(evidence_props)} ({len(evidence_props)})")
+    print(f"  section-4 transport properties: {sorted(transport_props)} ({len(transport_props)})")
     print()
 
     # 2. scope check: no mutant may attack a key its domain's SPEC does not list
@@ -267,10 +330,14 @@ def main():
             if key != "03b" and key not in modelled:
                 sys.exit(f"FATAL: grant mutant '{name}' attacks check {key}, which "
                          "SPEC does not list as modelled (scope lie)")
-        else:  # evidence
+        elif domain == "evidence":
             if key not in evidence_props:
                 sys.exit(f"FATAL: evidence mutant '{name}' attacks '{key}', which "
                          "section 7 of SPEC does not declare (scope lie)")
+        else:  # transport
+            if key not in transport_props:
+                sys.exit(f"FATAL: transport mutant '{name}' attacks '{key}', which "
+                         "section 4 of SPEC does not declare (scope lie)")
 
     # 3. run mutants
     results = []
@@ -310,22 +377,31 @@ def main():
     e_cov = {r["key"] for r in e_run if r["killed"]}
     print(f"evidence: {len(e_cov)}/{len(evidence_props)} section-7 properties "
           f"covered by killed mutants")
+    t_run, t_surv, t_uncov, _ = gate_domain("transport", transport_props)
+    t_cov = {r["key"] for r in t_run if r["killed"]}
+    print(f"transport: {len(t_cov)}/{len(transport_props)} section-4 properties "
+          f"covered by killed mutants")
     total_run = [r for r in results if not r["skipped"]]
     total_killed = sum(1 for r in total_run if r["killed"])
     print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
-          f"{len(g_surv) + len(e_surv)} survived")
+          f"{len(g_surv) + len(e_surv) + len(t_surv)} survived")
     if g_surv:
         print(f"  grant SURVIVORS: {g_surv}")
     if e_surv:
         print(f"  evidence SURVIVORS: {e_surv}")
+    if t_surv:
+        print(f"  transport SURVIVORS: {t_surv}")
     if g_uncov:
         print(f"  UNCOVERED grant checks: {g_uncov}")
     if e_uncov:
         print(f"  UNCOVERED evidence properties: {e_uncov}")
+    if t_uncov:
+        print(f"  UNCOVERED transport properties: {t_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
-    ok = (not g_surv) and (not e_surv) and (not g_uncov) and (not e_uncov) and g_cb
+    ok = ((not g_surv) and (not e_surv) and (not t_surv) and (not g_uncov)
+          and (not e_uncov) and (not t_uncov) and g_cb)
     return 0 if ok else 1
 
 
