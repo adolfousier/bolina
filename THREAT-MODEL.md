@@ -44,6 +44,7 @@ observed ways**:
 | Misattributes cause and asserts the misattribution confidently | Orbit incident #4 — "must be cache" for a template it had itself overwritten |
 | Acts on injected instructions from content it processes | Structural: any agent reading untrusted input |
 | Believes and repeats a poisoned memory | Orbit, 2026-07-02 — sibling sessions produced a false "security incident" |
+| Asserts that input it demonstrably processed was never received | Bolina, 2026-08-06, an agent requested retransmission of a section it had answered in the same message (INC-001) |
 
 Note the distinction from a classical insider: Adversary M does **not need intent**. Every entry
 above happened without deception being attempted. A threat model that only defends against
