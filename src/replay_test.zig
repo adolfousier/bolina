@@ -40,7 +40,7 @@ test "reordered packets inside the window are accepted" {
 
 test "a counter below the window is rejected" {
     var rw = replay.ReplayWindow.init();
-    _ = rw.check(replay.WINDOW_BITS + 10); // jump the head far ahead
+    _ = rw.check(1034); // 1024 + 10: jump the head far ahead (literal, not WINDOW_BITS)
     // The first seed is now 1024 below the head: outside the window.
     try testing.expect(!rw.check(10));
 }
@@ -63,11 +63,11 @@ test "a jump beyond the window width clears the bitmap entirely" {
     var rw = replay.ReplayWindow.init();
     _ = rw.check(1);
     _ = rw.check(2);
-    _ = rw.check(replay.WINDOW_BITS + 5); // gap wider than the window
+    _ = rw.check(1029); // 1024 + 5: gap wider than the window (literal)
     // Everything before is now below the window and forgotten.
     try testing.expect(!rw.check(1));
     try testing.expect(!rw.check(2));
-    try testing.expect(rw.check(replay.WINDOW_BITS + 4)); // in the fresh window
+    try testing.expect(rw.check(1028)); // 1024 + 4: in the fresh window (literal)
 }
 
 test "counter 0 is a legal first counter, not a sentinel" {
@@ -84,18 +84,18 @@ test "scrambled distinct counters within one window are all accepted then all re
     // order; then re-send the same set and every one must be a replay.
     var accepted: usize = 0;
     var i: u64 = 0;
-    while (i < replay.WINDOW_BITS / 2) : (i += 1) {
+    while (i < 512) : (i += 1) { // 1024 / 2 distinct offsets (literal)
         // Scatter offsets with a stride coprime to the window so order is scrambled.
-        const off = (i * 7) % replay.WINDOW_BITS;
+        const off = (i * 7) % 1024; // mod the declared window width (literal)
         if (rw.check(base + off)) accepted += 1;
     }
-    try testing.expectEqual(replay.WINDOW_BITS / 2, accepted); // all distinct -> all accepted
+    try testing.expectEqual(@as(usize, 512), accepted); // all distinct -> all accepted
 
     i = 0;
     var rejected: usize = 0;
-    while (i < replay.WINDOW_BITS / 2) : (i += 1) {
-        const off = (i * 7) % replay.WINDOW_BITS;
+    while (i < 512) : (i += 1) { // 1024 / 2 distinct offsets (literal)
+        const off = (i * 7) % 1024; // mod the declared window width (literal)
         if (!rw.check(base + off)) rejected += 1;
     }
-    try testing.expectEqual(replay.WINDOW_BITS / 2, rejected); // all now replays
+    try testing.expectEqual(@as(usize, 512), rejected); // all now replays
 }

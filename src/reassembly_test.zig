@@ -75,11 +75,11 @@ test "exceeding the per-peer memory budget drops the message, not the session" {
     var pr = ras.PeerReassembler(16, 16).init();
     var m: u64 = 0;
     while (m < 8) : (m += 1) {
-        try testing.expectEqual(ras.PeerEvent.partial, pr.ingest(1_000, m, 0, 2, ras.MAX_MESSAGE));
+        try testing.expectEqual(ras.PeerEvent.partial, pr.ingest(1_000, m, 0, 2, 1048576)); // 1 MiB as a literal, never the module constant under test
     }
-    try testing.expectEqual(ras.MEMORY_PER_PEER, pr.bytesInUse()); // exactly 8 MiB
+    try testing.expectEqual(@as(usize, 8388608), pr.bytesInUse()); // exactly 8 MiB as a literal
     // A 9th context's fragment would push the peer past 8 MiB: drop the message.
-    try testing.expectEqual(ras.PeerEvent.message_dropped, pr.ingest(1_000, 8, 0, 2, ras.MAX_MESSAGE));
+    try testing.expectEqual(ras.PeerEvent.message_dropped, pr.ingest(1_000, 8, 0, 2, 1048576)); // 1 MiB as a literal
     // The 8 existing contexts survive: the session is alive.
     try testing.expectEqual(@as(u8, 8), pr.activeContexts());
 }
