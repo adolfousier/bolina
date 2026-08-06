@@ -14,4 +14,5 @@ comptime {
     _ = @import("mac_test.zig");
     _ = @import("replay_test.zig");
     _ = @import("reassembly_test.zig");
+    _ = @import("noise_test.zig");
 }
