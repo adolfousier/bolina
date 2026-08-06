@@ -7,6 +7,13 @@
 # a source file, rebuilds, runs the full test suite, and records whether the
 # suite kills it.
 #
+# v7 (round-4 review): the transport domain keys ALL FOUR section-4 markers,
+# not just the two the symbolic tests could kill. D-026 excluded WINDOW_BITS
+# and MAX_MESSAGE because their tests referenced the constant under test and so
+# could never kill a mutant on it; the fix is to stop writing tests that way
+# (CONTRIBUTING.md: a test MUST NOT reference the constant it verifies), key
+# the properties anyway, and let the survivors show what the symbolic tests
+# were hiding. The survivors are the finding.
 # v6 (round 4, transport lands): the mac1/cookie DoS gate now has code
 # (src/mac.zig), so it gets its own mutant class alongside Grant and Evidence.
 # The check set for ALL THREE domains is DERIVED from SPEC.md at run time,
@@ -16,13 +23,13 @@
 #   - Evidence domain: the section-7 properties the slice implements, each
 #     detected from a table or a BE-EVID marker in section 7 (ceiling integers,
 #     the method_id->class table, BE-EVID-02/03/05/05a/09/09b).
-#   - Transport domain: the section-4 properties the slice implements, each
-#     detected from a bold BE-TR marker. Only properties whose tests assert the
-#     exact correct value with HARDCODED expectations are keys (the mac1 KAT
-#     feeds mac1-label; the 120s boundary tests feed cookie-rotate). Constants
-#     referenced SYMBOLICALLY in their own tests (WINDOW_BITS, MAX_MESSAGE,
-#     MEMORY_PER_PEER) are deliberately excluded: they shift source and
-#     reference together, survive their mutant, and would break the gate.
+#   - Transport domain: the section-4 properties the slice implements, one key
+#     per bold BE-TR marker (mac1-label, cookie-rotate, window-bits,
+#     max-message). All four are keyed regardless of whether the current tests
+#     can kill a mutant on them: max-message is killable (its test cross-checks
+#     a separate constant), window-bits is NOT yet killable (its test walks the
+#     constant symbolically), and that survivor is the finding, not a gap to
+#     route the denominator around.
 # A killed mutant must cover every modelled grant check, the callback property,
 # AND every detected evidence and transport property; a mutant attacking a
 # property SPEC does not list is a scope lie and aborts. Dropping a rule from
@@ -59,6 +66,8 @@ TARGETS = {
     "evidence.zig": SRC / "evidence.zig",
     "dag.zig": SRC / "dag.zig",
     "mac.zig": SRC / "mac.zig",
+    "replay.zig": SRC / "replay.zig",
+    "reassembly.zig": SRC / "reassembly.zig",
 }
 ORIGINALS = {name: path.read_text() for name, path in TARGETS.items()}
 
@@ -129,14 +138,18 @@ def evidence_properties_from_spec():
 
 # --- transport denominator, derived from SPEC.md section 4 -----------------
 #
-# Each property is DETECTED from a bold BE-TR marker in section 4. Only
-# properties whose test assertions use HARDCODED expectations (KATs and literal
-# boundaries) are eligible as keys: a mutant is killed only by a test asserting
-# the exact correct value. Constants referenced SYMBOLICALLY in their own tests
-# (WINDOW_BITS in replay.zig, MAX_MESSAGE/MEMORY_PER_PEER in reassembly.zig)
-# shift source and reference together and survive their mutant, so they are
-# deliberately NOT keys here. Adding one would create a survivor and break the
-# gate, which is exactly the failure the denominator law exists to prevent.
+# Each property is DETECTED from a bold BE-TR marker in section 4, one key per
+# marker. D-026 keyed only the markers whose tests could kill a mutant on the
+# constant. D-027 reverses that: key all four markers regardless. A test that
+# references the constant under test (replay_test.zig walks replay.WINDOW_BITS)
+# scales with the mutant and cannot kill it, so the window-bits mutant SURVIVES
+# by construction. That survivor IS the finding: it shows the symbolic test was
+# hiding an unverified property. The fix is to stop writing tests that way
+# (CONTRIBUTING.md: a test MUST NOT reference the constant it verifies) and
+# assert literal values instead, done in the following commit. max-message is
+# already killable because reassembly_test.zig cross-checks a SEPARATE constant
+# (MEMORY_PER_PEER) against bytesInUse(), so halving MAX_MESSAGE breaks the
+# cross-check. A survivor is a finding, not a gate failure to route around.
 
 TRANSPORT_MARKERS = [
     # (denominator key, what SPEC says, marker text that must be present)
@@ -144,6 +157,10 @@ TRANSPORT_MARKERS = [
      r"\*\*BE-TR-04"),
     ("cookie-rotate", "BE-TR-04a cookie secret rotation (the 120s boundary)",
      r"\*\*BE-TR-04a"),
+    ("window-bits", "BE-TR-03 anti-replay sliding window (the 1024-bit floor)",
+     r"\*\*BE-TR-03"),
+    ("max-message", "BE-TR-05 memory bounds (the 1 MiB per-message ceiling)",
+     r"\*\*BE-TR-05"),
 ]
 
 
@@ -289,6 +306,28 @@ MUTANTS = [
      "cookie rotation interval (120000 -> 120001) shifts the boundary",
      "pub const COOKIE_ROTATE_MS: u64 = 120_000;",
      "pub const COOKIE_ROTATE_MS: u64 = 120_001; // MUTANT"),
+    # BE-TR-03 sliding window: SPEC 4.3 declares a window of at least 1024.
+    # Halving it violates the floor. EXPECTED TO SURVIVE: every assertion in
+    # replay_test.zig references replay.WINDOW_BITS symbolically (the walk runs
+    # WINDOW_BITS/2 iterations over offsets mod WINDOW_BITS), so halving the
+    # constant scales both sides of every check and no test catches the shrink.
+    # This is the documented survivor that exposes the symbolic-test weakness;
+    # the following commit rewrites those assertions to literal values (512
+    # offsets mod 1024) so the mutant becomes killable. A grow mutant (1025)
+    # would remain SPEC-compliant (the bound is a floor), so the shrink
+    # direction is the one that attacks the declared property.
+    ("transport", "replay.zig", "WRONG-CONSTANT", "window-bits",
+     "replay window halved (1024 -> 512) violates the SPEC floor",
+     "pub const WINDOW_BITS: usize = 1024;",
+     "pub const WINDOW_BITS: usize = 512; // MUTANT"),
+    # BE-TR-05 per-message ceiling: the 1 MiB cap. Halving it makes the memory
+    # test's LITERAL 1048576-byte fragment exceed the cap, so ingest returns
+    # message_dropped where the test asserts partial, and bytesInUse never
+    # reaches the literal 8388608; both assertions kill it.
+    ("transport", "reassembly.zig", "WRONG-CONSTANT", "max-message",
+     "per-message ceiling halved (1 MiB -> 512 KiB)",
+     "pub const MAX_MESSAGE: usize = 1 << 20; // 1 MiB: the ceiling every size derives from",
+     "pub const MAX_MESSAGE: usize = 1 << 19; // MUTANT"),
 ]
 
 
