@@ -208,7 +208,11 @@ unauthenticated input: the Noise handshake messages and the cookie reply (§4). 
 and contain no variable-length field.** Every other structure in this specification — certificates,
 lookups, envelopes, control messages, sync messages — MUST be parsed only inside an established,
 bound session (BE-TR-01). Adding a third structure to the pre-authentication list is a protocol
-version change, not an implementation decision.
+version change, not an implementation decision. The fixed-size data and fragment packet headers are
+read before session lookup because a packet cannot be routed until its receiver index is known; they
+carry no parseable payload outside an established session, and together with the two structures above
+they are the only bytes touched before authentication. Any other byte touched before authentication
+is a protocol version change, exactly as adding a third structure to the inventory would be (D-031).
 
 *This is what the correctness fixes cost and why the cost has to be paid back here. Adding the CA
 quorum turned `Cert` from a fixed-size record into one carrying a variable-length signature list;
@@ -226,10 +230,28 @@ path, without corrupting anything, obtains selective denial of approval by crash
 whenever a human is about to approve. The safety net is thereby turned into the attack. A panic is
 catastrophic containment of last resort; it is never a network flow-control mechanism.*
 
-**BE-SURF-03 (parser complexity budget)** — The isolated network-parsing module MUST NOT exceed
-**1500 lines**, measured and enforced in CI. Exceeding it does not degrade the design; it invalidates
-the mitigation that justified the language choice, and it MUST fail the build rather than be noted.
-*"Small enough for one person to audit" is either a number or it is a slogan.*
+**BE-SURF-03 (surface budgets, split along the authentication line)** — The network-facing surface
+MUST be measured as two units divided at BE-SURF-01's authentication line, and each unit MUST NOT
+exceed **1500 lines**, measured and enforced in CI. Exceeding either unit does not degrade the
+design; it invalidates the mitigation that justified the language choice, and it MUST fail the build
+rather than be noted. *"Small enough for one person to audit" is either a number or it is a slogan:
+one number per audit unit, and the unit is what an attacker can reach.* (D-030.)
+
+- **Pre-authentication unit:** `src/parser.zig`, `src/mac.zig`, `src/noise.zig` — everything an
+  auditor must read to verify what an unauthenticated peer's bytes can reach.
+- **Post-authentication unit:** `src/parser/channel.zig`, `src/parser/session.zig`, `src/session.zig`,
+  `src/binding.zig`, `src/replay.zig`, `src/reassembly.zig` — everything an auditor must read to
+  verify what a hostile authenticated peer's bytes can reach.
+- **Non-surface:** `src/dag.zig`, `src/evidence.zig`, `src/verify.zig` — state over parsed values
+  (D-018), not reached by attacker bytes directly.
+- **Harness and entry:** `src/main.zig`, `src/tests.zig`, `src/fuzz.zig`, `src/coverage.zig`, and
+  every `*_test.zig`.
+
+Every non-test `src/*.zig` file MUST appear in exactly one of the four lists above; a file the spec
+does not place fails the build until the spec places it. A unit's cap MAY be subdivided into smaller
+units as the surface grows; it MUST NOT be raised. *The lists are normative: moving a file between
+them is a spec change flagged before commit (CONTRIBUTING.md section 4), which is what closes D-018's
+forbidden gaming direction — there is no unmeasured place for surface code to move to.*
 
 **BE-SURF-04 (differential fuzzing)** — The continuous fuzzing of §11.6 MUST be differential: the
 production parser is fuzzed against an independent, minimal reference parser written solely for
