@@ -8,4 +8,5 @@ comptime {
     _ = @import("parser_test.zig");
     _ = @import("verify_test.zig");
     _ = @import("vectors_test.zig");
+    _ = @import("evidence_test.zig");
 }

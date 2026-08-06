@@ -153,3 +153,22 @@ per-structure span cap does not exist in the spec, so inventing one would add a 
 does not make and a rejection the spec does not require, which is exactly the kind of change that
 belongs on the stop list. What would reopen it: if Daniel wants a defense-in-depth cap on inline
 spans (e.g. reject an Effect with span_count > N), that is a new guarantee and I stop for it.
+
+## D-015 — 2026-08-06 — Superseded-only and non-Effect-origin claims resolve to Unsupported, not Unresolved
+
+Question: a claim whose only matching spans are (a) all volatile and superseded, or (b) all whose
+origin resolves to a non-Effect body type, has no span contributing a ceiling. BE-EVID-09 defines
+three states (Supported with an effective q8, Unresolved marked pending, Unsupported at 0.00), but
+the spec does not explicitly assign these two empty-after-filtering cases to one of the two
+non-Supported states. Decision: both resolve to Unsupported (0.00), not Unresolved. Reasoning:
+BE-EVID-05 explicitly names the 0.00 outcome for a volatile span that is superseded by a later
+strict-causal-descendant Effect on the same resource_id, so a claim left with only superseded spans
+inherits that 0.00 outcome directly. D-012 (RED-TEAM-09 F7) already established that a span whose
+origin resolves to a non-Effect envelope cannot support a claim and falls out of both the Supported
+and Unresolved states; this decision states the consequence for the claim: Unsupported. Pre-close
+checks: (1) read against other sections, BE-EVID-05's named 0.00 outcome is the controlling cross-
+reference, not the Unresolved marker of BE-EVID-02b; (2) who picked the denominator, the spec's
+own named outcome did, not a choice on my part; (3) does the thing being checked need to exist, yes,
+both BE-EVID-05's supersession outcome and the non-Effect-origin structural rule exist. This pins
+the existing declared outcomes, it does not add or strengthen a guarantee. Recorded in RED-TEAM-09.md
+(F3 supersession consequence, F7 non-Effect-origin consequence).
