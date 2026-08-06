@@ -86,12 +86,12 @@ pub fn build(b: *std.Build) void {
 
     // Coverage measurement (LANGUAGE.md O2 / SPEC section 11.6). The same fuzz
     // harness, but built with -Dcoverage so coverage.ENABLED is comptime true
-    // and every parser branch counter is live. Run as
+    // and every parser exit-point counter is live. Run as
     //   zig build coverage -Dcoverage -Dfuzz-budget=4000000
-    // which prints the N/M branch-reach report, the unreached list, and the
-    // corpus description. Manual instrumentation IS the measurement here; the
-    // toolchain's -ffuzz coverage has no script-readable output.
-    const coverage_step = b.step("coverage", "Run fuzz with branch coverage on (-Dcoverage -Dfuzz-budget=N)");
+    // which prints the N/M exit-point-reach report, the unreached list, and
+    // the corpus description. Manual instrumentation IS the measurement here;
+    // the toolchain's -ffuzz coverage has no script-readable output.
+    const coverage_step = b.step("coverage", "Run fuzz with exit-point coverage on (-Dcoverage -Dfuzz-budget=N)");
     coverage_step.dependOn(&run_fuzz.step);
 
     // Negative compile test (BE-GRANT-03b). test/negative_capability.zig tries

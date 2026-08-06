@@ -45,6 +45,7 @@ None of these involve anyone's judgement, and none may be waived by agreement in
 | M6 | Build succeeds with the network disabled and no package manager. | §11.7, BE-DEP-01 |
 | M7 | Shipped build is `ReleaseSafe`; compiler version and flags recorded with every result. | §11.8, `LANGUAGE.md` O1, O4 |
 | M8 | The capability type is unforgable: every code-only `@ptrCast` lives in `src/verify.zig`, and the negative compile canary refuses to construct it. | §8.2, BE-GRANT-03b |
+| M9 | Every parser error exit routes through `coverage.reject()` and every accepted return through `coverage.accept()`; `src/parser.zig` contains zero raw error returns, no exceptions, and the coverage denominator is counted from those call sites at run time. | §11.6 |
 
 If a change cannot satisfy one of these, the change is wrong or the rule is wrong. Both are fine
 outcomes. Merging anyway is not.

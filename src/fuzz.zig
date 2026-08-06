@@ -112,11 +112,11 @@ pub fn main() !void {
         for (0..coverage.COUNT) |i| {
             if (coverage.hit_count[i] > 0) reached += 1;
         }
-        std.debug.print("COVERAGE: {d}/{d} branches reached\n", .{ reached, coverage.COUNT });
+        std.debug.print("COVERAGE: {d}/{d} exit points reached\n", .{ reached, coverage.COUNT });
         if (reached == coverage.COUNT) {
-            std.debug.print("COVERAGE: no unreached branches\n", .{});
+            std.debug.print("COVERAGE: no unreached exit points\n", .{});
         } else {
-            std.debug.print("COVERAGE: unreached branches:\n", .{});
+            std.debug.print("COVERAGE: unreached exit points:\n", .{});
             for (0..coverage.COUNT) |i| {
                 if (coverage.hit_count[i] == 0) {
                     std.debug.print("  - {s}\n", .{@tagName(@as(coverage.Branch, @enumFromInt(i)))});

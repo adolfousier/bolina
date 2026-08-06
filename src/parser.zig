@@ -14,6 +14,13 @@
 // sole negotiation surface ("negotiation is by the version field only"), so the
 // wire layer records it and leaves version policy to the caller. Grant.version
 // IS refused (BE-GRANT-03 step 0) by the verifier, not by this parser.
+//
+// Every error exit routes through the reject wrapper and every accepted
+// return through the accept wrapper, both in coverage.zig: this file carries
+// no raw error returns, zero exceptions. Gate M9 (tools/prumo-verify) counts
+// those wrapper call sites as the coverage denominator and fails on any
+// unmarked way out, so the denominator is this file, not a hand-kept list
+// (CONTRIBUTING.md section 2).
 
 const std = @import("std");
 const coverage = @import("coverage.zig");
@@ -85,10 +92,7 @@ const Cursor = struct {
     }
 
     fn need(self: *Cursor, n: usize) ParseError!void {
-        if (self.remaining() < n) {
-            coverage.hit(.cursor_truncated);
-            return error.Truncated;
-        }
+        if (self.remaining() < n) return coverage.reject(.cursor_truncated);
     }
 
     fn u8r(self: *Cursor) ParseError!u8 {
@@ -130,20 +134,14 @@ const Cursor = struct {
     // u16-length-prefixed field with a declared maximum.
     fn field16(self: *Cursor, max: usize) ParseError![]const u8 {
         const len = try self.u16be();
-        if (len > max) {
-            coverage.hit(.field16_oversize);
-            return error.Oversize;
-        }
+        if (len > max) return coverage.reject(.field16_oversize);
         return try self.take(@intCast(len));
     }
 
     // u32-length-prefixed field with a declared maximum.
     fn field32(self: *Cursor, max: u32) ParseError![]const u8 {
         const len = try self.u32be();
-        if (len > max) {
-            coverage.hit(.field32_oversize);
-            return error.Oversize;
-        }
+        if (len > max) return coverage.reject(.field32_oversize);
         return try self.take(@intCast(len));
     }
 };
@@ -179,27 +177,18 @@ pub fn parseEnvelope(buf: []const u8) ParseError!Envelope {
     const sender = try c.take(LEN_PUBKEY);
     const seq = try c.u64be();
     const parent_count = try c.u8r();
-    if (parent_count > MAX_PARENTS) {
-        coverage.hit(.env_parent_oversize);
-        return error.Oversize;
-    }
+    if (parent_count > MAX_PARENTS) return coverage.reject(.env_parent_oversize);
     const parents = try c.take(@as(usize, parent_count) * LEN_PARENT);
     const ts = try c.u64be();
     const body_type = try c.u8r();
     const body_len = try c.u32be();
-    if (body_len > MAX_BODY) {
-        coverage.hit(.env_body_oversize);
-        return error.Oversize;
-    }
+    if (body_len > MAX_BODY) return coverage.reject(.env_body_oversize);
     const body = try c.take(@intCast(body_len));
     const tbs = buf[0..c.pos];
     const sig = try c.take(LEN_SIG);
     // BE-WIRE-02 totality: the buffer holds exactly one envelope, nothing more.
-    if (c.pos != buf.len) {
-        coverage.hit(.env_trailing);
-        return error.TrailingBytes;
-    }
-    coverage.hit(.env_accepted);
+    if (c.pos != buf.len) return coverage.reject(.env_trailing);
+    coverage.accept(.env_accepted);
     return .{
         .version = version,
         .channel_id = channel_id,
@@ -238,11 +227,8 @@ pub fn parseIntent(buf: []const u8) ParseError!Intent {
     const resource_id = try c.field16(MAX_RESOURCE);
     const action = try c.field32(MAX_ACTION);
     const rationale = try c.field16(MAX_RATIONALE);
-    if (c.pos != buf.len) {
-        coverage.hit(.intent_trailing);
-        return error.TrailingBytes;
-    }
-    coverage.hit(.intent_accepted);
+    if (c.pos != buf.len) return coverage.reject(.intent_trailing);
+    coverage.accept(.intent_accepted);
     return .{
         .intent_id = intent_id,
         .resource_id = resource_id,
@@ -298,11 +284,8 @@ pub fn parseGrant(buf: []const u8) ParseError!Grant {
     const tbs = buf[0..c.pos];
     const sig = try c.take(LEN_SIG);
     // BE-WIRE-02 totality: exactly one grant, nothing after it.
-    if (c.pos != buf.len) {
-        coverage.hit(.grant_trailing);
-        return error.TrailingBytes;
-    }
-    coverage.hit(.grant_accepted);
+    if (c.pos != buf.len) return coverage.reject(.grant_trailing);
+    coverage.accept(.grant_accepted);
     return .{
         .version = version,
         .grant_id = grant_id,
