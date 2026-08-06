@@ -11,4 +11,5 @@ comptime {
     _ = @import("evidence_test.zig");
     _ = @import("dag_test.zig");
     _ = @import("mac_test.zig");
+    _ = @import("replay_test.zig");
 }
