@@ -79,6 +79,21 @@ pub const LEN_FRAGMENT_HEADER: usize = 12; // msg_id u64 + index u16 + total u16
 pub const LEN_OVERLAY_ADDR: usize = 16; // overlay address, the mesh node id (SPEC 5.1)
 pub const LEN_ENDPOINT: usize = 19; // lighthouse endpoint tuple: family u8 + [16] addr + u16 port (SPEC 5.1a)
 
+// Certificate field widths (SPEC section 3.1). The certificate is the
+// identity structure: a version byte, a role bitmask, the holder Ed25519
+// signing key and X25519 key-exchange key, a validity window, a UTF-8
+// label, group identifiers, and one to four CA countersignatures. name is
+// a convenience label only (SPEC 3.1: no authorization decision may depend
+// on name); group_ids are 8-byte BLAKE2s-256 prefixes parsed as opaque
+// bytes. sig_pubkey reuses LEN_PUBKEY (Ed25519, 32 bytes).
+pub const LEN_KEX_PUBKEY: usize = 32; // X25519 key-exchange public key (SPEC 3.1)
+pub const LEN_GROUP_ID: usize = 8; // group_id = BLAKE2s-256(group_name)[0..8] (SPEC 3.1)
+pub const MAX_NAME: usize = 64; // Cert.name length bound (SPEC 3.1)
+pub const MAX_GROUPS: u8 = 16; // Cert.group_count bound (SPEC 3.1)
+pub const MAX_CA_SIGS: u8 = 4; // Cert.ca_sig_count upper bound (SPEC 3.1)
+pub const LEN_CA_KEY: usize = 32; // CA Ed25519 public key (SPEC 3.1)
+pub const LEN_CA_SIG: usize = 64; // CA Ed25519 signature (SPEC 3.1)
+
 // Transport message_type discriminants (SPEC section 4.1a). The parser
 // validates byte 0 against the expected constant for the function called; it
 // never dispatches on it, so these name the wire values, not control flow.
@@ -786,5 +801,94 @@ pub fn parseLookupResponse(buf: []const u8) ParseError!LookupResponse {
         .endpoint_count = endpoint_count,
         .endpoints = endpoints,
         .cert = cert,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Certificate (SPEC section 3.1)
+//
+//   u8 version(=2) | u8 role_bits | [32] sig_pubkey | [32] kex_pubkey
+//   u64 not_before | u64 not_after | u16 name_len, name(<=64)
+//   u8 group_count(<=16) | [8]* group_ids | u8 ca_sig_count(1..4)
+//   ([32] ca_key + [64] ca_sig) x ca_sig_count
+//
+// version is parsed and carried, never rejected here (SPEC section 2.2: version
+// is the sole negotiation surface; section 3.1 pins no version-refusal step,
+// unlike section 8.1 for Grant). The caller applies version policy under
+// BE-ID-01..04. name is a convenience label (SPEC 3.1: no authorization
+// decision may depend on it); group_ids are 8-byte BLAKE2s-256 prefixes read
+// as opaque bytes. ca_sigs is the flat region of ca_sig_count (ca_key || ca_sig)
+// pairs the caller re-walks. tbs is every byte preceding ca_sig_count, the
+// input to each CA Ed25519 signature (BE-SIG-01, domain tag 0x01).
+//
+// The CA-key ordering check is the one structural invariant section 3.1 makes
+// "a parse failure rather than a policy check": keys must be strictly ascending
+// and pairwise distinct, so duplicate-key quorum forgery cannot encode.
+// ---------------------------------------------------------------------------
+
+pub const Cert = struct {
+    version: u8,
+    role_bits: u8,
+    sig_pubkey: []const u8,
+    kex_pubkey: []const u8,
+    not_before: u64,
+    not_after: u64,
+    name: []const u8,
+    group_count: u8,
+    group_ids: []const u8, // group_count * LEN_GROUP_ID bytes, aliases the caller buffer
+    ca_sig_count: u8,
+    ca_sigs: []const u8, // ca_sig_count * (LEN_CA_KEY + LEN_CA_SIG) bytes, key+sig pairs flat
+    tbs: []const u8, // all bytes preceding ca_sig_count (BE-SIG-01 signature input)
+};
+
+pub fn parseCert(buf: []const u8) ParseError!Cert {
+    var c = Cursor{ .buf = buf };
+    const version = try c.u8r();
+    const role_bits = try c.u8r();
+    const sig_pubkey = try c.take(LEN_PUBKEY);
+    const kex_pubkey = try c.take(LEN_KEX_PUBKEY);
+    const not_before = try c.u64be();
+    const not_after = try c.u64be();
+    const name = try c.field16(MAX_NAME);
+    const group_count = try c.u8r();
+    if (group_count > MAX_GROUPS) return coverage.reject(.cert_group_oversize);
+    const group_ids = try c.take(@as(usize, group_count) * LEN_GROUP_ID);
+    // tbs is every byte preceding ca_sig_count (SPEC 3.1): each CA signature
+    // covers version..group_ids, so freeze the offset before reading the count.
+    const tbs = buf[0..c.pos];
+    const ca_sig_count = try c.u8r();
+    if (ca_sig_count == 0) return coverage.reject(.cert_ca_count_zero);
+    if (ca_sig_count > MAX_CA_SIGS) return coverage.reject(.cert_ca_count_oversize);
+    const ca_start = c.pos;
+    // CA keys strictly ascending and pairwise distinct: a parse failure, not a
+    // policy check (SPEC 3.1). Each pair is [32] ca_key + [64] ca_sig; a key
+    // must be strictly greater than its predecessor for a canonical encoding.
+    var prev_key: []const u8 = &[_]u8{};
+    var i: usize = 0;
+    while (i < ca_sig_count) : (i += 1) {
+        const ca_key = try c.take(LEN_CA_KEY);
+        if (i > 0) {
+            if (std.mem.order(u8, ca_key, prev_key) != .gt)
+                return coverage.reject(.cert_ca_order);
+        }
+        prev_key = ca_key;
+        _ = try c.take(LEN_CA_SIG);
+    }
+    const ca_sigs = buf[ca_start..c.pos];
+    if (c.pos != buf.len) return coverage.reject(.cert_trailing);
+    coverage.accept(.cert_accepted);
+    return .{
+        .version = version,
+        .role_bits = role_bits,
+        .sig_pubkey = sig_pubkey,
+        .kex_pubkey = kex_pubkey,
+        .not_before = not_before,
+        .not_after = not_after,
+        .name = name,
+        .group_count = group_count,
+        .group_ids = group_ids,
+        .ca_sig_count = ca_sig_count,
+        .ca_sigs = ca_sigs,
+        .tbs = tbs,
     };
 }

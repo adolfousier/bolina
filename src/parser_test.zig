@@ -481,3 +481,122 @@ test "BE_WIRE_01 lookup response with no endpoints is accepted" {
     try std.testing.expectEqual(@as(usize, 0), resp.endpoints.len);
     try std.testing.expectEqualSlices(u8, bytes[20..24], resp.cert);
 }
+
+// Certificate (SPEC section 3.1). The canonical agent-1 cert from
+// test/vectors.json (structure /structures/cert): 293 bytes, version 2,
+// role_bits 0x03 (participant + agent), two strictly-ascending CA
+// countersignatures, zero trailing. M3 (vectors_test.zig) verifies both CA
+// signatures over these exact bytes, so this round-trip is anchored to real
+// cross-implementation bytes, not synthetic fill. Crypto verification
+// (BE-ID-01..04) stays out of the parser; parseCert enforces only the section
+// 3.1 structural invariants and the CA-key ordering.
+const CERT_WIRE_HEX =
+    "0203020bd427446b723424d80d2cad352ba3df3649d0ef8faae0ca7eb2544394" ++
+    "1b29b16e7150a191f75488a3e9a9b4b3f8e334f096b87d7bea974c8f6afd0d26" ++
+    "254c0000018bcfe56800000001a3185c500000076167656e742d310121c9a4aa" ++
+    "d663d1ed0279b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e391" ++
+    "0bad0496645bd00e38771c2fd093b5085d4be27ef0b2b8d07e6ce6c7841a410e" ++
+    "b866adeb7aaa54bca17bce130428d73437cb858e59801f275461c15a468b7a72" ++
+    "c3948f250ae7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c068" ++
+    "5e2b17f2f05a91d5910dea0f09fe0ec00b16123f6e87117ce5b17548093487c0" ++
+    "2388f9b159acdf932380528d32ae911d3dcc4a9cf6868e94c206ec7490618dbc" ++
+    "a1d6099d0f";
+
+test "BE_WIRE_01 certificate round-trips the canonical vector, zero heap" {
+    const bytes = decodeHex(CERT_WIRE_HEX);
+    try std.testing.expectEqual(@as(usize, 293), bytes.len);
+    const cert = try parser.parseCert(&bytes);
+    try std.testing.expectEqual(@as(u8, 2), cert.version);
+    try std.testing.expectEqual(@as(u8, 0x03), cert.role_bits);
+    // sig_pubkey is the agent Ed25519 key (same as SENDER_HEX); aliases the buffer.
+    try std.testing.expectEqualSlices(u8, bytes[2..34], cert.sig_pubkey);
+    try std.testing.expectEqualSlices(u8, bytes[34..66], cert.kex_pubkey);
+    try std.testing.expectEqual(@as(u64, 1700000000000), cert.not_before);
+    try std.testing.expectEqual(@as(u64, 1800000000000), cert.not_after);
+    try std.testing.expectEqualStrings("agent-1", cert.name);
+    try std.testing.expectEqual(@as(u8, 1), cert.group_count);
+    try std.testing.expectEqualSlices(u8, bytes[92..100], cert.group_ids);
+    // tbs is every byte preceding ca_sig_count (offset 100): version..group_ids.
+    try std.testing.expectEqual(@as(usize, 100), cert.tbs.len);
+    try std.testing.expectEqualSlices(u8, bytes[0..100], cert.tbs);
+    try std.testing.expectEqual(@as(u8, 2), cert.ca_sig_count);
+    // ca_sigs flat region = 2 pairs * (32 key + 64 sig) = 192 bytes, offset 101.
+    try std.testing.expectEqual(@as(usize, 192), cert.ca_sigs.len);
+    try std.testing.expectEqualSlices(u8, bytes[101..293], cert.ca_sigs);
+}
+
+test "BE_WIRE_01 certificate with version != 2 is parsed, policy deferred (SPEC 2.2)" {
+    // Version is the sole negotiation surface (SPEC 2.2); parseCert carries it
+    // without rejecting, matching parseEnvelope/parseGrant/parseSpan. A v3 cert
+    // parses and the caller applies version policy under BE-ID-01..04.
+    var bytes = decodeHex(CERT_WIRE_HEX);
+    bytes[0] = 0x03;
+    const cert = try parser.parseCert(&bytes);
+    try std.testing.expectEqual(@as(u8, 3), cert.version);
+}
+
+test "BE_WIRE_01 certificate with a single CA signature and empty name is accepted" {
+    // Synthetic but structurally valid: one CA countersignature (trivial ordering),
+    // empty name, no groups. Proves the ca_sig_count == 1 path and the zero-length
+    // name/group paths. Sigs are not verified by the parser (BE-ID-01..04, caller).
+    const hex = "02" ++ "01" ++ "aa" ** 32 ++ "bb" ** 32 ++
+        "0000000000000001" ++ "0000000000000002" ++
+        "0000" ++ "00" ++ "01" ++ "cc" ** 32 ++ "dd" ** 64;
+    const bytes = decodeHex(hex);
+    try std.testing.expectEqual(@as(usize, 182), bytes.len);
+    const cert = try parser.parseCert(&bytes);
+    try std.testing.expectEqual(@as(u8, 1), cert.role_bits);
+    try std.testing.expectEqual(@as(usize, 0), cert.name.len);
+    try std.testing.expectEqual(@as(u8, 0), cert.group_count);
+    try std.testing.expectEqual(@as(u8, 1), cert.ca_sig_count);
+    try std.testing.expectEqual(@as(usize, 96), cert.ca_sigs.len);
+    try std.testing.expectEqual(@as(usize, 85), cert.tbs.len);
+}
+
+test "BE_WIRE_02 certificate with name_len above 64 is rejected as Oversize" {
+    var bytes = decodeHex(CERT_WIRE_HEX);
+    // name_len at bytes 82..83; set to 65 (big-endian). field16 rejects > MAX_NAME.
+    bytes[82] = 0x00;
+    bytes[83] = 0x41;
+    try std.testing.expectError(error.Oversize, parser.parseCert(&bytes));
+}
+
+test "BE_WIRE_02 certificate with group_count above 16 is rejected as Oversize" {
+    var bytes = decodeHex(CERT_WIRE_HEX);
+    bytes[91] = 17; // group_count
+    try std.testing.expectError(error.Oversize, parser.parseCert(&bytes));
+}
+
+test "BE_WIRE_02 certificate with ca_sig_count == 0 is rejected as Malformed" {
+    var bytes = decodeHex(CERT_WIRE_HEX);
+    bytes[100] = 0x00; // ca_sig_count: a cert needs at least one countersignature
+    try std.testing.expectError(error.Malformed, parser.parseCert(&bytes));
+}
+
+test "BE_WIRE_02 certificate with ca_sig_count above 4 is rejected as Oversize" {
+    var bytes = decodeHex(CERT_WIRE_HEX);
+    bytes[100] = 0x05; // ca_sig_count > MAX_CA_SIGS; checked before the read loop
+    try std.testing.expectError(error.Oversize, parser.parseCert(&bytes));
+}
+
+test "BE_WIRE_02 certificate with non-ascending (equal) CA keys is rejected as Malformed" {
+    var bytes = decodeHex(CERT_WIRE_HEX);
+    // Copy ca_key[0] (bytes 101..133) over ca_key[1] (bytes 197..229): equal keys
+    // violate the strict-ascending / pairwise-distinct rule (SPEC 3.1).
+    @memcpy(bytes[197..229], bytes[101..133]);
+    try std.testing.expectError(error.Malformed, parser.parseCert(&bytes));
+}
+
+test "BE_WIRE_02 certificate with a trailing byte is rejected" {
+    const bytes = decodeHex(CERT_WIRE_HEX);
+    var buf: [294]u8 = undefined;
+    @memcpy(buf[0..293], &bytes);
+    buf[293] = 0x00;
+    try std.testing.expectError(error.TrailingBytes, parser.parseCert(&buf));
+}
+
+test "BE_WIRE_02 truncated certificate is rejected" {
+    const bytes = decodeHex(CERT_WIRE_HEX);
+    // 200 bytes: cuts into the first CA signature region.
+    try std.testing.expectError(error.Truncated, parser.parseCert(bytes[0..200]));
+}
