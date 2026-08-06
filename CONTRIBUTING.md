@@ -71,6 +71,24 @@ it mirrors: M8's count of 2 mirrors BE-GRANT-03b's "two boundary functions"; M5'
 BE-SURF-03's "1500 lines". A literal that names no source is a denominator the gate invented,
 and inventing a denominator is the same failure as counting what the gate controls.
 
+### Remove, don't check
+
+The denominator law says a gate must not count what it controls. The complement is older and
+harder-won: when a guarantee seems to need a check, the first question is whether the thing
+being checked has to exist at all. A field that can be removed cannot be forged; a check that
+is never written cannot be forgotten. Four times now the right fix has been the same move:
+
+| Instance | Checked, then | Removed instead |
+|---|---|---|
+| `Intent.action_digest` | validated against a stored digest (BE-BODY-02) | the field deleted; the executor recomputes over the bytes it already holds |
+| DAG membership authority | arbitrated by the channel (BE-CHAN-01) | granted by the CA, not by the channel; nothing left to arbitrate |
+| raw parser exit | counted and reconciled against the branch set (§11.6) | routed through `coverage.reject()`/`coverage.accept()`; zero raw error returns, nothing to count |
+| the verify-consume window | sealed by content (BE-GRANT-03c) | deleted; `verifyGrantThen` runs the effect inside the frame, no interval left to drift in |
+
+Each row is a removal that retired a check site, a gate, or both. The rule is not "never check";
+it is "before you write the check, prove the checked thing must exist." A check written where a
+deletion was possible is debt the moment it lands, and debt of this kind has not been repaid late.
+
 ---
 
 ## 3. Judgement rules (a person decides, and writes down why)
