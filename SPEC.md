@@ -1112,21 +1112,31 @@ performance detail.
 and 8 (subject, intent_id and resource_id matching against the pending intent) are delegated to the
 executor until a certificate store and a pending-intent table exist. This is provisional debt, not a
 relaxation of the rule above: BE-GRANT-03 requires all twelve checks in the routine, and the
-repayment condition is that 3, 4, 6, 7 and 8 fold into `verifyGrant` the moment their backing state
+repayment condition is that 3, 4, 6, 7 and 8 fold into `verifyGrantThen` (the routine) the moment
+their backing state
 is available. Recorded here so the debt survives being forgotten.
 
-**BE-GRANT-03b (capability type, language-portable property).** The verified capability MUST be
-represented by a type with this property: no code outside the verification routine can construct a
-value of it or obtain one by any means the language makes available to safe code. Fabricating a
-reference to one MUST require the language's unsafe equivalent, and every such escape MUST be
-confined to a fixed set of boundary functions gated mechanically (§11.2, gate M8). The mechanism is
+**BE-GRANT-03b (verification is a call, not a value; language-portable property).** The grant's
+effect MUST be reachable only through the single verification routine, and the routine MUST invoke
+execution itself: it runs the checks in the enumerated order, commits the ledger (check 11), and
+calls the effect inside one call frame. No value representing a verified grant — capability, token,
+handle, seal, slot — MUST exist outside that frame. Verification and the start of execution are one
+function call, not a span of time. The caller supplies the effect as a callback the routine
+invokes; the routine passes it the grant it just verified, and the frame ends when the effect has
+started. *Every defect this rule accumulated came from the verified state being a value you can
+keep: aliasing TOCTOU (verify A, consume B), the expiry that does not expire (checks run at mint
+time, consumption at any time), use-after-free. If the verified state never exists as a value
+outside the call, none of them has an interval to drift in. The window is deleted rather than
+defended; the seal that defended it (BE-GRANT-03c) was superseded by that deletion. The Grant on
+the wire remains an object capability (§8.1) — signed authority still travels as bytes — and what
+this rule removes is only the executor-side storable form of the verified grant.* The mechanism is
 per language:
 
-| Language | Mechanism | Unsafe escape, gated |
+| Language | Mechanism | What keeps the wall |
 |---|---|---|
-| Rust | private field, no exported constructor | none in safe code |
-| Zig | `opaque {}` behind a pointer, constructor inside the module | `@ptrCast`, two boundary functions (M8) |
-| Go | unexported field, exported constructor | `unsafe.Pointer`, audited |
+| Zig | continuation-passing routine `verifyGrantThen(env, grant, ctx, execute)` invokes `execute` inside the frame | gate M10 (effect reach confined to the routine, zero exceptions) + gate M8 (zero pointer-minting builtins anywhere, so no handle to forge) |
+| Rust | routine takes a closure; effect functions private to the executor module | privacy makes the bypass unwriteable outside the module |
+| Go | routine takes a func value; effect functions unexported | same shape, unexported scope |
 
 *§8.1's prose says a Grant is bound to one agent, one executor, one resource, one intent, and one
 exact action. Checks 5 to 9 are what make that sentence true; before they were enumerated, only the
@@ -1134,21 +1144,37 @@ last of the five had an enforcing rule. This is the invariant mutation testing m
 (§11.2).*
 
 *Rust's guarantee is safe code cannot forge; Zig's honest translation is code that passes the gates
-cannot forge.* The property has two halves: cannot construct (this rule); cannot consume a mutated
-grant undetected through the only accessor (BE-GRANT-03c).
+cannot forge.* The property this rule protects is reach, not construction: no code path arrives at
+the effect without passing through the checks, because the checks and the effect live in the same
+frame. Single-shot is part of the shape: the ledger commit (check 11) runs before the callback, so
+a callback that fails does not un-consume the grant. The `grant_id` is spent; a failed effect is
+BE-GRANT-01a's interrupted case, reported as unknown, never retried. *Write it down or the first
+person who hits a failed effect will "fix" it into a retry and un-spend a grant the ledger already
+committed (BE-GRANT-01: durable before the effect is attempted).*
 
-**BE-GRANT-03c (seal by content, capability lifetime).** A capability MUST be sealed by content
-at verification time: a keyed digest over the exact grant bytes the routine verified, the key
-generated at startup, module-private, never exported. Every accessor MUST recompute the digest
-over the bytes it is about to read, MUST refuse on mismatch, and MUST obtain those bytes by
-re-parsing the sealed region, never by returning caller-owned parsed state. *Holding a capability
-proves the checks passed at time T over specific bytes. Without the seal, consumption at T+n
-reads state that may have changed since: the caller owns the parsed struct and the buffer its
-fields alias, and a write to either defeats every check with no unsafe builtin at all. Verify A,
-consume B: the action_digest lesson one layer down. Rust's borrow checker makes this bug
-unwriteable by accident; a language without aliasing discipline pays for it with a runtime check
-at every access (LANGUAGE.md §4.1, cost two). Prevention becomes detection, and bypassing the
-detection requires bypassing the accessor itself, which §11.2 gate M8 makes visible.*
+**Provisional debt (call-graph wall).** In the slice the callback is caller-supplied, so nothing
+structural stops a caller from running its own effect code without calling the routine. The wall
+inside the slice is honesty plus gate M10: the routine is the only modeled path to an effect, and
+M10 confines effect reach with a zero-exceptions grep the way M9 confines raw parser exits. In the
+real executor the effect functions (the durable ledger commit, the resource lock, the action
+itself) MUST be reachable only from the routine, enforced by that same gate. Repayment condition:
+the moment effect functions exist outside the slice, they move behind the routine and M10's grep
+covers their call sites. Recorded here so the debt survives being forgotten.
+
+**BE-GRANT-03c (seal by content, capability lifetime).** SUPERSEDED BY REMOVAL (round 4 review,
+2026-08-06). The original requirement read: *a capability MUST be sealed by content at
+verification time — a keyed digest over the exact grant bytes the routine verified, recomputed at
+every access, refusing on mismatch — because holding a capability proves the checks passed at time
+T over specific bytes, and without the seal consumption at T+n reads state that may have changed
+since.* The seal defended the window between verification and consumption. BE-GRANT-03b's
+restatement deletes the window: verification is a call, not a value, and the effect starts inside
+the routine's frame, so there is no interval left for the bytes to drift in and nothing outside
+the frame for a seal to protect. A seal over a nonexistent interval has nothing to recompute.
+Numbers in this specification are grow-only, so the requirement keeps its number and its epitaph:
+*the window was removed, not sealed. The seal was not wasted — it made the storable form's cost
+visible enough to question, and the question deleted it.* The keyed-digest machinery, the
+caller-owned slot, the opaque capability type, the two pointer-mint casts, and the negative
+compile canary were all deleted with it (LANGUAGE.md §4.1, cost two restated).
 
 **BE-GRANT-03a (frozen during verification)** — From the moment the verification routine begins
 for an intent until it either refuses or the intent enters `EXECUTING`, the intent's lifecycle
