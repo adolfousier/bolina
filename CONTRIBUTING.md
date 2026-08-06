@@ -70,8 +70,8 @@ source.
   enum one for one.
 
 A literal number in a gate is a smell. If one is unavoidable, it must cite the external source
-it mirrors: M10's count of 1 mirrors the single reach path in `src/verify.zig`; M5's 1500 mirrors
-BE-SURF-03's "1500 lines". M8's count is zero because round 4 deleted the capability value; a zero
+it mirrors: M10's count of 1 mirrors the single reach path in `src/verify.zig`; M5 and M11 carry
+no literal at all, parsing the cap from BE-SURF-03's text. M8's count is zero because round 4 deleted the capability value; a zero
 count needs no external mirror, since it is the absence, not a literal. A literal that names no
 source is a denominator the gate invented, and inventing a denominator is the same failure as
 counting what the gate controls.
