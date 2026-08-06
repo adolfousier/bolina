@@ -899,6 +899,14 @@ is strictly sharper than any window: a one-hour window both discards good eviden
 accepts stale evidence at 59, while causal supersession is exact in both directions and identical
 for every member without agreement.*
 
+**BE-EVID-05a (supersession is strict descent)** — In BE-EVID-05, the superseding `Effect` MUST be
+a STRICT causal descendant of the span's own `origin` Effect: the Effect that published a span
+does not supersede the span it published. *If descent were reflexive, every volatile span would be
+superseded by its own publishing Effect at birth, volatile evidence would be worthless by
+construction, and the rule would contradict its own purpose — invalidation by a LATER observed
+change. The claim side needs no strictness pin: a claim travels in an `Utterance`, which cannot be
+a superseding `Effect`. (RED-TEAM-09, F3.)*
+
 **BE-EVID-06 (volatility is the executor's declaration and the receiver's floor)** — `volatility` is
 set by the executor that made the observation, which is the only party that knows what it observed.
 A receiver MUST treat an unrecognized value as `volatile`. *Fail-closed: an implementation that
@@ -995,6 +1003,20 @@ function of delivery luck and hides the difference between "the network is behin
 has no proof".* `origin` is what makes the distinction computable: without it an inline span is
 authentic but has no position in the causal order, so BE-EVID-05's supersession check has nothing to
 anchor to.
+
+**BE-EVID-09a (mixed resolution composes per span)** — A claim citing several spans where some
+`origin`s are in the local ledger and some are not: the resolved, non-superseded spans support the
+claim at the ceiling of the **strongest** among them (BE-EVID-02), and the unresolved ones contribute
+nothing yet. The claim is **Unresolved** only when every cited span is either valid-and-matching but
+unresolved or has zero resolved origins, and **Unsupported** only when it has no valid matching span
+at all. *Without this rule a single absent origin would demote a fully-supported claim to
+Unresolved, paying for one late delivery with every honest claim the member has. (RED-TEAM-09, F4.)*
+
+**BE-EVID-09b (origin must resolve to an Effect)** — A span whose `origin` resolves to an envelope
+of any body type other than `Effect` cannot support a claim; it falls out of the Supported and
+Unresolved states alike. *§7.1 declares `origin` as the hash of the Effect envelope that published
+the span, so a span whose origin resolves to anything else contradicts its own declared structure
+and fails closed. (RED-TEAM-09, F7.)*
 
 **BE-EVID-10 (bounded piggyback)** — An `Utterance` MUST carry at most 32 claims and at most 64
 spans, and MUST be rejected if it exceeds either. Receivers MUST deduplicate spans by `span_id` in

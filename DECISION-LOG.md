@@ -115,3 +115,13 @@ DAG (accepted live or adopted via backfill per BE-SYNC-05). Reasoning: BE-EVID-0
 superseding Effect is a causal ANCESTOR of the claim, which is only computable once the claim has
 a causal position; adoption is verification-gated, so evaluating after adoption adds no trust.
 Recorded in RED-TEAM-09.md.
+
+## D-012 — 2026-08-06 — A span whose origin resolves to a non-Effect envelope cannot support a claim
+
+Decision: a span whose `origin` resolves to an envelope of any body type other than `Effect` cannot
+support a claim; it falls out of both the Supported and Unresolved states. Reasoning: §7.1 defines
+`origin` as the hash of the Effect envelope that published the span, so a span whose origin resolves
+to an Intent, Grant, Utterance, Control, or Refusal envelope contradicts its own declared structure
+before any trust question is asked. Leaving this case undefined would let a member treat such a span
+as supported by default; the only safe reading is fail-closed. This pins the existing structural
+declaration from §7.1, it does not add a new guarantee. Recorded in RED-TEAM-09.md F7.
