@@ -172,3 +172,46 @@ own named outcome did, not a choice on my part; (3) does the thing being checked
 both BE-EVID-05's supersession outcome and the non-Effect-origin structural rule exist. This pins
 the existing declared outcomes, it does not add or strengthen a guarantee. Recorded in RED-TEAM-09.md
 (F3 supersession consequence, F7 non-Effect-origin consequence).
+
+## D-016 — 2026-08-06 — The test module is pinned single_threaded rather than giving each callback double per-test storage
+
+Question: the round-4 suite turned out to be nondeterministic. Two consecutive runs of the same
+cached binary reported 41/60 and then 50/60, with a different failure set each time, after that same
+binary had reported 60/60 in the previous task. The failures split two ways: grant tests that assert
+a call count observed 2 where they asserted 1 (`BE_GRANT_03` end to end, the `BE_GRANT_05` boundary
+cases, `BE_GRANT_01` ledger ordering, `BE_GRANT_03b`), and `dag_test` and `evidence_test` blocks
+that failed with no captured output at all. Root cause: Zig function pointers cannot capture state,
+so every callback double in the suite records through a package-level variable (`ledger_calls`,
+`effect_calls`, `effect_grant_id` in verify_test.zig; `sup_dag`, `sup_effect` in dag_test.zig). The
+default test runner executes test blocks on parallel threads, so blocks sharing a counter increment
+it concurrently, and the block that rebuilds the package-level `Dag` partway through does so while
+the hook is reading it.
+
+Decision: pin the test module to `single_threaded = true` in build.zig, rather than converting each
+callback double to per-test storage or to `threadlocal`.
+
+Reasoning: the library is zero-heap with no global mutable state and no production concurrency, so
+parallel test execution exercises nothing the protocol actually does. It is purely a runner speed
+feature, and the whole suite completes in under 20ms sequentially. Per-test storage would mean
+threading a context struct through every hook signature purely to satisfy the runner, and
+`threadlocal` would silently depend on the runner never reusing a thread across blocks, which the
+runner does not promise. For a repository whose entire claim is mechanical verifiability, a
+deterministic gate is worth more than a fast one, and a flaky gate is worse than a slow one.
+Verified by three consecutive 60/60 runs after the change. The comments in verify_test.zig and
+dag_test.zig that previously justified the package-level variables now name the single_threaded pin
+as the invariant they depend on. dag_test.zig's original claim that being the only writer meant it
+"cannot race" was struck: only-writer is not on its own a safety argument, because that test
+rebuilds the Dag mid-test while the hook reads it.
+
+Pre-close checks: (1) read against other sections, every `concurrent` rule in SPEC (concurrent
+sessions, concurrent revocations, convergent DAG siblings) is protocol semantics and says nothing
+about how the test binary executes, and prumo-verify's M7 audits build.zig only for hardcoded
+ReleaseSafe and the absence of `standardOptimizeOption`, neither of which this touches; (2) who
+picked the denominator, nobody did, the M1 bijection still counts the same 60 name-bound tests and
+this changes their scheduling, not their number; (3) does the thing being checked need to exist, the
+callback doubles do need to exist, because the ordering and call-count properties (BE-GRANT-01
+ledger-last, BE-GRANT-03b exactly-once) are observable only through them.
+
+This is a test harness change. It alters no wire format, no declared guarantee, and no conformance
+item. What would reopen it: if the library ever grows genuine production concurrency, the pin comes
+off and the callback doubles get per-test storage at that point.

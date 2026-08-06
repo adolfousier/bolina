@@ -63,7 +63,10 @@ const T_MAX_S: u64 = 3600;
 const T_RECV_S: u64 = 300;
 
 // Ledger hooks. Function pointers cannot capture state, so the counting hook
-// records through a package-level variable the ordering test reads back.
+// records through a package-level variable the ordering test reads back. That
+// variable is written by more than one test block, so it is safe only because
+// build.zig pins the test module to single_threaded. Do not remove that pin
+// without first giving each callback double per-test storage.
 var ledger_calls: usize = 0;
 
 fn ledgerFresh(grant_id: []const u8) bool {
@@ -87,7 +90,9 @@ fn ledgerCounting(grant_id: []const u8) bool {
 // `execute(` in src/verify.zig, and a same-named callback here would add a
 // second hit and break the wall for the wrong reason. Function pointers cannot
 // capture state, so the call count and the grant_id the routine handed it are
-// recorded through package-level variables the tests read back.
+// recorded through package-level variables the tests read back. Several test
+// blocks write these, so they carry the same single_threaded dependency as
+// ledger_calls above.
 var effect_calls: usize = 0;
 var effect_grant_id: []const u8 = &[_]u8{};
 

@@ -147,7 +147,10 @@ test "supersession requires descendant of origin and ancestor of claim" {
 // superseded volatile span drops the claim to 0.00, while a stable span on the
 // identical DAG is unaffected (evidence.zig never consults the DAG hook for a
 // stable span, BE-EVID-07). This is the only test that writes the package-level
-// Dag and effect candidate, so it cannot race with another test.
+// Dag and effect candidate, but "only writer" is not on its own a safety
+// argument: the test rebuilds the Dag partway through while the hook reads it,
+// so the isolation that matters is build.zig pinning the test module to
+// single_threaded.
 // ===========================================================================
 
 var sup_dag: dag.Dag = .{};
