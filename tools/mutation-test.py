@@ -348,6 +348,13 @@ def main():
                 results.append({"domain": domain, "klass": klass, "key": key,
                                 "name": name, "killed": False, "skipped": True})
                 continue
+            # Restore EVERY target to its clean original before applying this
+            # mutant. A previous iteration mutated a different file and left it
+            # live; without this reset the suite would fail for the wrong
+            # reason (a false KILLED from an accumulated mutant, not from the
+            # one under test). Each mutant is evaluated in isolation, period.
+            for _n, _p in TARGETS.items():
+                _p.write_text(ORIGINALS[_n])
             path = TARGETS[target]
             path.write_text(ORIGINALS[target].replace(find, replace, 1))
             rc, _ = run_suite()
