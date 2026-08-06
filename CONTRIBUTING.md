@@ -38,17 +38,38 @@ None of these involve anyone's judgement, and none may be waived by agreement in
 | # | Rule | Source |
 |---|---|---|
 | M1 | Every `BE-*` in `SPEC.md` has a test bound to it by name; every test binds to a declared `BE-*`. Bijection, verified by `prumo-verify`. | §11.1 |
-| M2 | 100% mutant kill in the §8 state machine and the §7 verifier. Survivors elsewhere are recorded with a cause. | §11.2 |
+| M2 | 100% mutant kill over the BE-GRANT-03 checks the slice models and the BE-GRANT-03c seal; the check set is derived from `SPEC.md` at run time, not stated by the harness. Survivors elsewhere are recorded with a cause. | §11.2 |
 | M3 | Cross-implementation test vectors pass byte-for-byte. | §11.3 |
 | M4 | Differential fuzzing is clean, reporting coverage and corpus, on any change touching parsing code. **A merge gate, not a milestone.** | §11.6, BE-SURF-04 |
 | M5 | Network-parsing module ≤ 1500 lines. | BE-SURF-03 |
 | M6 | Build succeeds with the network disabled and no package manager. | §11.7, BE-DEP-01 |
 | M7 | Shipped build is `ReleaseSafe`; compiler version and flags recorded with every result. | §11.8, `LANGUAGE.md` O1, O4 |
-| M8 | The capability type is unforgable: every code-only `@ptrCast` lives in `src/verify.zig`, and the negative compile canary refuses to construct it. | §8.2, BE-GRANT-03b |
+| M8 | The capability type is unforgable: every code-only pointer-minting builtin (`@ptrCast` or `@ptrFromInt`) lives in `src/verify.zig` at the two named boundary functions, and the negative compile canary refuses to construct it. | §8.2, BE-GRANT-03b |
 | M9 | Every parser error exit routes through `coverage.reject()` and every accepted return through `coverage.accept()`; `src/parser.zig` contains zero raw error returns, no exceptions, and the coverage denominator is counted from those call sites at run time. | §11.6 |
 
 If a change cannot satisfy one of these, the change is wrong or the rule is wrong. Both are fine
 outcomes. Merging anyway is not.
+
+### Gate denominators
+
+Every gate's denominator is derived from a source the gate does not control: `SPEC.md`, the
+source tree, or the language reference. A gate that counts what it controls can be gamed by
+editing the thing it counts, so a count is load-bearing only when it traces to an external
+source.
+
+- M1 derives its `BE-*` bijection from `SPEC.md` and the test file at run time.
+- M2 derives the modelled-check set from `SPEC.md`'s BE-GRANT-03 enumerated list and
+  conformance sentence, and detects the BE-GRANT-03c seal from the requirement's presence.
+- M5 reads the parser module's line count from the source tree.
+- M8 derives the pointer-minting builtin set `{@ptrCast, @ptrFromInt}` from the Zig language
+  reference and the count of boundary functions from `SPEC.md` BE-GRANT-03b.
+- M9 counts exit-point call sites from `src/parser.zig` and matches them against the `Branch`
+  enum one for one.
+
+A literal number in a gate is a smell. If one is unavoidable, it must cite the external source
+it mirrors: M8's count of 2 mirrors BE-GRANT-03b's "two boundary functions"; M5's 1500 mirrors
+BE-SURF-03's "1500 lines". A literal that names no source is a denominator the gate invented,
+and inventing a denominator is the same failure as counting what the gate controls.
 
 ---
 
