@@ -38,7 +38,7 @@ None of these involve anyone's judgement, and none may be waived by agreement in
 | # | Rule | Source |
 |---|---|---|
 | M1 | Every `BE-*` in `SPEC.md` has a test bound to it by name; every test binds to a declared `BE-*`. Bijection, verified by `prumo-verify`. | §11.1 |
-| M2 | 100% mutant kill over the BE-GRANT-03 checks the slice models and the BE-GRANT-03b callback property; the check set is derived from `SPEC.md` at run time, not stated by the harness. Survivors elsewhere are recorded with a cause. | §11.2 |
+| M2 | 100% mutant kill over the BE-GRANT-03 checks the slice models, the BE-GRANT-03b callback property, and the section-7 attestation properties (class derivation, ceiling integers, min recompute, subject match, supersession, three-state resolution); every check set is derived from `SPEC.md` at run time, not stated by the harness. Survivors elsewhere are recorded with a cause. | §11.2 |
 | M3 | Cross-implementation test vectors pass byte-for-byte. | §11.3 |
 | M4 | Differential fuzzing is clean, reporting coverage and corpus, on any change touching parsing code. **A merge gate, not a milestone.** | §11.6, BE-SURF-04 |
 | M5 | Network-parsing module ≤ 1500 lines. | BE-SURF-03 |
@@ -60,7 +60,9 @@ source.
 
 - M1 derives its `BE-*` bijection from `SPEC.md` and the test file at run time.
 - M2 derives the modelled-check set from `SPEC.md`'s BE-GRANT-03 enumerated list and
-  conformance sentence, and covers the BE-GRANT-03b callback property by mutant.
+  conformance sentence, covers the BE-GRANT-03b callback property by mutant, and
+  derives the section-7 evidence property set from the §7 tables and BE-EVID markers
+  (ceiling integers, the method_id->class table, BE-EVID-02/03/05/05a/09/09b).
 - M5 reads the parser module's line count from the source tree.
 - M8 derives the pointer-minting builtin set `{@ptrCast, @ptrFromInt}` from the Zig language
   reference; round 4 deleted the capability value, so the count it gates is zero.

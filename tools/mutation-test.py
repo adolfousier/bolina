@@ -1,36 +1,37 @@
 #!/usr/bin/env python3
 # mutation-test.py
 #
-# Mutation harness v4 for the Grant verifier (LANGUAGE.md section 4 metric;
-# SPEC.md section 11.2). cargo-mutants does not exist for Zig, so this applies
-# one mutant at a time to src/verify.zig, rebuilds, runs the full test suite,
-# and records whether the suite kills it.
+# Mutation harness v5 for the Grant verifier AND the attestation layer
+# (LANGUAGE.md section 4 metric; SPEC.md section 11.2). cargo-mutants does not
+# exist for Zig, so this applies one mutant at a time to a source file, rebuilds,
+# runs the full test suite, and records whether the suite kills it.
 #
-# v3 change (Daniel, round 4, B3): the denominator is no longer stated by this
-# script. It is DERIVED from SPEC.md at run time:
-#   - the BE-GRANT-03 enumerated checks (the 0-11 list) are counted from SPEC
-#   - the modelled subset is parsed from SPEC's conformance-status sentence
-#     ("models checks 0, 1, 2, 5, 9, 10 and 11 inside the single routine")
-#   - the BE-GRANT-03c seal is modelled iff SPEC states the requirement
-# The gate then fails unless a killed mutant attacks EVERY modelled check and
-# the seal. A denominator the gate controls is a denominator the gate can game;
-# this one traces to SPEC, so dropping a mutant to hide a gap is impossible
-# without also editing the SPEC line it is anchored to (CONTRIBUTING.md gate
-# rule).
+# v5 (round 4, section 7 lands): the attestation layer now has code
+# (src/evidence.zig, src/dag.zig), so it gets its own mutant class alongside
+# the Grant verifier. The check set for BOTH domains is DERIVED from SPEC.md at
+# run time, never stated by this script (the denominator law, CONTRIBUTING.md):
+#   - Grant domain: the modelled subset of BE-GRANT-03 (parsed from SPEC's
+#     conformance sentence) plus the BE-GRANT-03b callback property.
+#   - Evidence domain: the section-7 properties the slice implements, each
+#     detected from a table or a BE-EVID marker in section 7 (ceiling integers,
+#     the method_id->class table, BE-EVID-02/03/05/05a/09/09b).
+# A killed mutant must cover every modelled grant check, the callback property,
+# AND every detected evidence property; a mutant attacking a property SPEC does
+# not list is a scope lie and aborts. Dropping a rule from SPEC removes its key
+# from the denominator, so hiding a gap means editing the SPEC line it traces to.
+#
+# v4 (kept) removed the BE-GRANT-03c seal mutants when the storable capability
+# was deleted, replacing them with the CALLBACK class proving the effect runs
+# only after every check (and the ledger commit) passes.
+#
+# v3 (kept) stopped stating the denominator: it is parsed from SPEC.
 #
 # v2 (kept) replaced check-absence mutants with check-CORRECTNESS mutants: a
 # wrong operator, field, constant, boundary, or inverted condition. A
 # check-absence mutant only proves a check exists; a check-correctness mutant
 # proves the check is RIGHT. Every mutant keeps the module compiling, so a
-# non-zero `zig build test` exit means a test caught the mutant by asserting
-# the correct behaviour.
-#
-# v4 (Daniel, round 4, BE-GRANT-03b restatement): the storable capability is
-# gone, so the seal is gone too. The two seal mutants are removed and the seal
-# denominator with them. In their place: a CALLBACK class proving the effect
-# runs only after every check (and the ledger commit) passes. The denominator
-# is still derived from SPEC: the modelled 0-11 checks, plus the BE-GRANT-03b
-# call-boundary property tracked as "03b" (the way v3 tracked the seal as 03c).
+# non-zero `zig build test` exit means a test caught the mutant by asserting the
+# correct behaviour.
 
 import re
 import subprocess
@@ -38,14 +39,21 @@ import sys
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-VERIFY = ROOT / "src" / "verify.zig"
+SRC = ROOT / "src"
 SPEC = ROOT / "SPEC.md"
 ZIG = pathlib.Path.home() / "srv/zig/toolchain/zig-aarch64-macos-0.16.0/zig"
 
-ORIGINAL = VERIFY.read_text()
+# Target files are mutated in place and restored from these snapshots, so the
+# harness leaves the tree byte-identical on every exit path (try/finally).
+TARGETS = {
+    "verify.zig": SRC / "verify.zig",
+    "evidence.zig": SRC / "evidence.zig",
+    "dag.zig": SRC / "dag.zig",
+}
+ORIGINALS = {name: path.read_text() for name, path in TARGETS.items()}
 
 
-# --- denominator, derived from SPEC.md (the only source of truth) ----------
+# --- grant denominator, derived from SPEC.md section 8 --------------------
 
 def enumerated_checks_from_spec():
     """The full BE-GRANT-03 check list (0-11), counted from SPEC's numbered
@@ -70,68 +78,158 @@ def modelled_checks_from_spec():
     return [int(n) for n in re.findall(r"\d+", m.group(1))]
 
 
+# --- evidence denominator, derived from SPEC.md section 7 -----------------
+#
+# Each property is DETECTED from a table or a BE-EVID marker in section 7. The
+# denominator is the set of detected properties; nothing here is a literal. A
+# mutant covers a property iff it is killed while attacking it.
+
+EVIDENCE_MARKERS = [
+    # (denominator key, what SPEC says, marker text that must be present)
+    ("ceiling-q8", "the normative Q8 ceiling integers (table 7.2/7.4)",
+     r"DirectObservation.*?\*\*242\*\*.*?\*\*165\*\*"),
+    ("class-table", "the method_id -> class derivation table (7.4)",
+     r"\| `method_id` \| Observation mechanism \| Class \|"),
+    ("min-recompute", "BE-EVID-02 receiver recomputes min(stated, ceiling)",
+     r"BE-EVID-02 \(the receiver recomputes"),
+    ("subject-match", "BE-EVID-03 resource_id == subject",
+     r"\*\*BE-EVID-03\*\*"),
+    ("supersession", "BE-EVID-05 superseded volatile span stops supporting",
+     r"BE-EVID-05 \(superseded evidence stops supporting"),
+    ("supersession-strict", "BE-EVID-05a supersession is strict descent",
+     r"BE-EVID-05a \(supersession is strict descent"),
+    ("three-state", "BE-EVID-09 three resolution states",
+     r"BE-EVID-09 \(three states, not two"),
+    ("origin-effect", "BE-EVID-09b origin must resolve to an Effect",
+     r"BE-EVID-09b \(origin must resolve to an Effect"),
+]
+
+
+def evidence_properties_from_spec():
+    """The set of section-7 properties the slice must prove, each detected from
+    a SPEC marker. Removing a rule from SPEC removes its key here, so the gate
+    cannot hide an untested property without editing SPEC."""
+    text = SPEC.read_text()
+    props = set()
+    for key, _what, pattern in EVIDENCE_MARKERS:
+        if re.search(pattern, text, re.DOTALL):
+            props.add(key)
+    return props
+
+
 # --- mutants --------------------------------------------------------------
-# Each mutant: (class, check, name, anchor, replacement). `check` is the SPEC
-# BE-GRANT-03 number (0-11) the mutant attacks, or "03b" for the call-boundary
-# property. The gate requires every modelled check and the callback property to
-# be covered by a KILLED mutant, and forbids any mutant attacking a check SPEC
-# does not list as modelled.
+# Each mutant: (domain, target, class, key, name, find, replace).
+#   domain: "grant" or "evidence" - which derived denominator it gates against.
+#   target: the filename in TARGETS to mutate.
+#   key:    grant -> a BE-GRANT-03 number or "03b"; evidence -> a section-7
+#           property key. The killed set is gated against the derived keys.
+#   Every mutant keeps the file compiling; a non-zero `zig build test` exit means
+#   a test caught it by asserting the correct behaviour.
 
 MUTANTS = [
-    ("WRONG-CONSTANT", 0,
+    # --- grant domain: the BE-GRANT-03 checks the slice models (src/verify.zig)
+    ("grant", "verify.zig", "WRONG-CONSTANT", 0,
      "check 0 version constant (version != 2 -> != 3)",
      "if (grant.version != 2) return error.BadVersion;",
      "if (grant.version != 3) return error.BadVersion; // MUTANT"),
-    ("WRONG-CONSTANT", 2,
+    ("grant", "verify.zig", "WRONG-CONSTANT", 2,
      "check 2 grant domain tag (DOMAIN_GRANT -> DOMAIN_ENVELOPE)",
      "try verifySigned(parser.DOMAIN_GRANT, grant.tbs, grant.sig, grant.approver);",
      "try verifySigned(parser.DOMAIN_ENVELOPE, grant.tbs, grant.sig, grant.approver); // MUTANT"),
-    ("WRONG-FIELD", 1,
+    ("grant", "verify.zig", "WRONG-FIELD", 1,
      "check 1 binding compares sender to subject not approver",
      "if (!std.mem.eql(u8, env.sender, grant.approver)) return error.BadEnvelopeBinding;",
      "if (!std.mem.eql(u8, env.sender, grant.subject)) return error.BadEnvelopeBinding; // MUTANT"),
-    ("WRONG-FIELD", 5,
+    ("grant", "verify.zig", "WRONG-FIELD", 5,
      "check 5 executor compares executor to approver not own key",
      "if (!std.mem.eql(u8, grant.executor, ctx.own_pubkey)) return error.WrongExecutor;",
      "if (!std.mem.eql(u8, grant.executor, grant.approver)) return error.WrongExecutor; // MUTANT"),
-    ("WRONG-FIELD", 9,
+    ("grant", "verify.zig", "WRONG-FIELD", 9,
      "check 9 digest hashed over grant_id not the intent action",
      "const digest = actionDigest(ctx.intent_action);",
      "const digest = actionDigest(grant.grant_id); // MUTANT"),
-    ("WRONG-OPERATOR", 10,
+    ("grant", "verify.zig", "WRONG-OPERATOR", 10,
      "check 10a not_after bound (>= -> >) weakens the deny",
      "if (now_ms >= not_after) return error.Expired;",
      "if (now_ms > not_after) return error.Expired; // MUTANT"),
-    ("WRONG-OPERATOR", 10,
+    ("grant", "verify.zig", "WRONG-OPERATOR", 10,
      "check 10b T_max bound (> -> >=) over-refuses at equality",
      "if (not_after > first_receipt_ms + t_max_ms) return error.Expired;",
      "if (not_after >= first_receipt_ms + t_max_ms) return error.Expired; // MUTANT"),
-    ("WRONG-OPERATOR", 10,
+    ("grant", "verify.zig", "WRONG-OPERATOR", 10,
      "check 10c T_recv bound (> -> >=) over-refuses at equality",
      "if (now_ms > first_receipt_ms + t_recv_ms) return error.Expired;",
      "if (now_ms >= first_receipt_ms + t_recv_ms) return error.Expired; // MUTANT"),
-    ("WRONG-LOGIC", 11,
+    ("grant", "verify.zig", "WRONG-LOGIC", 11,
      "check 11 ledger condition inverted (consumed -> !consumed)",
      "if (ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed;",
      "if (!ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed; // MUTANT"),
-    # BE-GRANT-03b callback (round 4): the effect MUST NOT run before a check
-    # passes. CALLBACK-ABSENCE removes the call entirely; the two BEFORE mutants
-    # insert an extra execute(grant) ahead of a check, so a refused grant still
-    # fires the effect. Each is killed by the test that asserts effect_calls == 0
-    # on the refused grant (and == 1 on a valid grant, which the extra call
-    # breaks too).
-    ("CALLBACK-ABSENCE", "03b",
+    # BE-GRANT-03b callback: the effect MUST NOT run before a check passes.
+    ("grant", "verify.zig", "CALLBACK-ABSENCE", "03b",
      "effect never invoked despite a valid grant",
      "execute(grant);",
      "// MUTANT: effect call removed"),
-    ("CALLBACK-BEFORE-EXPIRY", 10,
+    ("grant", "verify.zig", "CALLBACK-BEFORE-EXPIRY", 10,
      "callback invoked before the expiry check runs",
      "try checkExpiry(grant.not_after, ctx.now_ms, ctx.first_receipt_ms, ctx.t_max_s, ctx.t_recv_s);",
      "execute(grant); // MUTANT callback before expiry\n    try checkExpiry(grant.not_after, ctx.now_ms, ctx.first_receipt_ms, ctx.t_max_s, ctx.t_recv_s);"),
-    ("CALLBACK-BEFORE-LEDGER", 11,
+    ("grant", "verify.zig", "CALLBACK-BEFORE-LEDGER", 11,
      "callback invoked before the ledger check",
      "if (ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed;",
      "execute(grant); // MUTANT callback before ledger\n    if (ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed;"),
+
+    # --- evidence domain: the attestation layer (src/evidence.zig, src/dag.zig)
+    # Ceiling integers (table 7.2/7.4). BE_EVID_02/15 assert the exact Q8 value;
+    # raising it one bit changes the recomputed confidence and the unit assert.
+    ("evidence", "evidence.zig", "WRONG-CONSTANT", "ceiling-q8",
+     "DirectObservation ceiling (242 -> 243)",
+     ".direct_observation => 242,",
+     ".direct_observation => 243, // MUTANT"),
+    # Class derivation table (7.4): method_id 1 dropping out of DirectObservation
+    # falls to the Inference floor. BE_EVID_15 asserts classOf(1) directly.
+    ("evidence", "evidence.zig", "WRONG-CONSTANT", "class-table",
+     "method 1 drops out of DirectObservation (1,2,3,4 -> 2,3,4)",
+     "1, 2, 3, 4 => .direct_observation,",
+     "2, 3, 4 => .direct_observation, // MUTANT"),
+    # BE-EVID-02: receiver recomputes min(stated, ceiling). @min -> @max lets a
+    # sender's number above the ceiling through. BE_EVID_02 kills it at 200/242.
+    ("evidence", "evidence.zig", "WRONG-OPERATOR", "min-recompute",
+     "effective = min(stated, ceiling) -> max",
+     "return @min(stated_q8, strongest_ceiling_q8);",
+     "return @max(stated_q8, strongest_ceiling_q8); // MUTANT"),
+    # BE-EVID-03: resource_id == subject. Inverting the guard makes a matching
+    # span NOT raise the ceiling. BE_EVID_03 (and almost every other test) kills it.
+    ("evidence", "evidence.zig", "WRONG-LOGIC", "subject-match",
+     "subject match guard inverted (skip matching spans)",
+     "if (!std.mem.eql(u8, span.resource_id, claim.subject)) continue;",
+     "if (std.mem.eql(u8, span.resource_id, claim.subject)) continue; // MUTANT"),
+    # BE-EVID-05: a superseded volatile span stops supporting. Dropping the
+    # is_superseded conjunct makes every volatile span count as superseded.
+    # BE_EVID_05 (volatile, not superseded, expects supported) kills it.
+    ("evidence", "evidence.zig", "WRONG-LOGIC", "supersession",
+     "supersession conjunct dropped (volatile always superseded)",
+     "if (isVolatile(span.volatility) and ctx.is_superseded(span.resource_id, span.origin, claim_envelope)) {",
+     "if (isVolatile(span.volatility)) { // MUTANT"),
+    # BE-EVID-05a: supersession is strict descent. The DAG operator's `and`
+    # turned to `or` admits a sibling (descendant of origin, not ancestor of
+    # claim). The dag sibling and strict-self tests kill it.
+    ("evidence", "dag.zig", "WRONG-OPERATOR", "supersession-strict",
+     "supersedes operator and -> or (admits a sibling)",
+     "return self.isAncestor(origin, effect) and self.isAncestor(effect, claim);",
+     "return self.isAncestor(origin, effect) or self.isAncestor(effect, claim); // MUTANT"),
+    # BE-EVID-09: three resolution states. Swapping the Unresolved/Unsupported
+    # tail makes an absent origin render as 0.00. BE_EVID_02b/09 kill it.
+    ("evidence", "evidence.zig", "WRONG-LOGIC", "three-state",
+     "unresolved/unsupported tail swapped",
+     "    if (has_unresolved) return .unresolved;\n    return .unsupported;",
+     "    if (has_unresolved) return .unsupported; // MUTANT\n    return .unresolved; // MUTANT"),
+    # BE-EVID-09b: a non-Effect origin drops out of both states. Treating it as
+    # Unresolved (set the flag instead of continue) renders it pending.
+    # BE_EVID_09b (sole non-Effect span, expects unsupported) kills it.
+    ("evidence", "evidence.zig", "WRONG-LOGIC", "origin-effect",
+     "non-Effect origin treated as unresolved (continue -> flag)",
+     "                continue; // BE-EVID-09b: drops out of both states",
+     "                has_unresolved = true; // MUTANT"),
 ]
 
 
@@ -144,66 +242,90 @@ def run_suite():
 
 
 def main():
-    # 1. derive the denominator from SPEC
+    # 1. derive BOTH denominators from SPEC
     enumerated = enumerated_checks_from_spec()
     modelled = set(modelled_checks_from_spec())
     if not enumerated:
         sys.exit("FATAL: no enumerated BE-GRANT-03 checks found in SPEC")
     if not modelled.issubset(set(enumerated)):
-        sys.exit(f"FATAL: modelled set {sorted(modelled)} not a subset of "
+        sys.exit(f"FATAL: grant modelled set {sorted(modelled)} not a subset of "
                  f"enumerated {enumerated} (SPEC/conformance drift)")
-    print("denominator derived from SPEC.md (not self-counted):")
+    evidence_props = evidence_properties_from_spec()
+    if not evidence_props:
+        sys.exit("FATAL: no evidence properties detected in section 7 of SPEC")
+
+    print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
-    print(f"  modelled by this slice:        {sorted(modelled)} ({len(modelled)})")
+    print(f"  grant modelled by this slice:  {sorted(modelled)} ({len(modelled)})")
     print(f"  BE-GRANT-03b callback:         call-boundary property modelled")
+    print(f"  section-7 evidence properties: {sorted(evidence_props)} ({len(evidence_props)})")
     print()
 
-    # scope check: no mutant may attack a check SPEC does not list as modelled
-    for klass, check, name, _, _ in MUTANTS:
-        if check != "03b" and check not in modelled:
-            sys.exit(f"FATAL: mutant '{name}' attacks check {check}, which SPEC "
-                     "does not list as modelled (scope lie)")
+    # 2. scope check: no mutant may attack a key its domain's SPEC does not list
+    for domain, _target, _klass, key, name, _f, _r in MUTANTS:
+        if domain == "grant":
+            if key != "03b" and key not in modelled:
+                sys.exit(f"FATAL: grant mutant '{name}' attacks check {key}, which "
+                         "SPEC does not list as modelled (scope lie)")
+        else:  # evidence
+            if key not in evidence_props:
+                sys.exit(f"FATAL: evidence mutant '{name}' attacks '{key}', which "
+                         "section 7 of SPEC does not declare (scope lie)")
 
-    # 2. run mutants
-    results = []  # dict per mutant
+    # 3. run mutants
+    results = []
     try:
-        for klass, check, name, find, replace in MUTANTS:
-            if find not in ORIGINAL:
-                print(f"SKIP   [{klass}] {name}: anchor not found (verify.zig changed?)")
-                results.append({"klass": klass, "check": check, "name": name,
-                                "killed": False, "skipped": True})
+        for domain, target, klass, key, name, find, replace in MUTANTS:
+            if find not in ORIGINALS[target]:
+                print(f"SKIP   [{domain}/{klass}] {name}: anchor not found ({target} changed?)")
+                results.append({"domain": domain, "klass": klass, "key": key,
+                                "name": name, "killed": False, "skipped": True})
                 continue
-            VERIFY.write_text(ORIGINAL.replace(find, replace, 1))
+            path = TARGETS[target]
+            path.write_text(ORIGINALS[target].replace(find, replace, 1))
             rc, _ = run_suite()
             is_killed = rc != 0
-            results.append({"klass": klass, "check": check, "name": name,
-                            "killed": is_killed, "skipped": False})
-            print(f"{'KILLED  ' if is_killed else 'SURVIVED'} [{klass}] {name}")
+            results.append({"domain": domain, "klass": klass, "key": key,
+                            "name": name, "killed": is_killed, "skipped": False})
+            print(f"{'KILLED  ' if is_killed else 'SURVIVED'} [{domain}/{klass}] {name}")
     finally:
-        VERIFY.write_text(ORIGINAL)
+        for name, path in TARGETS.items():
+            path.write_text(ORIGINALS[name])
 
-    # 3. gate against the externally-derived denominator
-    run = [r for r in results if not r["skipped"]]
-    killed = sum(1 for r in run if r["killed"])
-    survivors = [r["name"] for r in run if not r["killed"]]
-    covered = {r["check"] for r in run if r["killed"] and r["check"] != "03b"}
-    callback_killed = any(r["killed"] for r in run if r["check"] == "03b")
-    uncovered = sorted(modelled - covered)
+    # 4. gate each domain against its externally-derived denominator
+    def gate_domain(dom, keys, callback_key=None):
+        run = [r for r in results if r["domain"] == dom and not r["skipped"]]
+        killed_keys = {r["key"] for r in run if r["killed"]}
+        survivors = [r["name"] for r in run if not r["killed"]]
+        uncovered = sorted(set(keys) - killed_keys)
+        cb = callback_key in killed_keys if callback_key is not None else True
+        return run, survivors, uncovered, cb
 
     print()
-    print(f"mutation score: {len(covered)}/{len(modelled)} modelled "
-          f"BE-GRANT-03 checks + {'1' if callback_killed else '0'}/1 callback "
-          f"property covered by killed mutants (denominator from SPEC.md)")
-    print(f"  {killed}/{len(run)} mutants killed, "
-          f"{len(survivors)} survived")
-    if survivors:
-        print(f"  SURVIVORS: {survivors}")
-    if uncovered:
-        print(f"  UNCOVERED modelled checks: {uncovered}")
-    if not callback_killed:
+    g_run, g_surv, g_uncov, g_cb = gate_domain("grant", modelled, "03b")
+    g_cov = {r["key"] for r in g_run if r["killed"] and r["key"] != "03b"}
+    print(f"grant:   {len(g_cov)}/{len(modelled)} modelled BE-GRANT-03 checks + "
+          f"{'1' if g_cb else '0'}/1 callback covered")
+    e_run, e_surv, e_uncov, _ = gate_domain("evidence", evidence_props)
+    e_cov = {r["key"] for r in e_run if r["killed"]}
+    print(f"evidence: {len(e_cov)}/{len(evidence_props)} section-7 properties "
+          f"covered by killed mutants")
+    total_run = [r for r in results if not r["skipped"]]
+    total_killed = sum(1 for r in total_run if r["killed"])
+    print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
+          f"{len(g_surv) + len(e_surv)} survived")
+    if g_surv:
+        print(f"  grant SURVIVORS: {g_surv}")
+    if e_surv:
+        print(f"  evidence SURVIVORS: {e_surv}")
+    if g_uncov:
+        print(f"  UNCOVERED grant checks: {g_uncov}")
+    if e_uncov:
+        print(f"  UNCOVERED evidence properties: {e_uncov}")
+    if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
-    ok = (not survivors) and (not uncovered) and callback_killed
+    ok = (not g_surv) and (not e_surv) and (not g_uncov) and (not e_uncov) and g_cb
     return 0 if ok else 1
 
 
