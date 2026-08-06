@@ -52,6 +52,27 @@ pub const Branch = enum {
     effect_accepted, // parseEffect: returned a valid Effect
     claim_trailing, // parseClaim: bytes after the single claim body
     claim_accepted, // parseClaim: returned a valid Claim
+    // Transport parsers (SPEC 4.1a). Malformed covers the two structural
+    // violations SPEC 2.2 / 4.1a make a parse failure: a wrong type byte and a
+    // non-zero reserved field. Each fixed message has its own trailing check;
+    // the variable data packet has a payload floor and a BE-TR-05 ceiling instead.
+    hs_init_type, // parseHandshakeInitiation: message_type != 1
+    hs_init_reserved, // parseHandshakeInitiation: reserved bytes non-zero
+    hs_init_trailing, // parseHandshakeInitiation: bytes after the 144-byte message
+    hs_init_accepted, // parseHandshakeInitiation: returned a valid message
+    hs_resp_type, // parseHandshakeResponse: message_type != 2
+    hs_resp_reserved, // parseHandshakeResponse: reserved bytes non-zero
+    hs_resp_trailing, // parseHandshakeResponse: bytes after the 92-byte message
+    hs_resp_accepted, // parseHandshakeResponse: returned a valid message
+    cookie_type, // parseCookieReply: message_type != 3
+    cookie_reserved, // parseCookieReply: reserved bytes non-zero
+    cookie_trailing, // parseCookieReply: bytes after the 52-byte message
+    cookie_accepted, // parseCookieReply: returned a valid message
+    data_type, // parseDataPacketHeader: message_type != 4
+    data_reserved, // parseDataPacketHeader: reserved bytes non-zero
+    data_payload_short, // parseDataPacketHeader: payload shorter than the AEAD tag
+    data_payload_oversize, // parseDataPacketHeader: payload above the BE-TR-05 bound
+    data_accepted, // parseDataPacketHeader: returned a valid header
 };
 
 pub const COUNT: usize = @typeInfo(Branch).@"enum".fields.len;
@@ -71,10 +92,11 @@ fn hit(b: Branch) void {
 pub inline fn reject(comptime tag: Branch) parser.ParseError {
     hit(tag);
     return switch (tag) {
-        .cursor_truncated => error.Truncated,
-        .env_parent_oversize, .env_body_oversize, .field16_oversize, .field32_oversize => error.Oversize,
-        .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing => error.TrailingBytes,
-        .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted => @compileError("accepted exit points do not reject; use accept()"),
+        .cursor_truncated, .data_payload_short => error.Truncated,
+        .env_parent_oversize, .env_body_oversize, .field16_oversize, .field32_oversize, .data_payload_oversize => error.Oversize,
+        .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing, .hs_init_trailing, .hs_resp_trailing, .cookie_trailing => error.TrailingBytes,
+        .hs_init_type, .hs_init_reserved, .hs_resp_type, .hs_resp_reserved, .cookie_type, .cookie_reserved, .data_type, .data_reserved => error.Malformed,
+        .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted, .hs_init_accepted, .hs_resp_accepted, .cookie_accepted, .data_accepted => @compileError("accepted exit points do not reject; use accept()"),
     };
 }
 
