@@ -137,3 +137,19 @@ anchor (`blake2s("bolina/example-effect-envelope")`), matching the pre-existing 
 vector that shipped in round 3. This does not change the wire format (origin is still a 32-byte
 field) or any guarantee; it leaves the executor's real construction protocol as an open question for
 Daniel. Not a stop: nothing irreversible and no promise changes. Flagged in RED-TEAM-09.md (open).
+
+## D-014 — 2026-08-06 — No invented per-Effect or per-Claim span_count cap
+
+Decision: parseEffect and parseClaim enforce NO bound on `span_count` beyond the bytes available.
+They read `u8 span_count`, then read that many spans (Effect) or `span_count * 16` bytes (Claim),
+truncating via the shared Cursor rejection if the buffer runs out. Reasoning: BE-TR-05 is the one
+table that declares every attacker-influenced size and its hard maximum, and it declares no
+per-Effect or per-Claim span cap. The only span bound in §7 is BE-EVID-10, and it sits on the
+Utterance (at most 64 spans), not on the Effect body or the Claim. The enclosing envelope's
+`body_len` (<= MAX_BODY) already bounds total input, so a fabricated-large `span_count` truncates
+instead of allocating or looping unbounded; the parser is zero-heap and the loop is bounded by the
+buffer, not by the count. Pre-close check 3 ("does the thing being checked need to exist?"): a
+per-structure span cap does not exist in the spec, so inventing one would add a guarantee the spec
+does not make and a rejection the spec does not require, which is exactly the kind of change that
+belongs on the stop list. What would reopen it: if Daniel wants a defense-in-depth cap on inline
+spans (e.g. reject an Effect with span_count > N), that is a new guarantee and I stop for it.

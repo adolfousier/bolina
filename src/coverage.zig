@@ -46,6 +46,12 @@ pub const Branch = enum {
     intent_accepted, // parseIntent: returned a valid Intent
     grant_trailing, // parseGrant: bytes after the single grant
     grant_accepted, // parseGrant: returned a valid Grant
+    span_trailing, // parseSpan: bytes after the single span
+    span_accepted, // parseSpan: returned a valid Span
+    effect_trailing, // parseEffect: bytes after the single effect body
+    effect_accepted, // parseEffect: returned a valid Effect
+    claim_trailing, // parseClaim: bytes after the single claim body
+    claim_accepted, // parseClaim: returned a valid Claim
 };
 
 pub const COUNT: usize = @typeInfo(Branch).@"enum".fields.len;
@@ -67,8 +73,8 @@ pub inline fn reject(comptime tag: Branch) parser.ParseError {
     return switch (tag) {
         .cursor_truncated => error.Truncated,
         .env_parent_oversize, .env_body_oversize, .field16_oversize, .field32_oversize => error.Oversize,
-        .env_trailing, .intent_trailing, .grant_trailing => error.TrailingBytes,
-        .env_accepted, .intent_accepted, .grant_accepted => @compileError("accepted exit points do not reject; use accept()"),
+        .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing => error.TrailingBytes,
+        .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted => @compileError("accepted exit points do not reject; use accept()"),
     };
 }
 

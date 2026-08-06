@@ -48,6 +48,15 @@ pub const LEN_INTENT_ID: usize = 16;
 pub const LEN_GRANT_ID: usize = 16;
 pub const LEN_ACTION_DIGEST: usize = 32; // BLAKE2s-256 of Intent.action (BE-GRANT-02)
 
+// Fixed widths for the attestation structures (SPEC section 7).
+pub const LEN_SPAN_ID: usize = 16; // Span.span_id (SPEC 7.1)
+pub const LEN_TRACE_ID: usize = 16; // Span.trace_id (SPEC 7.1)
+pub const LEN_ORIGIN: usize = 32; // Span.origin: BLAKE2s of the publishing Effect envelope (SPEC 7.1)
+pub const LEN_DIGEST: usize = 32; // Span.digest / Effect.output_digest: BLAKE2s of observed output
+pub const LEN_SPAN_REF: usize = 16; // Claim.span_ids element (SPEC 7.2)
+pub const MAX_CLAIM_TEXT: usize = 1024; // Claim.text (SPEC 7.2)
+pub const MAX_SUBJECT: usize = 256; // Claim.subject (SPEC 7.2)
+
 // Domain-separation tags for Ed25519 signing (SPEC BE-SIG-01). The verifier
 // (LANGUAGE.md section 4 item 2) prefixes tag || tbs before checking sig.
 pub const DOMAIN_CERT: u8 = 0x01;
@@ -299,5 +308,179 @@ pub fn parseGrant(buf: []const u8) ParseError!Grant {
         .tbs = tbs,
         .sig = sig,
         .wire = buf,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Span (SPEC 7.1)
+//
+//   u8 version(=2) | [16] span_id | [16] trace_id | u16 resource_len, resource_id(<=256)
+//   u8 method_id | u8 volatility | [32] origin | u64 observed_at
+//   [32] digest | [32] executor | [64] sig
+//
+// sig is Ed25519 over all preceding bytes, domain tag 0x03 (BE-SIG-01). The
+// evidence class is DERIVED from method_id by the receiver (BE-EVID-15), never
+// carried on the wire, so the parser records method_id and decides nothing
+// about class here. volatility is the executor's declaration; BE-EVID-06 makes
+// an unrecognized value the receiver's floor, also a verifier concern. Version
+// is parsed but not refused, same as Envelope and Grant: policy stays out of
+// the parser, BE-WIRE-02 totality stays in.
+//
+// readSpan advances a SHARED cursor over one Span with no trailing check: the
+// byte that ends one span is the first byte of the next (inline spans inside
+// an Effect, SPEC 6.3) or of a following field. The trailing check belongs to
+// the parser that owns the buffer, not to the reader. Every exit routes through
+// the shared Cursor rejection, so readSpan adds no exit point of its own (M9).
+// ---------------------------------------------------------------------------
+
+pub const Span = struct {
+    version: u8,
+    span_id: []const u8,
+    trace_id: []const u8,
+    resource_id: []const u8,
+    method_id: u8,
+    volatility: u8,
+    origin: []const u8,
+    observed_at: u64,
+    digest: []const u8,
+    executor: []const u8,
+    tbs: []const u8,
+    sig: []const u8,
+};
+
+fn readSpan(c: *Cursor) ParseError!Span {
+    const start = c.pos;
+    const version = try c.u8r();
+    const span_id = try c.take(LEN_SPAN_ID);
+    const trace_id = try c.take(LEN_TRACE_ID);
+    const resource_id = try c.field16(MAX_RESOURCE);
+    const method_id = try c.u8r();
+    const volatility = try c.u8r();
+    const origin = try c.take(LEN_ORIGIN);
+    const observed_at = try c.u64be();
+    const digest = try c.take(LEN_DIGEST);
+    const executor = try c.take(LEN_PUBKEY);
+    const tbs = c.buf[start..c.pos];
+    const sig = try c.take(LEN_SIG);
+    return .{
+        .version = version,
+        .span_id = span_id,
+        .trace_id = trace_id,
+        .resource_id = resource_id,
+        .method_id = method_id,
+        .volatility = volatility,
+        .origin = origin,
+        .observed_at = observed_at,
+        .digest = digest,
+        .executor = executor,
+        .tbs = tbs,
+        .sig = sig,
+    };
+}
+
+pub fn parseSpan(buf: []const u8) ParseError!Span {
+    var c = Cursor{ .buf = buf };
+    const s = try readSpan(&c);
+    // BE-WIRE-02 totality: exactly one span, nothing after it.
+    if (c.pos != buf.len) return coverage.reject(.span_trailing);
+    coverage.accept(.span_accepted);
+    return s;
+}
+
+// ---------------------------------------------------------------------------
+// Effect body (SPEC 6.3)
+//
+//   [16] intent_id | [16] grant_id | u8 ok | i32 exit_code
+//   u8 span_count | Span[] | [32] output_digest
+//
+// The Effect is a body (body_type 4) inside a signed Envelope (SPEC 6.2); it
+// authenticates nothing itself, so parseEffect takes the body slice. Inline
+// spans are full Span wires (tbs || sig, SPEC 7.1) walked here for totality:
+// readSpan consumes every byte of the span region before output_digest is read,
+// so a truncated or overlong span is rejected, not silently mis-sliced.
+// exit_code is i32 on the wire; read as u32 and bit-cast (identical 4 bytes,
+// no pointer mint: @bitCast to a non-pointer is outside the M8 forbidden set).
+// ok, exit_code and span_count are parsed, not policy-checked: BE-EFF-01 and the
+// Utterance-level span bound (BE-EVID-10) are verifier concerns. No per-Effect
+// span cap is declared in BE-TR-05, so none is invented here; body_len bounds
+// the whole input and a span_count past the buffer truncates via readSpan.
+// ---------------------------------------------------------------------------
+
+pub const Effect = struct {
+    intent_id: []const u8,
+    grant_id: []const u8,
+    ok: u8,
+    exit_code: i32,
+    span_count: u8,
+    spans: []const u8, // raw span region: span_count full Span wires, caller re-parses
+    output_digest: []const u8,
+};
+
+pub fn parseEffect(buf: []const u8) ParseError!Effect {
+    var c = Cursor{ .buf = buf };
+    const intent_id = try c.take(LEN_INTENT_ID);
+    const grant_id = try c.take(LEN_GRANT_ID);
+    const ok = try c.u8r();
+    const exit_code = @as(i32, @bitCast(try c.u32be()));
+    const span_count = try c.u8r();
+    const span_start = c.pos;
+    var i: usize = 0;
+    while (i < span_count) : (i += 1) {
+        _ = try readSpan(&c);
+    }
+    const spans = buf[span_start..c.pos];
+    const output_digest = try c.take(LEN_DIGEST);
+    if (c.pos != buf.len) return coverage.reject(.effect_trailing);
+    coverage.accept(.effect_accepted);
+    return .{
+        .intent_id = intent_id,
+        .grant_id = grant_id,
+        .ok = ok,
+        .exit_code = exit_code,
+        .span_count = span_count,
+        .spans = spans,
+        .output_digest = output_digest,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Claim body (SPEC 7.2)
+//
+//   u16 text_len, text(<=1KiB) | u16 subject_len, subject(<=256)
+//   u8 confidence_q8 | u8 span_count | [16]* span_ids
+//
+// A Claim carries no signature of its own: it is authenticated only inside a
+// signed Utterance envelope (BE-EVID-08). The Utterance grammar is deferred to
+// RED-TEAM-09 F1, so this parser fixes the Claim body layout against the
+// vector in test/vectors.json. confidence_q8 is the sender's upper-bound
+// request (BE-EVID-02); the receiver recomputes, so the parser records the
+// byte and enforces nothing about it. span_ids are 16 bytes each; span_count is
+// bounded by the enclosing body_len, not by a per-claim cap (BE-TR-05 declares
+// none; the 64-span bound is on the Utterance, BE-EVID-10).
+// ---------------------------------------------------------------------------
+
+pub const Claim = struct {
+    text: []const u8,
+    subject: []const u8,
+    confidence_q8: u8,
+    span_count: u8,
+    span_ids: []const u8, // span_count * 16 bytes, aliased into the body
+};
+
+pub fn parseClaim(buf: []const u8) ParseError!Claim {
+    var c = Cursor{ .buf = buf };
+    const text = try c.field16(MAX_CLAIM_TEXT);
+    const subject = try c.field16(MAX_SUBJECT);
+    const confidence_q8 = try c.u8r();
+    const span_count = try c.u8r();
+    const span_ids = try c.take(@as(usize, span_count) * LEN_SPAN_REF);
+    if (c.pos != buf.len) return coverage.reject(.claim_trailing);
+    coverage.accept(.claim_accepted);
+    return .{
+        .text = text,
+        .subject = subject,
+        .confidence_q8 = confidence_q8,
+        .span_count = span_count,
+        .span_ids = span_ids,
     };
 }
