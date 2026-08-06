@@ -246,8 +246,8 @@ one number per audit unit, and the unit is what an attacker can reach.* (D-030.)
   verify what a hostile authenticated peer's bytes can reach.
 - **Non-surface:** `src/dag.zig`, `src/evidence.zig`, `src/verify.zig` — state over parsed values
   (D-018), not reached by attacker bytes directly.
-- **Harness and entry:** `src/main.zig`, `src/tests.zig`, `src/fuzz.zig`, `src/coverage.zig`, and
-  every `*_test.zig`.
+- **Harness and entry:** `src/main.zig`, `src/tests.zig`, `src/fuzz.zig`, `src/coverage.zig`,
+  `src/evidence_test_helpers.zig`, and every `*_test.zig`.
 
 Every non-test `src/*.zig` file MUST appear in exactly one of the four lists above; a file the spec
 does not place fails the build until the spec places it. A unit's cap MAY be subdivided into smaller
