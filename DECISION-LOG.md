@@ -339,3 +339,53 @@ the WireGuard shape. It is reversible (spec text). What would reopen it: adding 
 four WG messages; making Bolina byte-compatible with WireGuard (which would need little-endian
 integers and XChaCha20-Poly1305, both breaking §2.1/§2.2); or dropping the initiation timestamp (an
 anti-replay mechanism, guarantee-adjacent).
+
+## D-020 — 2026-08-06 — Transport messages get no vectors.json entry: §11.3 is a signature-verification harness and transport carries no signature
+
+Question: Plan task #4 scoped "extend gen-vectors.zig with transport structures (handshake
+initiation/response, cookie reply, transport header, fragment, LookupRequest/Response), regenerate
+test/vectors.json, extend tools/verify-vectors.py." Do those belong in the §11.3 vector file, or is
+transport verified elsewhere?
+
+Decision: defer all transport-message vectors out of vectors.json. Transport parse fixtures live
+inline in src/parser_test.zig (the ENVELOPE_HEX pattern), written alongside the parser in Tasks
+#5-7. Real Noise_IK handshake-transcript vectors, if any, live with the crypto modules in Tasks
+#8-10, where a fixed transcript can pin session keys. vectors.json gains no transport entries this
+round.
+
+Reasoning: §11.3 enumerates its structure classes by name and domain tag: Cert (0x01), Envelope
+(0x02), Span (0x03), Grant (0x04), Refusal (0x06). Every one is Ed25519-signed over domain_tag ||
+tbs (BE-SIG-01). The stated purpose of the file is cross-implementation agreement on signature
+inputs, address derivations, and digests. Concretely, src/vectors_test.zig consumes vectors.json
+and every positive test calls verify.verifySigned(...): the file's value is "do the Zig parser and
+the Python cryptography verifier agree on each Ed25519 signature." Transport messages have no
+Ed25519 signature. The four §4.1a messages carry mac1/mac2 (keyed-BLAKE2s, §4.4) and
+ChaCha20-Poly1305 ciphertexts; fragments and LookupRequest/Response are session-AEAD plaintext
+bodies (§4.5, §5.1a). None can satisfy a verifySigned cross-check, so a vectors.json entry for any
+of them would be unverifiable by verify-vectors.py (no signature to reproduce) and dead weight in
+vectors_test.zig (no verifySigned to run). The AEAD/MAC bytes depend on Noise handshake state that
+does not exist until Tasks #8-10; a structural vector with placeholder crypto bytes has no
+cross-implementation meaning, since no second implementation can reproduce a copied constant. The
+correct home for "does parseHandshakeInit read offset 4 as a big-endian u32 and reject non-zero
+reserved bytes" is the parser unit test, exactly where BE_WIRE_02 (truncation, trailing-byte,
+oversize, parent-count) already lives as inline byte literals grounded in the canonical vector.
+
+§4.5's fragment grammar (msg_id:u64, index:u16, total:u16) and §5.1a's LookupRequest/Response
+grammar are already pinned as prose grammars sufficient for a parser. Unlike the four §4.1a
+handshake messages they need no offset table: LookupRequest is fixed-width (1 + 16 = 17 bytes) and
+LookupResponse is length-delimited (u8 endpoint_count tuples then u16 cert_len). So no
+spec-completion offset table is owed before the parser either.
+
+Pre-close checks: (1) read against other sections: §11.3's enumerated set is unchanged, so no
+guarantee there is weakened; §4.1a (D-019), §4.4 (mac1/mac2), §4.5 (fragment), §5.1a (lookup) are
+all unchanged and still govern the parser; (2) who picked the denominator: none; the deferral
+follows from the structure of vectors_test.zig (verifySigned) and §11.3's enumerated classes, both
+verifiable in-repo; (3) does the thing need to exist: transport parser coverage is owed, and it will
+exist in src/parser_test.zig with the parser code, not here.
+
+This is a test-routing decision. It alters no BE-* guarantee and changes no wire byte. It is
+reversible (add transport fixtures wherever a reviewer prefers). What would reopen it: a reviewer
+directing that transport messages get committed vectors.json entries anyway (then they would be
+structural-only and clearly labeled, since real Noise transcripts are still gated on Tasks #8-10);
+or a §11.3 amendment that formally enumerates a transport vector class with a non-signature
+cross-check.
