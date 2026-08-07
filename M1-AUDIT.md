@@ -246,6 +246,21 @@ A + B are the keying surface this sprint. The exact A/B split for the
 confirm-then-key markers (BE-TR-06, BE-ENV-03, BE-ENV-04, BE-REV-01 duration,
 BE-EVID-11) is settled in task #2 and then executed in task #3.
 
+### Confirm-then-key resolution (M1 keying pass)
+
+All five confirm-then-key markers were read against the code and resolve to
+**NEEDS-CODE** -- the property's code path does not exist in this slice, so no
+honest runtime test can bind it (D-027 forbids a vacuous structural test that
+passes only because the feature is absent).
+
+| Marker | Requirement | What the code has | Verdict |
+|--------|-------------|-------------------|---------|
+| BE-TR-06 | Single delivery site requires a bound session | `bound` flag + sole authoriser exist; no dispatch path checks it | NEEDS-CODE (see Bucket B resolution; `main.zig` is a stub) |
+| BE-ENV-03 | Receiver rejects an envelope whose sender cert lacks the role for its body_type | Only `body_type != BODY_GRANT` (`verify.zig:188`); no body_type -> role map | NEEDS-CODE |
+| BE-ENV-04 | Per-(sender,channel) sliding window over `seq` at the envelope layer | `ReplayWindow` is transport-only (`session.zig:94`); `env.seq` parsed but unchecked | NEEDS-CODE |
+| BE-REV-01 | Approver/executor cert duration `not_after - not_before <= 30 days` | `validateCert` checks the validity window only (`binding.zig:148`); no duration cap | NEEDS-CODE |
+| BE-EVID-11 | `method_id` is a compile-time constant of the executor; no executor interface accepts it | SPEC's own text: "verified by reading the executor's source once, statically". No executor module exists; `classOf(method_id)` is receiver code (BE-EVID-13/15, already bound), not an executor interface | NEEDS-CODE |
+
 **Numbers do not sum to 62 yet** because five markers straddle a bucket line
 and are settled by the task #2 mechanism decisions, not by this audit. The
 audit's job is to name every marker and its evidence; the mechanism decisions
