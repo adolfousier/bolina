@@ -1,12 +1,28 @@
 #!/usr/bin/env python3
 # mutation-test.py
 #
-# Mutation harness v9 for the Grant verifier, the attestation layer, the
-# transport DoS gate, the session phase, the channel layer AND the mesh
-# identity boundary (LANGUAGE.md section 4 metric; SPEC.md section 11.2).
+# Mutation harness v10 for the Grant verifier, the attestation layer, the
+# transport DoS gate, the session phase, the channel layer, the mesh identity
+# boundary AND the relay surface (LANGUAGE.md section 4 metric; SPEC.md
+# section 11.2).
 # cargo-mutants does not exist for Zig, so this applies one mutant at a time to
 # a source file, rebuilds, runs the full test suite, and records whether the
 # suite kills it.
+#
+# v10 (relay slice): the relay domain. BE-MESH-02 shipped as src/relay.zig
+# (D-043/D-044), so the mesh obligations the v9 note excluded for lack of a
+# relay now get their own denominator, detected from SPEC markers like every
+# other domain:
+#   relay <- §5.2a wire formats, §5.2 BE-MESH-02, and the BE-SIG-01 0x07 row
+# Eight keys: the two wire formats, the forward invariant, unknown-recipient
+# drop, the 4096-entry table bound, the 300s skew, expiry pruning, and the
+# 0x07 domain tag. Two keys attack code the slice defers rather than omits
+# silently: the domain tag is pinned by a constant-vs-literal test (the
+# verification path that consumes it is D-043-deferred) and the sig boundary
+# is pinned through the tbs slice the future verifier will sign. Preceding
+# commit hardened relay_test.zig to literal expectations (D-027): the
+# table-full test walked relay.MAX_RELAY_TABLE symbolically, and the skew,
+# tbs, and tag boundaries had no witness at all.
 #
 # v9 (bolina mandate task 12): the channel and mesh domains. Tasks 10 and 11
 # shipped verify code with unit tests but nothing trying to break it, so those
@@ -17,10 +33,10 @@
 # Deliberately not keyed, each for a stated reason rather than convenience:
 # BE-CHAN-03's acceptance half is the same requireMember code already keyed
 # under chan-01/chan-02 and its error priority is not normative in SPEC, so
-# pinning an order would invent a requirement (the D-014 sin); BE-MESH-02 and
-# BE-MESH-03 are relay obligations with no relay in this slice (D-037); and
-# BE-MESH-07 is satisfied by placement, since the lookup parsers live in the
-# post-authentication unit.
+# pinning an order would invent a requirement (the D-014 sin); BE-MESH-03
+# stays deferred (store-and-forward is a MAY, D-043) and BE-MESH-07 is
+# satisfied by placement, since the lookup parsers live in the
+# post-authentication unit. BE-MESH-02 moved to the relay domain in v10.
 #
 # v8 (bolina mandate task 8): the session domain. Five properties the session
 # phase declares in SPEC section 4 get keys detected from their normative
@@ -109,6 +125,7 @@ TARGETS = {
     "noise.zig": SRC / "noise.zig",
     "session.zig": SRC / "session.zig",
     "binding.zig": SRC / "binding.zig",
+    "relay.zig": SRC / "relay.zig",
 }
 ORIGINALS = {name: path.read_text() for name, path in TARGETS.items()}
 
@@ -304,9 +321,10 @@ def channel_properties_from_spec():
 # --- mesh denominator, derived from SPEC.md section 5 ----------------------
 #
 # The lighthouse-served certificate verifier (BE-MESH-01/04/05/06). Keyed from
-# the bold markers in SPEC section 5. BE-MESH-02/03 are relay obligations with
-# no relay in this slice and BE-MESH-07 is satisfied by placement; all three
-# are excluded here and named in D-037 decision 5, not silently dropped.
+# the bold markers in SPEC section 5. BE-MESH-02 is keyed under the relay
+# domain below (v10); BE-MESH-03 stays deferred (store-and-forward is a MAY,
+# D-043) and BE-MESH-07 is satisfied by placement; both are excluded here and
+# named in D-037 decision 5, not silently dropped.
 
 MESH_MARKERS = [
     # (denominator key, what SPEC says, marker text that must be present)
@@ -327,6 +345,50 @@ def mesh_properties_from_spec():
     text = SPEC.read_text()
     props = set()
     for key, _what, pattern in MESH_MARKERS:
+        if re.search(pattern, text):
+            props.add(key)
+    return props
+
+
+# --- relay denominator, derived from SPEC.md §5.2/§5.2a/BE-SIG-01 -----------
+#
+# The relay surface (src/relay.zig): BE-MESH-02 forwarding under D-043's
+# BE-MESH-02-only scope. Keys are detected from the §5.2a wire-format
+# definitions, the normative sentences they cite, and the BE-SIG-01 0x07 row;
+# removing a sentence from SPEC removes its key here (the denominator law).
+# Two keys name obligations the slice pins but does not yet consume: the 0x07
+# domain tag (signature verification is deferred with the session state it
+# needs) and the tbs boundary (the bytes the deferred verifier will sign).
+# Pinning them keeps the wire commitment honest instead of quietly dropping
+# the key until the verifier lands.
+
+RELAY_MARKERS = [
+    # (denominator key, what SPEC says, marker text that must be present)
+    ("relay-route-format", "§5.2a type 5 route header, 20 fixed bytes",
+     r"Type5RelayRoute :="),
+    ("relay-reg-format", "§5.2a type 6 registration, 124 fixed bytes",
+     r"Type6RelayRegistration :="),
+    ("relay-forward", "BE-MESH-02 forward unchanged, no key material",
+     r"\*\*BE-MESH-02"),
+    ("relay-unknown-dst", "MUST NOT forward type 5 to unknown recipient_index",
+     r"MUST NOT forward type 5 packets to unknown"),
+    ("relay-table-bound", "registration table bounded to 4096 entries",
+     r"bounded to 4096 entries"),
+    ("relay-skew", "|now - timestamp| > 300 seconds silently dropped",
+     r"\|now - timestamp\| > 300"),
+    ("relay-expiry", "registration entries expire at expiry and are pruned",
+     r"Registration entries expire"),
+    ("relay-domain-tag", "BE-SIG-01 domain tag 0x07 for RelayRegistration",
+     r"0x07.*RelayRegistration"),
+]
+
+
+def relay_properties_from_spec():
+    """The set of relay properties the slice must prove, each detected from
+    its marker in SPEC §5.2/§5.2a or the BE-SIG-01 table."""
+    text = SPEC.read_text()
+    props = set()
+    for key, _what, pattern in RELAY_MARKERS:
         if re.search(pattern, text):
             props.add(key)
     return props
@@ -707,6 +769,86 @@ MUTANTS = [
      "revocation never consulted at use (cached verdict carried forward)",
      "    if (ctx.is_revoked(served.sig_pubkey)) return error.ServedCertRevoked;",
      "    // MUTANT: revocation never consulted at use"),
+
+    # --- relay domain: the relay surface (src/relay.zig, SPEC §5.2a)
+    # relay-route-format: field order swapped. The happy-path test asserts the
+    # LITERAL sender_index 1 and recipient_index 2 from the fixed ROUTE_HEX,
+    # so swapped reads fail both assertions.
+    ("relay", "relay.zig", "WRONG-FIELD", "relay-route-format",
+     "route sender/recipient indices read in swapped order",
+     "    const sender_index = try c.u32be();\n    const recipient_index = try c.u32be();",
+     "    const recipient_index = try c.u32be(); // MUTANT: field order swapped\n    const sender_index = try c.u32be(); // MUTANT"),
+    # relay-route-format: timestamp endianness. The happy-path test asserts
+    # the LITERAL timestamp 1000; a little-endian read of the big-endian wire
+    # bytes yields a huge value and dies there.
+    ("relay", "relay.zig", "WRONG-ENDIAN", "relay-route-format",
+     "route timestamp read little-endian instead of big-endian",
+     "    const recipient_index = try c.u32be();\n    const timestamp = try c.u64be();",
+     "    const recipient_index = try c.u32be();\n    const timestamp = try c.u64le(); // MUTANT"),
+    # relay-route-format: reserved check dropped. The non-zero-reserved test
+    # expects Malformed; without the check the buffer parses.
+    ("relay", "relay.zig", "CHECK-ABSENCE", "relay-route-format",
+     "route reserved bytes never checked",
+     "    if (reserved[0] != 0 or reserved[1] != 0 or reserved[2] != 0)\n        return coverage.reject(.relay_route_reserved);",
+     "    _ = reserved; // MUTANT: route reserved bytes never checked"),
+    # relay-reg-format: reserved check dropped. The registration
+    # non-zero-reserved test expects Malformed; without the check it parses.
+    ("relay", "relay.zig", "CHECK-ABSENCE", "relay-reg-format",
+     "registration reserved bytes never checked",
+     "    if (reserved[0] != 0 or reserved[1] != 0 or reserved[2] != 0)\n        return coverage.reject(.relay_reg_reserved);",
+     "    _ = reserved; // MUTANT: registration reserved bytes never checked"),
+    # relay-reg-format (sig-skip half): the tbs boundary shrunk one byte. The
+    # signature covers type..expiry (44 bytes); excluding the expiry byte
+    # changes what the deferred verifier would sign. The tbs test asserts the
+    # LITERAL 44-byte prefix of REG_BYTES.
+    ("relay", "relay.zig", "WRONG-BOUNDARY", "relay-reg-format",
+     "tbs shrunk one byte (expiry excluded from the signed span)",
+     "    const tbs = buf[0..(LEN_RELAY_REGISTRATION - LEN_SIG - LEN_PADDING)];",
+     "    const tbs = buf[0..(LEN_RELAY_REGISTRATION - LEN_SIG - LEN_PADDING - 1)]; // MUTANT"),
+    # relay-domain-tag (tag-mismatch half): the tag shifted to 0x06, which
+    # BE-SIG-01 already assigns. The verification path that consumes the tag
+    # is deferred (D-043), so the pin test asserts the constant against the
+    # LITERAL 0x07 from the BE-SIG-01 row, the same shape vectors_test uses
+    # for every domain tag.
+    ("relay", "relay.zig", "WRONG-CONSTANT", "relay-domain-tag",
+     "registration domain tag shifted (0x07 -> 0x06, colliding)",
+     "pub const DOMAIN_RELAY_REGISTRATION: u8 = 0x07;",
+     "pub const DOMAIN_RELAY_REGISTRATION: u8 = 0x06; // MUTANT"),
+    # relay-unknown-dst: the recipient lookup dropped entirely. The
+    # unknown-recipient test expects UnknownRecipient; without the lookup
+    # every packet forwards.
+    ("relay", "relay.zig", "CHECK-ABSENCE", "relay-unknown-dst",
+     "recipient never looked up (every packet forwards)",
+     "    for (table.entries[0..table.count]) |e| {\n        if (e.client_index == route.recipient_index) {\n            // Forward the packet unchanged. The caller sends it to the\n            // recipient's UDP endpoint (obtained from the session table).\n            return packet;\n        }\n    }\n    return ForwardError.UnknownRecipient;",
+     "    _ = table; // MUTANT: recipient never looked up\n    return packet;"),
+    # relay-skew: the bound shifted one second. The boundary tests forward at
+    # LITERAL now-300 and expect StaleRoute at LITERAL now-301; under a 299s
+    # bound the now-300 route is stale and the forward test dies.
+    ("relay", "relay.zig", "WRONG-CONSTANT", "relay-skew",
+     "timestamp skew bound shifted (300 -> 299)",
+     "pub const TIMESTAMP_SKEW: u64 = 300; // seconds, relay-local (D-044)",
+     "pub const TIMESTAMP_SKEW: u64 = 299; // MUTANT"),
+    # relay-table-bound: the bound raised one entry. The table-full test
+    # inserts LITERAL 4096 entries and expects the next insert refused; under
+    # 4097 the 4097th insert succeeds and the refusal assertion dies.
+    ("relay", "relay.zig", "WRONG-CONSTANT", "relay-table-bound",
+     "table bound raised one entry (4096 -> 4097)",
+     "pub const MAX_RELAY_TABLE: usize = 4096; // bounded registration table (D-044)",
+     "pub const MAX_RELAY_TABLE: usize = 4097; // MUTANT"),
+    # relay-expiry: the prune comparison inverted. The prune test expects the
+    # expiry-100 entry gone and the expiry-200 entry present at now 150; the
+    # inversion prunes the live entry instead and the lookup assertions die.
+    ("relay", "relay.zig", "WRONG-LOGIC", "relay-expiry",
+     "prune comparison inverted (live entries pruned, expired kept)",
+     "            if (self.entries[i].expiry <= now) {",
+     "            if (self.entries[i].expiry > now) { // MUTANT"),
+    # relay-forward: the forwarded packet mutated. BE-MESH-02's guarantee is
+    # forward-unchanged; returning a tail slice changes length and bytes, and
+    # the happy-path test's LITERAL expectEqualSlices dies.
+    ("relay", "relay.zig", "WRONG-LOGIC", "relay-forward",
+     "forwarded packet mutated (leading byte stripped)",
+     "            return packet;\n        }\n    }\n    return ForwardError.UnknownRecipient;",
+     "            return packet[1..]; // MUTANT: forwarded packet mutated\n        }\n    }\n    return ForwardError.UnknownRecipient;"),
 ]
 
 
@@ -742,6 +884,9 @@ def main():
     mesh_props = mesh_properties_from_spec()
     if not mesh_props:
         sys.exit("FATAL: no mesh properties detected in section 5 of SPEC")
+    relay_props = relay_properties_from_spec()
+    if not relay_props:
+        sys.exit("FATAL: no relay properties detected in SPEC §5.2a/BE-SIG-01")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -752,6 +897,7 @@ def main():
     print(f"  session-phase properties:        {sorted(session_props)} ({len(session_props)})")
     print(f"  section-6 channel properties:    {sorted(channel_props)} ({len(channel_props)})")
     print(f"  section-5 mesh properties:       {sorted(mesh_props)} ({len(mesh_props)})")
+    print(f"  relay properties (§5.2a):        {sorted(relay_props)} ({len(relay_props)})")
     print()
 
     # 2. scope check: no mutant may attack a key its domain's SPEC does not list
@@ -780,6 +926,10 @@ def main():
             if key not in mesh_props:
                 sys.exit(f"FATAL: mesh mutant '{name}' attacks '{key}', which "
                          "section 5 of SPEC does not declare (scope lie)")
+        elif domain == "relay":
+            if key not in relay_props:
+                sys.exit(f"FATAL: relay mutant '{name}' attacks '{key}', which "
+                         "SPEC §5.2a/BE-SIG-01 does not declare (scope lie)")
         else:
             sys.exit(f"FATAL: mutant '{name}' in unknown domain '{domain}'")
 
@@ -874,10 +1024,15 @@ def main():
         m_cov = {r["key"] for r in m_run if r["killed"]}
         print(f"mesh:     {len(m_cov)}/{len(mesh_props)} section-5 "
               f"properties covered by killed mutants")
+    r_run, r_surv, r_uncov, _ = gate_domain("relay", relay_props)
+    if in_scope("relay"):
+        r_cov = {r["key"] for r in r_run if r["killed"]}
+        print(f"relay:    {len(r_cov)}/{len(relay_props)} §5.2a "
+              f"properties covered by killed mutants")
     total_run = [r for r in results if not r["skipped"]]
     total_killed = sum(1 for r in total_run if r["killed"])
     print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
-          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv)}"
+          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv)}"
           f" survived")
     if g_surv:
         print(f"  grant SURVIVORS: {g_surv}")
@@ -891,6 +1046,8 @@ def main():
         print(f"  channel SURVIVORS: {c_surv}")
     if m_surv:
         print(f"  mesh SURVIVORS: {m_surv}")
+    if r_surv:
+        print(f"  relay SURVIVORS: {r_surv}")
     if g_uncov:
         print(f"  UNCOVERED grant checks: {g_uncov}")
     if e_uncov:
@@ -903,13 +1060,16 @@ def main():
         print(f"  UNCOVERED channel properties: {c_uncov}")
     if m_uncov:
         print(f"  UNCOVERED mesh properties: {m_uncov}")
+    if r_uncov:
+        print(f"  UNCOVERED relay properties: {r_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
     ok = ((not g_surv) and (not e_surv) and (not t_surv) and (not s_surv)
-          and (not c_surv) and (not m_surv)
+          and (not c_surv) and (not m_surv) and (not r_surv)
           and (not g_uncov) and (not e_uncov) and (not t_uncov)
-          and (not s_uncov) and (not c_uncov) and (not m_uncov) and g_cb)
+          and (not s_uncov) and (not c_uncov) and (not m_uncov)
+          and (not r_uncov) and g_cb)
     return 0 if ok else 1
 
 
