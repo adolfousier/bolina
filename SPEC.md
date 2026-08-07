@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.2.0-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-05
+**Version:** 0.3.0-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-07
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -21,6 +21,8 @@ four. All four changes follow from the zero-dependency constraint, and all four 
 smaller and the attack surface narrower. The previous draft's open question about the envelope
 header being visible to relays is resolved as a consequence and no longer appears: with pairwise
 fan-out the whole envelope travels inside a Noise session.
+
+**Changes from v0.2.0-draft:** Relay surface added (§5.2a) with two new wire formats (type 5 route header, type 6 registration); BE-SURF-01 names the relay routing header and registration as third pre-auth entry (fixed-size, role-gated to relay role); BE-SURF-03 subdivides pre-auth unit into handshake-unit ≤990 lines and relay-unit ≤510 lines; BE-SIG-01 gains domain tag 0x07 for relay registration.
 
 ---
 
@@ -203,18 +205,20 @@ careful. It is that the parser is **small enough that one person can read all of
 unauthenticated input in only two places**. That argument is only worth something if both halves are
 measured, so both are stated as requirements rather than as intentions.
 
-**BE-SURF-01 (closed pre-authentication inventory)** — Exactly two structures are parsed from
-unauthenticated input: the Noise handshake messages and the cookie reply (§4). **Both are fixed-size
-and contain no variable-length field.** Every other structure in this specification — certificates,
-lookups, envelopes, control messages, sync messages — MUST be parsed only inside an established,
-bound session (BE-TR-01). Adding a third structure to the pre-authentication list is a protocol
-version change, not an implementation decision. The fixed-size data packet header is read before
-session lookup because a packet cannot be routed until its receiver index is known; it carries no
-parseable payload outside an established session, and together with the two structures above it is
-the only byte touched before authentication. The fragment header is not among them: fragments are
-session AEAD plaintext (§4.5), so the fragment header is parsed only after decryption, inside a
-bound session. Any other byte touched before authentication is a protocol version change, exactly
-as adding a third structure to the inventory would be (D-031, corrected by D-032).
+**BE-SURF-01 (closed pre-authentication inventory)** — Exactly three structures are parsed from
+unauthenticated input: the Noise handshake messages and the cookie reply (§4), and the relay routing
+header and registration (§5.2a, v0.3, D-043). **All three are fixed-size and contain no variable-length field.**
+Every other structure in this specification — certificates, lookups, envelopes, control messages,
+sync messages — MUST be parsed only inside an established, bound session (BE-TR-01). Adding a fourth
+structure to the pre-authentication list is a protocol version change, not an implementation decision.
+The fixed-size data packet header is read before session lookup because a packet cannot be routed
+until its receiver index is known; it carries no parseable payload outside an established session,
+and together with the three structures above it is the only byte touched before authentication. The
+fragment header is not among them: fragments are session AEAD plaintext (§4.5), so the fragment header
+is parsed only after decryption, inside a bound session. Any other byte touched before authentication
+is a protocol version change, exactly as adding a fourth structure to the inventory would be
+(D-031, corrected by D-032). *Relay structures are role-gated: only a node presenting the `relay`
+role may send or receive type 5 or type 6 packets (BE-MESH-02).*
 
 *This is what the correctness fixes cost and why the cost has to be paid back here. Adding the CA
 quorum turned `Cert` from a fixed-size record into one carrying a variable-length signature list;
@@ -237,10 +241,13 @@ MUST be measured as two units divided at BE-SURF-01's authentication line, and e
 exceed **1500 lines**, measured and enforced in CI. Exceeding either unit does not degrade the
 design; it invalidates the mitigation that justified the language choice, and it MUST fail the build
 rather than be noted. *"Small enough for one person to audit" is either a number or it is a slogan:
-one number per audit unit, and the unit is what an attacker can reach.* (D-030.)
+one number per audit unit, and the unit is what an attacker can reach.* (D-030.) The pre-authentication
+unit is subdivided into a handshake sub-unit (cap 990 lines) and a relay sub-unit (cap 510 lines);
+both caps MUST be enforced independently and the sum MUST NOT exceed 1500 lines.
 
-- **Pre-authentication unit:** `src/parser.zig`, `src/mac.zig`, `src/noise.zig` — everything an
-  auditor must read to verify what an unauthenticated peer's bytes can reach.
+- **Pre-authentication unit:** subdivided into two sub-units:
+  - **Handshake sub-unit:** `src/parser.zig`, `src/mac.zig`, `src/noise.zig` — cap 990 lines.
+  - **Relay sub-unit:** `src/relay.zig` — cap 510 lines.
 - **Post-authentication unit:** `src/parser/channel.zig`, `src/parser/session.zig`, `src/session.zig`,
   `src/binding.zig`, `src/replay.zig`, `src/reassembly.zig` — everything an auditor must read to
   verify what a hostile authenticated peer's bytes can reach.
@@ -274,6 +281,7 @@ signature whose tag does not match the structure being verified:
 | `0x04` | `Grant` (§8.1) |
 | `0x05` | Handshake binding over Noise `h` (§4.1) |
 | `0x06` | `Refusal` (§8.5) |
+| `0x07` | `RelayRegistration` (§5.2a) |
 
 *Executor keys sign both `Span` and envelopes; approver keys sign both `Grant` and envelopes; every
 key signs the handshake binding. Current field layouts happen to make a cross-type collision
@@ -614,6 +622,63 @@ MLS application messages rode inside a cleartext envelope header.*
 declared quota and TTL. Stored ciphertext is opaque; a relay operator learns sender, recipient,
 size, and time, and nothing else. This metadata exposure is accepted and stated in
 `THREAT-MODEL.md` §4.4.
+
+### 5.2a Relay wire formats
+
+Relay communication uses two packet types, both fixed-size and parsed before authentication
+(BE-SURF-01). Both MUST be rejected unless the peer certificate carries the `relay` role.
+
+#### Type 5 — Relay route header (20 bytes)
+
+```
+Type5RelayRoute :=
+  u8    type              ; = 5
+  u8[3] _reserved        ; = [0,0,0]
+  u32   sender_index      ; sender's session index at the relay
+  u32   recipient_index   ; recipient's session index at the relay
+  u64   timestamp         ; unix epoch seconds, relay local time
+```
+
+A relay receives type 5 from a node that has already established a Noise session with it.
+The relay forwards the packet's ciphertext body (from the established session) to the
+recipient identified by `recipient_index`. The `sender_index` identifies the forwarding session
+for response routing. The `timestamp` is used to reject stale routes; a relay MUST silently drop
+type 5 packets where `|now - timestamp| > 300` seconds. *The timestamp is relay-local, so clock
+drift between relays does not affect forwarding correctness; the skew bound only prevents
+replay of old route headers.*
+
+**BE-MESH-04** — A relay MUST NOT forward type 5 packets to unknown `recipient_index` values.
+The registration table (type 6) is bounded to 4096 entries; exceeding this bound MUST refuse
+new registrations with a silent drop. *Registrations are one-shot: a node may register with a
+relay exactly once per session. Re-registration is not supported.*
+
+#### Type 6 — Relay registration (124 bytes)
+
+```
+Type6RelayRegistration :=
+  u8    type              ; = 6
+  u8[3] _reserved        ; = [0,0,0]
+  u32   relay_index       ; the relay's own session index
+  u32   client_index      ; the client's assigned session index
+  u64   timestamp         ; unix epoch seconds, relay local time
+  u8[32] overlay_addr     ; the client's overlay address (BE-ID-01)
+  u64   expiry            ; registration expiry, unix epoch seconds
+  u8[12] _padding         ; reserved, MUST be zero on send, ignored on recv
+```
+
+Registration is signed by the client under domain tag 0x07 (BE-SIG-01). The relay verifies the
+signature, checks that `overlay_addr` matches the session's derived overlay address
+(BE-ID-01), checks that `timestamp` is within 300 seconds of relay-local time, and stores the
+entry mapping `overlay_addr → (relay_index, client_index, expiry)`. A relay MUST silently drop
+type 6 packets that fail signature verification, have unknown `relay_index`, have mismatched
+`overlay_addr`, are outside the timestamp skew, or would exceed the 4096-entry table bound.
+
+**BE-MESH-05** — Registration entries expire at `expiry`. A relay MUST prune expired entries
+before processing new registrations. The expiry value is chosen by the client; relays accept
+any value up to 86400 seconds (24 hours). *The expiry bound prevents an attacker from registering
+entries that never expire and exhausting the table.*
+
+---
 
 ### 5.3 What this deliberately lacks
 
