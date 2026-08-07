@@ -13,6 +13,8 @@ const verify = @import("verify.zig");
 const binding = @import("binding.zig");
 const cth = @import("cert_test_helpers.zig");
 
+const Ed = std.crypto.sign.Ed25519;
+
 fn decodeHex(comptime hex: []const u8) [hex.len / 2]u8 {
     var b: [hex.len / 2]u8 = undefined;
     _ = std.fmt.hexToBytes(&b, hex) catch unreachable;
@@ -741,4 +743,36 @@ test "BE_MESH_06 revocation is consulted at use, not at cache fill" {
     try std.testing.expectEqual(@as(usize, 1), open_calls);
     try std.testing.expectError(error.ServedCertRevoked, verify.verifyServedCertThen(served, &addr, meshCtx(MESH_NOW, true), &recordOpen));
     try std.testing.expectEqual(@as(usize, 1), open_calls);
+}
+
+// ---------------------------------------------------------------------------
+// BE-SIG-01 (domain separation). Every Ed25519 signature covers
+// domain_tag || tbs; verify MUST reject a signature whose tag does not match
+// the structure being verified. A signature valid for one structure class
+// cannot be replayed against another. Tags: 0x01 Cert, 0x02 Envelope, 0x03
+// Span, 0x04 Grant, 0x05 handshake binding, 0x06 Refusal (SPEC BE-SIG-01).
+// ---------------------------------------------------------------------------
+
+test "BE_SIG_01 signature under one domain tag rejected under another" {
+    // SPEC BE-SIG-01: verification is over domain_tag || tbs, so a signature
+    // made for one structure class fails under any other class's tag.
+    const id = cth.keypair(0xa1);
+    const pubkey = Ed.PublicKey.toBytes(id.public_key);
+    const tbs = [_]u8{ 0xde, 0xad, 0xbe, 0xef };
+
+    // Sign over DOMAIN_CERT (0x01) || tbs.
+    var cert_msg: [5]u8 = undefined;
+    cert_msg[0] = parser.session.DOMAIN_CERT;
+    @memcpy(cert_msg[1..], &tbs);
+    const sig = Ed.Signature.toBytes(Ed.KeyPair.sign(id, &cert_msg, null) catch unreachable);
+
+    // Verifies under the matching Cert tag.
+    try verify.verifySigned(parser.session.DOMAIN_CERT, &tbs, &sig, &pubkey);
+
+    // Rejected under the Envelope tag (0x02): the bytes the signature covers
+    // (0x01 || tbs) are not the bytes the verifier hashes (0x02 || tbs).
+    try std.testing.expectError(error.BadSignature, verify.verifySigned(parser.channel.DOMAIN_ENVELOPE, &tbs, &sig, &pubkey));
+
+    // Rejected under the Grant tag (0x04) for the same reason.
+    try std.testing.expectError(error.BadSignature, verify.verifySigned(parser.channel.DOMAIN_GRANT, &tbs, &sig, &pubkey));
 }

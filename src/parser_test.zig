@@ -687,3 +687,39 @@ test "BE_WIRE_02 control message with a trailing byte is rejected" {
     buf[39] = 0x00;
     try std.testing.expectError(error.TrailingBytes, parser.channel.parseControl(&buf));
 }
+
+// ---------------------------------------------------------------------------
+// BE-EFF-01 (wire half). ok=false means the mechanism did not run; a subprocess
+// that ran and returned a non-zero exit code is ok=true with exit_code inline.
+// "Did the mechanism work" and "what did it report" stay separate all the way
+// up the wire. The executor-side reporting obligation is out of slice; this
+// binds the parser half: ok and exit_code are distinct fields that round-trip.
+// Effect body: [16]intent_id | [16]grant_id | u8 ok | i32 exit_code |
+//              u8 span_count | Span[] | [32]output_digest   (SPEC 6.3)
+// ---------------------------------------------------------------------------
+
+test "BE_EFF_01 ok and exit_code are distinct fields on the wire" {
+    // A subprocess that ran and reported failure (exit 1) is ok=true with
+    // exit_code=1, NOT collapsed into ok=false.
+    var ran: [70]u8 = [_]u8{0} ** 70;
+    ran[32] = 1; // ok = true (mechanism ran)
+    ran[33] = 0;
+    ran[34] = 0;
+    ran[35] = 0;
+    ran[36] = 1; // exit_code = 1 (big-endian i32, non-zero)
+    ran[37] = 0; // span_count = 0
+    // output_digest occupies [38..70], already zero.
+
+    const eff_ran = try parser.channel.parseEffect(&ran);
+    try std.testing.expectEqual(@as(u8, 1), eff_ran.ok);
+    try std.testing.expectEqual(@as(i32, 1), eff_ran.exit_code);
+
+    // A mechanism that did not run is ok=false with exit_code=0.
+    var norun: [70]u8 = [_]u8{0} ** 70;
+    norun[32] = 0; // ok = false
+    norun[37] = 0; // span_count = 0
+
+    const eff_norun = try parser.channel.parseEffect(&norun);
+    try std.testing.expectEqual(@as(u8, 0), eff_norun.ok);
+    try std.testing.expectEqual(@as(i32, 0), eff_norun.exit_code);
+}
