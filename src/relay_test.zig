@@ -121,7 +121,9 @@ test "BE_MESH_02 RelayTable insert and lookup" {
 test "BE_MESH_02 RelayTable rejects insert when full" {
     var table = relay.RelayTable.init();
     var addr: [16]u8 = undefined;
-    for (0..relay.MAX_RELAY_TABLE) |i| {
+    // Literal 4096: the SPEC §5.2a bound (D-044), not relay.MAX_RELAY_TABLE.
+    // A mutant on the constant must not scale the test with it (D-027).
+    for (0..4096) |i| {
         @memset(&addr, 0);
         addr[0] = @intCast(i & 0xff);
         addr[1] = @intCast((i >> 8) & 0xff);
@@ -183,6 +185,53 @@ test "BE_MESH_02 forwardPacket rejects unknown recipient" {
     const packet = decodeHex("04000000000000010000000000000001aabbccdd");
     const result = relay.forwardPacket(&table, route, &packet, 1000);
     try std.testing.expectError(relay.ForwardError.UnknownRecipient, result);
+}
+
+test "BE_MESH_02 forwardPacket accepts route at exactly the 300s skew bound" {
+    // Literal 300: SPEC §5.2a bounds |now - timestamp| at 300 (D-044), not
+    // relay.TIMESTAMP_SKEW - a mutant on the constant must not scale the
+    // boundary with it (D-027). Both edges of the window are legal.
+    var table = relay.RelayTable.init();
+    const addr = decodeHex("fd0102030405060708090a0b0c0d0e0f");
+    _ = table.insert(.{ .overlay_addr = addr, .relay_index = 1, .client_index = 2, .expiry = 9999 });
+    const packet = decodeHex("04000000000000010000000000000001aabbccdd");
+    var route = relay.RelayRoute{ .sender_index = 1, .recipient_index = 2, .timestamp = 700 }; // 1000 - 300
+    const older = try relay.forwardPacket(&table, route, &packet, 1000);
+    try std.testing.expect(older != null);
+    route.timestamp = 1300; // 1000 + 300
+    const newer = try relay.forwardPacket(&table, route, &packet, 1000);
+    try std.testing.expect(newer != null);
+}
+
+test "BE_MESH_02 forwardPacket drops route one second past the skew bound" {
+    // Literal 301: one second outside the SPEC §5.2a bound on both sides.
+    var table = relay.RelayTable.init();
+    const addr = decodeHex("fd0102030405060708090a0b0c0d0e0f");
+    _ = table.insert(.{ .overlay_addr = addr, .relay_index = 1, .client_index = 2, .expiry = 9999 });
+    const packet = decodeHex("04000000000000010000000000000001aabbccdd");
+    var route = relay.RelayRoute{ .sender_index = 1, .recipient_index = 2, .timestamp = 699 }; // 1000 - 301
+    try std.testing.expectError(relay.ForwardError.StaleRoute, relay.forwardPacket(&table, route, &packet, 1000));
+    route.timestamp = 1301; // 1000 + 301
+    try std.testing.expectError(relay.ForwardError.StaleRoute, relay.forwardPacket(&table, route, &packet, 1000));
+}
+
+test "BE_MESH_02 registration tbs is exactly the 44 bytes before sig" {
+    // Literal 44 and literal bytes: the signature covers type..expiry, the
+    // 124-byte message minus the 64-byte sig and 16-byte padding (SPEC
+    // §5.2a). The verification hook is deferred (D-043), so the boundary
+    // itself is what the tests pin.
+    const reg = try relay.parseRelayRegistration(&REG_BYTES);
+    try std.testing.expectEqual(@as(usize, 44), reg.tbs.len);
+    try std.testing.expectEqualSlices(u8, REG_BYTES[0..44], reg.tbs);
+}
+
+test "BE_MESH_02 registration domain tag pinned to 0x07" {
+    // BE-SIG-01 row 0x07 (RelayRegistration). The verification path that
+    // consumes this tag is deferred (D-043 scope: forwarding only); the pin
+    // keeps the wire commitment from drifting silently. Same shape as
+    // vectors_test's domain_tag checks: constant against an independent
+    // literal, so a mutant on the constant cannot scale both sides (D-027).
+    try std.testing.expectEqual(@as(u8, 0x07), relay.DOMAIN_RELAY_REGISTRATION);
 }
 
 test "BE_MESH_02 relay holds no key material (no session state in RelayTable)" {
