@@ -1239,14 +1239,15 @@ on restart, BE-GRANT-01a would publish an `interrupted` Effect for an effect tha
 A check order that makes the ledger assert a fabricated effect is an audit defect, not a
 performance detail.
 
-**Conformance status (Zig slice).** The routine in `verify.zig` models checks 0, 1, 2, 5, 9, 10 and
-11 inside the single routine. Checks 3 and 4 (approver and subject certificate validity) and 6, 7
-and 8 (subject, intent_id and resource_id matching against the pending intent) are delegated to the
-executor until a certificate store and a pending-intent table exist. This is provisional debt, not a
-relaxation of the rule above: BE-GRANT-03 requires all twelve checks in the routine, and the
-repayment condition is that 3, 4, 6, 7 and 8 fold into `verifyGrantThen` (the routine) the moment
-their backing state
-is available. Recorded here so the debt survives being forgotten.
+**Conformance status (Zig slice).** The routine in `verify.zig` models checks 0, 1, 2, 3, 4, 5, 6, 7,
+8, 9, 10 and 11 inside the single routine. The debt recorded here through round 4 was that checks 3
+and 4 (approver and subject certificate validity) and 6, 7 and 8 (subject, intent_id and resource_id
+matching against the pending intent) were delegated to the executor until a certificate store and a
+pending-intent table existed. That backing state is now supplied through `GrantContext`
+(`trusted_ca_keys`, the approver and subject certs, and the three pending-intent fields), so the
+repayment condition stated for those five checks is met and BE-GRANT-03's requirement that all
+twelve checks run in the routine is satisfied by the slice. The repayment is recorded rather than
+deleted so the history of the debt survives.
 
 **BE-GRANT-03b (verification is a call, not a value; language-portable property).** The grant's
 effect MUST be reachable only through the single verification routine, and the routine MUST invoke
