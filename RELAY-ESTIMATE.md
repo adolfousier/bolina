@@ -80,9 +80,12 @@ Two candidate designs:
 
 ## 5. Verdict
 
-**BOTH READINGS FIT.** The relay fits within BE-SURF-03's pre-auth cap without subdivision, with comfortable margin in Reading 1 (slack ~350 median, ~60 worst-case) and substantial margin in Reading 2 (slack ~782 median, ~600 worst-case).
+**Corrected; see §10.** The verdict committed at be97b8b compared the new relay lines against the 1500 cap without adding the 990 lines the pre-auth unit already measures. That arithmetic was wrong. The corrected verdict:
 
-**Recommendation:** Proceed with Reading 1 (conservative: store-and-forward as pre-auth). No subdivision needed per D-030 — the design fits within the existing 1500-line cap.
+- Readings 1 and 2 (no subdivision): **DOES NOT FIT.** Unit lands at median 2125 and 1693 against a 1500 cap.
+- Reading 3 (subdivision + scope reduction): **FITS at median, tripwire at the worst case.** The relay ships as BE-MESH-02 only, under a D-030 subdivision (handshake-unit ≤ 990, relay-unit ≤ 510). The 510 cap is an explicit tripwire: hit it before BE-MESH-02 is done and the relay defers to M2. No cap raise either way.
+
+This was stop item #4 territory under the old rules. Under the mandate the budget reading is decided here and logged as D-043 with alternatives and reversal condition.
 
 ## 6. Scope reduction options (if needed)
 
@@ -109,11 +112,19 @@ What would invalidate this estimate?
 
 ## 9. Next steps after estimate approval
 
-1. Update BE-SURF-01: protocol version v0.2.0 → v0.3.0, add relay outer header structure.
-2. Update BE-SIG-01: add domain tag 0x07 (relayed registration).
-3. Implement relay.zig: outer parser, registration, forwarding, store-and-forward.
+1. SPEC changes, all flagged before any code commit (D-029 flag-before rule):
+   a. BE-SURF-01: protocol version v0.2 → v0.3; name the relay routing header as the third pre-authentication structure (fixed-size, role-gated to relay nodes).
+   b. BE-SIG-01: add domain tag 0x07 (relay registration).
+   c. BE-SURF-03: subdivide the pre-auth cap per D-030 (handshake-unit ≤ 990, relay-unit ≤ 510); add src/relay.zig to the pre-authentication file list.
+   d. Wire-format section: define the relay routing header and the signed one-shot registration structure.
+2. DECISION-LOG: D-043 records the corrected verdict, the subdivision, and the tripwire.
+3. Implement relay.zig: outer routing header parser, one-shot registration verification (tag 0x07), bounded forwarding table. Store-and-forward excluded this slice (MAY, deferred).
 4. Wire main.zig dispatch: relay mode entry point.
-5. Add relay_test.zig: unit tests + harness relay domain.
-6. Run full gauntlet: fmt, build test, em-dash scan, vectors, prumo, mutation.
+5. Add relay_test.zig: unit tests + harness relay domain (~8–12 mutants, literal values per D-027).
+6. Run full gauntlet: fmt, build test, em-dash scan, vectors, prumo, mutation. Budget tripwire check (relay-unit ≤ 510) at every commit.
 7. Commit atomically, push relay-slice.
-8. Merge to main per Daniel's approval (stop item #1 from compaction: never push to main without explicit approval).
+8. Merge to main only with Daniel's explicit approval (stop item: never push to main unapproved).
+
+## 10. Correction record
+
+The verdict committed in be97b8b ("relay fits, median 1150 vs cap 1500, slack ~350, no subdivision needed") contained an arithmetic error: it compared the new relay code against the 1500 cap without adding the 990 lines already measured in the pre-auth unit. Corrected on discovery, before any implementation code was written: without subdivision the relay does not fit, and it proceeds only under Reading 3 (D-030 subdivision, BE-MESH-02-only scope, 510-line tripwire). Same defect class as the LANGUAGE.md stale-number fix: a false number in a project document gets corrected where a reader will find it, not silently overwritten.
