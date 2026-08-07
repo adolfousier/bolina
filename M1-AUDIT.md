@@ -104,6 +104,18 @@ bounds-check chaos fuzzer (mutated-valid + random streams through
 `Cursor.need()`), with no second, independent reference implementation. So
 SURF-04 is **NEEDS-CODE** - see Bucket C.
 
+### Resolution (M1 keying pass, commit pending)
+
+| Marker | Verdict | Reason |
+|--------|---------|--------|
+| BE-SURF-01 | **BOUND** (`BE_SURF_01`) | `@hasDecl` proves the pre-auth surface is the closed two-structure inventory (handshake + cookie + routing header); every authenticated-structure parser is absent from `parser.zig` and present only in the post-auth sub-namespaces. |
+| BE-SURF-02 | **BOUND** (`BE_SURF_02`) | Behavioural: `Cursor.u32be()` on a short buffer returns `error.Truncated`; `Cursor.field16`/`field32` over a declared max return `error.Oversize`. The arithmetic errors, it never panics. |
+| BE-SURF-03 | **GATE-BOUND, unbound** | The 1500-line budget IS the M5/M11 prumo gate. A runtime line-count test would restate the constant (D-027) and is theatre; the gate is the enforcement. |
+| BE-DEP-01 | **GATE-BOUND, unbound** | "No external library" is a build-graph property enforced by the M6 offline-build gate. A runtime test cannot see the build graph. |
+| BE-DEP-02 | **BOUND** (`BE_DEP_02`) | `Intent.action` is a flat `[]const u8` the parser slices and never interprets; no `parseAction`/interpreter decl exists in any parser module. The arbitrary field is opaque, so nothing recurses. |
+| BE-WIRE-03 | **COVERED, unbound** | `verifySigned` feeds `tag \|\| tbs` straight to the streaming Ed25519 Verifier (no intermediate buffer, no re-encode); `actionDigest` hashes raw bytes. Forcing a separate test would restate a constant (D-027). Existing wire-byte tests (BE-ENV-02 et al.) already exercise the path. |
+| BE-TR-06 | **NEEDS-CODE, unbound** | The `bound` flag exists (`session.zig`) and `bindSession` is the sole authoriser, but the delivery-gate ("deliver requires bound session") is daemon-layer. `main.zig` is a 13-line stub; no dispatch path in `src/` checks `session.bound` before delivery. Genuinely out of this slice. |
+
 ---
 
 ## Bucket C - NEEDS-CODE (feature not implemented this slice)

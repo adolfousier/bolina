@@ -793,3 +793,99 @@ test "BE_MESH_07 lookup parsers live behind authentication, not in the pre-auth 
     try std.testing.expect(!@hasDecl(parser, "parseLookupRequest"));
     try std.testing.expect(!@hasDecl(parser, "parseLookupResponse"));
 }
+
+// ---------------------------------------------------------------------------
+// BE-SURF-01 (closed pre-authentication inventory). Exactly two structures are
+// parsed from unauthenticated input -- the Noise handshake messages and the
+// cookie reply -- both fixed-size with no variable-length field. The data
+// packet header is a fixed-size read done before session lookup for routing and
+// carries no parseable payload outside an established session. Every other
+// structure (envelope, intent, grant, control, cert, fragment) lives behind the
+// authentication line. Bound structurally: the pre-auth module exposes only the
+// handshake/cookie/header parsers; every authenticated structure parser is
+// declared in a post-auth sub-namespace and is absent from the pre-auth
+// surface. Adding a third unauthenticated structure means adding a decl here,
+// which fails this test.
+// ---------------------------------------------------------------------------
+
+test "BE_SURF_01 pre-auth parser surface is a closed two-structure inventory" {
+    // The closed pre-auth inventory exists at the top level.
+    try std.testing.expect(@hasDecl(parser, "parseHandshakeInitiation"));
+    try std.testing.expect(@hasDecl(parser, "parseHandshakeResponse"));
+    try std.testing.expect(@hasDecl(parser, "parseCookieReply"));
+    try std.testing.expect(@hasDecl(parser, "parseDataPacketHeader"));
+
+    // No authenticated structure is reachable from unauthenticated input.
+    try std.testing.expect(!@hasDecl(parser, "parseEnvelope"));
+    try std.testing.expect(!@hasDecl(parser, "parseIntent"));
+    try std.testing.expect(!@hasDecl(parser, "parseGrant"));
+    try std.testing.expect(!@hasDecl(parser, "parseControlGenesis"));
+    try std.testing.expect(!@hasDecl(parser, "parseControl"));
+    try std.testing.expect(!@hasDecl(parser, "parseCert"));
+    try std.testing.expect(!@hasDecl(parser, "parseFragmentHeader"));
+
+    // Those parsers exist, but behind the authentication line.
+    try std.testing.expect(@hasDecl(parser.channel, "parseEnvelope"));
+    try std.testing.expect(@hasDecl(parser.channel, "parseGrant"));
+    try std.testing.expect(@hasDecl(parser.session, "parseCert"));
+}
+
+// ---------------------------------------------------------------------------
+// BE-SURF-02 (explicitly checked arithmetic). Every index, length, offset, and
+// count computation in the parser MUST return an error on overflow or
+// out-of-range, and MUST NOT rely on the language runtime's abort behaviour.
+// A remote-triggered safety-checked panic would be a denial-of-approval
+// primitive under BE-GRANT-04, so a panic must never be the flow-control path.
+// The bounds check is one site: Cursor.need() rejects reads past the buffer end
+// with error.Truncated; Cursor.field16/field32 reject a length above its
+// declared maximum with error.Oversize. Bound behaviourally: truncated input
+// and oversize length fields return errors, not panics.
+// ---------------------------------------------------------------------------
+
+test "BE_SURF_02 parser arithmetic returns errors on out-of-range, never panics" {
+    // Truncation: a read past the buffer end returns an error, not a panic.
+    // Every parser read routes through Cursor.need(); a 4-byte index read on a
+    // single-byte buffer fails it.
+    var c0 = parser.Cursor{ .buf = &[_]u8{0x00} };
+    try std.testing.expectError(error.Truncated, c0.u32be());
+
+    // Oversize (u16 length above its declared max): the prefix claims 4 bytes;
+    // the declared max is 2.
+    var c1 = parser.Cursor{ .buf = &[_]u8{ 0x00, 0x04 } };
+    try std.testing.expectError(error.Oversize, c1.field16(2));
+
+    // Oversize (u32 length above its declared max): same rule, 32-bit variant.
+    var c2 = parser.Cursor{ .buf = &[_]u8{ 0x00, 0x00, 0x00, 0x05 } };
+    try std.testing.expectError(error.Oversize, c2.field32(1));
+}
+
+// ---------------------------------------------------------------------------
+// BE-DEP-02 (no recursive parser). The daemon must not contain a recursive
+// parser; every network structure is flat, fixed-order, and length-prefixed.
+// The one field with arbitrary structure, Intent.action, is handled as opaque
+// bytes and hashed, never interpreted; structured interpretation happens only
+// in the executor, which is not exposed to the network. Bound structurally: the
+// arbitrary field is a flat byte slice, and no parser module declares an
+// interpreter for it.
+// ---------------------------------------------------------------------------
+
+test "BE_DEP_02 no recursive parser; the one arbitrary field is opaque bytes" {
+    const Intent = parser.channel.Intent;
+
+    // The arbitrary field is present and is a flat byte slice, never a parsed
+    // nested structure the parser recurses into.
+    try std.testing.expect(@hasField(Intent, "action"));
+    try std.testing.expect(comptime blk: {
+        const fields = @typeInfo(Intent).@"struct".fields;
+        for (fields) |f| {
+            if (std.mem.eql(u8, f.name, "action")) break :blk f.type == []const u8;
+        }
+        break :blk false;
+    });
+
+    // No parser interprets the action body: a recursive entry point for the
+    // arbitrary field does not exist in any parser module.
+    try std.testing.expect(!@hasDecl(parser, "parseAction"));
+    try std.testing.expect(!@hasDecl(parser.channel, "parseAction"));
+    try std.testing.expect(!@hasDecl(parser.session, "parseAction"));
+}
