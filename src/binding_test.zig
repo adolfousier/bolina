@@ -59,6 +59,38 @@ test "BE_ID_03 single roles and benign combinations accepted" {
 }
 
 // ---------------------------------------------------------------------------
+// BE-ROLE-01/02/04: the three forbidden role pairings, bound by their own
+// names. BE-ID-03 is the receipt-side rejection that re-checks all three; each
+// constraint here is the definition that makes the rejection normative. The
+// slice has no CA issuance function, so the issuance-refusal half of each
+// marker is out of slice; the constraint the slice enforces is checkRoleConstraints.
+// ---------------------------------------------------------------------------
+
+test "BE_ROLE_01 agent plus approver pairing refused" {
+    // SPEC BE-ROLE-01: a certificate MUST NOT carry both agent and approver.
+    // An autonomous process cannot approve its own actions.
+    try binding.checkRoleConstraints(binding.ROLE_AGENT);
+    try binding.checkRoleConstraints(binding.ROLE_APPROVER);
+    try std.testing.expectError(error.RoleAgentApprover, binding.checkRoleConstraints(binding.ROLE_AGENT | binding.ROLE_APPROVER));
+}
+
+test "BE_ROLE_02 agent plus executor pairing refused" {
+    // SPEC BE-ROLE-02: a certificate MUST NOT carry both agent and executor.
+    // An agent may request effects but may not be the thing that signs them.
+    try binding.checkRoleConstraints(binding.ROLE_AGENT);
+    try binding.checkRoleConstraints(binding.ROLE_EXECUTOR);
+    try std.testing.expectError(error.RoleAgentExecutor, binding.checkRoleConstraints(binding.ROLE_AGENT | binding.ROLE_EXECUTOR));
+}
+
+test "BE_ROLE_04 approver plus executor pairing refused" {
+    // SPEC BE-ROLE-04: a certificate MUST NOT carry both approver and executor.
+    // Such an identity would sign its own Grants and then honour them.
+    try binding.checkRoleConstraints(binding.ROLE_APPROVER);
+    try binding.checkRoleConstraints(binding.ROLE_EXECUTOR);
+    try std.testing.expectError(error.RoleApproverExecutor, binding.checkRoleConstraints(binding.ROLE_APPROVER | binding.ROLE_EXECUTOR));
+}
+
+// ---------------------------------------------------------------------------
 // BE-ID-02: validate a certificate against the local trust set and clock.
 // Rejection is unconditional; the validity window contains now_ms, every CA
 // signature verifies over cert.tbs, and every CA key is trusted.
@@ -156,6 +188,43 @@ test "BE_ID_04 approver cert with two CA sigs accepted (quorum met)" {
         cth.CERT_NOT_AFTER,
     );
     try binding.validateCert(cert, cth.trustedSet(), cth.CERT_NOT_BEFORE + 1);
+}
+
+// ---------------------------------------------------------------------------
+// BE-CA-01: issuing an approver certificate requires a quorum of >= 2 distinct
+// CA keys, while every other certificate requires only one. BE-ID-04 is the
+// receipt-side rejection of an under-signed approver cert; this binds the
+// issuer obligation as a single rule with its two halves: the quorum gates the
+// approver bit, and one CA signature suffices for any non-approver cert.
+// ---------------------------------------------------------------------------
+
+test "BE_CA_01 approver quorum is two, one suffices for non-approver" {
+    // SPEC BE-CA-01: approver bit requires >= 2 distinct CA keys; other
+    // certificates require one. One compromised CA key mints no approver.
+    var wire: [512]u8 = undefined;
+
+    // Non-approver (agent) cert with a single CA signature is accepted.
+    const agent = cth.buildCertInto(
+        &wire,
+        cth.pubkeyOf(0xa1),
+        binding.ROLE_AGENT,
+        &[_]u8{0xc0},
+        cth.CERT_NOT_BEFORE,
+        cth.CERT_NOT_AFTER,
+    );
+    try binding.validateCert(agent, cth.trustedSet(), cth.CERT_NOT_BEFORE + 1);
+
+    // Approver cert with only one CA signature is refused for lack of quorum.
+    var wire2: [512]u8 = undefined;
+    const approver_one = cth.buildCertInto(
+        &wire2,
+        cth.pubkeyOf(0xa2),
+        binding.ROLE_APPROVER,
+        &[_]u8{0xc0},
+        cth.CERT_NOT_BEFORE,
+        cth.CERT_NOT_AFTER,
+    );
+    try std.testing.expectError(error.ApproverNoQuorum, binding.validateCert(approver_one, cth.trustedSet(), cth.CERT_NOT_BEFORE + 1));
 }
 
 // ---------------------------------------------------------------------------
