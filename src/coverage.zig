@@ -106,6 +106,15 @@ pub const Branch = enum {
     bind_cert_len_zero, // parseBindingMessage: cert_len == 0 (grammar floor 1)
     bind_trailing, // parseBindingMessage: bytes after the 64-byte binding sig
     bind_accepted, // parseBindingMessage: returned a valid cert+sig pair
+    // Channel control parsers (SPEC 6.1b, 6.1c). ca_count is bounded before it
+    // drives the ca_keys slice (BE-TR-05); a zero trust set is a grammar floor.
+    // match_rule and version are parsed not rejected (policy stays out).
+    genesis_ca_count_zero, // parseControlGenesis: ca_count == 0 (grammar floor 1)
+    genesis_ca_count_oversize, // parseControlGenesis: ca_count > MAX_CA_COUNT
+    genesis_trailing, // parseControlGenesis: bytes after the genesis body
+    genesis_accepted, // parseControlGenesis: returned a valid ControlGenesis
+    control_trailing, // parseControl: bytes after the control body
+    control_accepted, // parseControl: returned a valid Control
 };
 
 pub const COUNT: usize = @typeInfo(Branch).@"enum".fields.len;
@@ -126,10 +135,10 @@ pub inline fn reject(comptime tag: Branch) parser.ParseError {
     hit(tag);
     return switch (tag) {
         .cursor_truncated, .data_payload_short => error.Truncated,
-        .env_parent_oversize, .env_body_oversize, .field16_oversize, .field32_oversize, .data_payload_oversize, .cert_group_oversize, .cert_ca_count_oversize => error.Oversize,
-        .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing, .hs_init_trailing, .hs_resp_trailing, .cookie_trailing, .lookup_req_trailing, .lookup_resp_trailing, .cert_trailing, .bind_trailing => error.TrailingBytes,
-        .hs_init_type, .hs_init_reserved, .hs_resp_type, .hs_resp_reserved, .cookie_type, .cookie_reserved, .data_type, .data_reserved, .frag_total_zero, .frag_index_range, .cert_ca_count_zero, .cert_ca_order, .bind_cert_len_zero => error.Malformed,
-        .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted, .hs_init_accepted, .hs_resp_accepted, .cookie_accepted, .data_accepted, .frag_accepted, .lookup_req_accepted, .lookup_resp_accepted, .cert_accepted, .bind_accepted => @compileError("accepted exit points do not reject; use accept()"),
+        .env_parent_oversize, .env_body_oversize, .field16_oversize, .field32_oversize, .data_payload_oversize, .cert_group_oversize, .cert_ca_count_oversize, .genesis_ca_count_oversize => error.Oversize,
+        .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing, .hs_init_trailing, .hs_resp_trailing, .cookie_trailing, .lookup_req_trailing, .lookup_resp_trailing, .cert_trailing, .bind_trailing, .genesis_trailing, .control_trailing => error.TrailingBytes,
+        .hs_init_type, .hs_init_reserved, .hs_resp_type, .hs_resp_reserved, .cookie_type, .cookie_reserved, .data_type, .data_reserved, .frag_total_zero, .frag_index_range, .cert_ca_count_zero, .cert_ca_order, .bind_cert_len_zero, .genesis_ca_count_zero => error.Malformed,
+        .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted, .hs_init_accepted, .hs_resp_accepted, .cookie_accepted, .data_accepted, .frag_accepted, .lookup_req_accepted, .lookup_resp_accepted, .cert_accepted, .bind_accepted, .genesis_accepted, .control_accepted => @compileError("accepted exit points do not reject; use accept()"),
     };
 }
 

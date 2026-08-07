@@ -607,3 +607,24 @@ Alternatives considered: for decision 1, run the full suite in one go and accept
 Pre-close checks: (1) read against other sections: no wire byte and no guarantee touched; the session tests assert KAT values that the production code already produced and the Python run independently confirmed, and the anchor fix only changes which string the harness searches for. (2) Who picked the denominator: the six session markers and the grant modelled set are both derived from SPEC.md at run time by the harness, not self-counted. (3) Does the thing need to exist: yes, the session domain is the task-8 deliverable and the chunked runner is what makes it verifiable without contamination.
 
 Reversible: unset `MUTATION_DOMAIN` and the harness runs all 38 interleaved as before; revert the anchor and check 2 skips again. What would reopen it: a further refactor of `verify.zig` renaming or relocating the domain tag, or the session KATs regressing to symbolic walks (the D-027 failure mode).
+
+## D-036 — 2026-08-07 — task 10 channels: parseControlGenesis/parseControl + BE-CHAN/BE-GEN/BE-CTRL verify layer; one-time density pass, not a budget valve
+
+Task 10 ships channel control per SPEC 6.1b/6.1c: two parsers (`parseControlGenesis`, `parseControl`) in `src/parser/channel.zig`, six new exit points in `src/coverage.zig`, and the BE-CHAN/BE-GEN/BE-CTRL verification layer in `src/verify.zig`. The estimate (`CHANNEL-ESTIMATE.md`) ran first and is the load-bearing decision here.
+
+**Decision 1 — the estimate says DOES NOT FIT, so the fit is bought with a density pass, not a budget valve.** Post-auth M11 was 1468/1500 (32 lines of headroom) measured live. The two parsers at standard density cost ~64 lines (channel.zig 405 to 469), a 16-line deficit at max density, 25 at standard. Two ways to land it:
+
+- (a) Ship the parsers at standard density and push M11 over 1500. Rejected: M11 is a SPEC ratchet (D-030), not a soft target; crossing it fails the gate and the unit split is the whole point of D-030.
+- (b) A one-time density pass that trims redundant comment prose from `channel.zig` (module header, restated span/effect/grant/claim blocks, the constants header) while keeping every grammar diagram and every WHY. Chosen.
+
+The pass took channel.zig 405 to 430 (net +25 for the two parsers after recovering ~39 comment lines) and M11 to 1493/1500. It is a one-time valve: it consumed the seam once. Task 11 (mesh) faces the same wall and will need a real SPEC decision (split the post-auth unit, or raise the cap with a justified re-baseline), not another comment harvest. That is flagged in `CHANNEL-ESTIMATE.md` section 10 so it is not rediscovered under time pressure.
+
+**Decision 2 — six new exit points, denominator stays honest.** `parseControlGenesis` has three reject sites (ca_count == 0 grammar floor, ca_count > MAX_CA_COUNT bound, trailing) plus one accept; `parseControl` has one reject (trailing) plus one accept. M9 grew 50 to 56 exit points (39 reject + 17 accept), and the Branch enum matches one for one as the gate demands. The denominator is still the parser module, not this file: a new exit point fails the gate until the enum grows, and a dead member fails it the other way.
+
+**Decision 3 — match_rule and version parsed, not rejected (SPEC 2.2).** `parseControlGenesis` records match_rule; the verifier rejects any value other than 1 (BE-GEN-04, byte equality is the only rule defined). `parseControl` discards version and records action_type; the verifier rejects anything outside {1, 2} (BE-CTRL-01). Forward-compat stays out of the parser, as D-022 holds.
+
+Alternatives considered: for decision 1, defer channel until the post-auth unit is split — rejected, task 10 is the deliverable and the density pass is bounded and reversible; raise the M11 cap ad hoc — rejected, it is a ratchet, not a knob. For decision 3, reject unknown action_type in the parser — rejected per SPEC 2.2 (the parser carries structure, policy lives in the verifier) and D-022.
+
+Pre-close checks: (1) read against other sections: no wire byte of an existing message touched (the new bodies are new surface); the M11 line cap is held at 1493/1500; M9's denominator is the parser module and grew honestly to 56. (2) Who picked the denominator: M9 counts exit points in the parser module at run time; the six new members each map to a real call site. (3) Does the thing need to exist: yes — channel control is the task-10 deliverable and the verify layer is what makes BE-CHAN/BE-GEN/BE-CTRL enforceable. (4) Tests: 15 new (7 parser round-trip/rejection, 8 verify one-branch-each), 187/187 pass; zig fmt clean; prumo-verify 0 failing; em-dash scan 0 in code files.
+
+Reversible: revert channel.zig/coverage.zig/verify.zig and M9 returns to 50 and M11 to 1468. What would reopen it: task 11 (mesh) landing more post-auth lines than the remaining 7 of headroom, which forces the SPEC decision the estimate already flagged.

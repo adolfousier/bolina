@@ -600,3 +600,90 @@ test "BE_WIRE_02 truncated certificate is rejected" {
     // 200 bytes: cuts into the first CA signature region.
     try std.testing.expectError(error.Truncated, parser.session.parseCert(bytes[0..200]));
 }
+
+// ---------------------------------------------------------------------------
+// Channel control structures (SPEC 6.1b, 6.1c). Hand-built flat bodies, not a
+// cross-implementation vector: ControlGenesis and Control are unsigned inner
+// bodies authenticated by the enclosing envelope signature, so the parser is
+// tested against the SPEC layout directly. GENESIS: version | name |
+// member_group | admin_group | ca_count,ca_keys | match_rule. CONTROL:
+// version | action_type | subject | body.
+
+const GENESIS_HEX =
+    "01" ++ // version
+    "0004" ++ "74657374" ++ // name_len, "test"
+    "aaaaaaaaaaaaaaaa" ++ // member_group (8 bytes)
+    "bbbbbbbbbbbbbbbb" ++ // admin_group (8 bytes)
+    "01" ++ "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" ++ // ca_count=1, one 32-byte key
+    "01"; // match_rule (byte equality, BE-GEN-04)
+
+const CONTROL_HEX =
+    "01" ++ // version (parsed, not enforced)
+    "01" ++ // action_type (1 = Genesis)
+    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" ++ // subject (32 bytes)
+    "0003" ++ "666f6f"; // body_len, "foo"
+
+test "BE_WIRE_01 control genesis round-trips the SPEC layout, zero heap" {
+    const bytes = decodeHex(GENESIS_HEX);
+    const g = try parser.channel.parseControlGenesis(&bytes);
+
+    try std.testing.expectEqual(@as(u8, 1), g.version);
+    try std.testing.expectEqualSlices(u8, "test", g.name);
+    try std.testing.expectEqual(@as(usize, 8), g.member_group.len);
+    try std.testing.expectEqual(@as(usize, 8), g.admin_group.len);
+    try std.testing.expectEqual(@as(u8, 1), g.ca_count);
+    try std.testing.expectEqual(@as(usize, 32), g.ca_keys.len);
+    try std.testing.expectEqual(@as(u8, 1), g.match_rule);
+
+    // Slices alias the input buffer.
+    try std.testing.expectEqualSlices(u8, bytes[7..15], g.member_group);
+    try std.testing.expectEqualSlices(u8, bytes[15..23], g.admin_group);
+    try std.testing.expectEqualSlices(u8, bytes[24..56], g.ca_keys);
+}
+
+test "BE_WIRE_02 control genesis ca_count == 0 is rejected as Malformed" {
+    var bytes = decodeHex(GENESIS_HEX);
+    bytes[23] = 0x00; // grammar floor 1: a trust set needs at least one key
+    try std.testing.expectError(error.Malformed, parser.channel.parseControlGenesis(&bytes));
+}
+
+test "BE_WIRE_02 control genesis ca_count above 16 is rejected as Oversize" {
+    var bytes = decodeHex(GENESIS_HEX);
+    bytes[23] = 17; // BE-TR-05: ca_count bounded before it drives the slice
+    try std.testing.expectError(error.Oversize, parser.channel.parseControlGenesis(&bytes));
+}
+
+test "BE_WIRE_02 control genesis with a trailing byte is rejected" {
+    const bytes = decodeHex(GENESIS_HEX);
+    var buf: [58]u8 = undefined;
+    @memcpy(buf[0..57], &bytes);
+    buf[57] = 0x00;
+    try std.testing.expectError(error.TrailingBytes, parser.channel.parseControlGenesis(&buf));
+}
+
+test "BE_WIRE_02 truncated control genesis is rejected" {
+    const bytes = decodeHex(GENESIS_HEX);
+    // 40 bytes: cuts into the ca_keys slice read at offset 24.
+    try std.testing.expectError(error.Truncated, parser.channel.parseControlGenesis(bytes[0..40]));
+}
+
+test "BE_WIRE_01 control message round-trips the SPEC layout, zero heap" {
+    const bytes = decodeHex(CONTROL_HEX);
+    const c = try parser.channel.parseControl(&bytes);
+
+    try std.testing.expectEqual(@as(u8, 1), c.action_type);
+    try std.testing.expectEqual(@as(usize, 32), c.subject.len);
+    try std.testing.expectEqualSlices(u8, "foo", c.body);
+
+    // Slices alias the input buffer; the version byte is consumed and discarded.
+    try std.testing.expectEqualSlices(u8, bytes[2..34], c.subject);
+    try std.testing.expectEqualSlices(u8, bytes[36..39], c.body);
+}
+
+test "BE_WIRE_02 control message with a trailing byte is rejected" {
+    const bytes = decodeHex(CONTROL_HEX);
+    var buf: [40]u8 = undefined;
+    @memcpy(buf[0..39], &bytes);
+    buf[39] = 0x00;
+    try std.testing.expectError(error.TrailingBytes, parser.channel.parseControl(&buf));
+}

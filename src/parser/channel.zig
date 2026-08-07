@@ -1,23 +1,14 @@
 // parser/channel.zig
 //
-// Zero-heap, total wire-format parsers for Bolina's POST-AUTHENTICATION
-// channel surface (SPEC.md sections 2.2, 6.2, 6.3, 7, 8.1): Envelope, Intent,
-// Grant, Span, Effect, Claim. Carved out of parser.zig by D-030/D-032:
-// BE-SURF-03 budgets the two sides of BE-SURF-01's authentication line
-// separately, and this file is the channel half of the post-authentication
-// unit, everything a hostile authenticated peer's channel bytes can reach.
-// The shared reader (Cursor), ParseError, and the transport-wide limits live
-// in the parent module (src/parser.zig), which parses the pre-authentication
-// bytes.
-//
-// Same discipline as the parent: every multi-byte integer is big-endian
-// (SPEC 2.2), the parser never allocates (every returned slice aliases the
-// caller buffer), and version fields are parsed but not rejected here
-// (SPEC 2.2: version is the sole negotiation surface; Grant.version is
-// refused by the verifier, BE-GRANT-03 step 0, keeping parsing total and
-// policy out of the parser). Every error exit routes through coverage.reject
-// and every accepted return through coverage.accept; gate M9 counts those
-// wrapper call sites across the whole parser module (CONTRIBUTING.md M9).
+// Zero-heap, total wire-format parsers for the POST-AUTHENTICATION channel
+// surface (SPEC 2.2, 6.1b/c, 6.2, 6.3, 7, 8.1): Envelope, ControlGenesis,
+// Control, Intent, Grant, Span, Effect, Claim. This is the channel half of
+// the BE-SURF-03 post-authentication unit (D-030/D-032): everything a hostile
+// authenticated peer's channel bytes can reach. Shared Cursor/ParseError and
+// the transport limits live in src/parser.zig (the pre-authentication half).
+// Big-endian, never allocates (slices alias the caller buffer), version parsed
+// not rejected (SPEC 2.2). Every exit routes through coverage.reject/accept,
+// counted one for one by gate M9 (CONTRIBUTING.md M9).
 
 const coverage = @import("../coverage.zig");
 const parser = @import("../parser.zig");
@@ -28,10 +19,9 @@ const LEN_PUBKEY = parser.LEN_PUBKEY;
 const MAX_MESSAGE = parser.MAX_MESSAGE;
 
 // ---------------------------------------------------------------------------
-// Declared limits (SPEC BE-TR-05) for the channel surface. These are the
-// attacker-influenced sizes on the channel wire; every one is bounded before
-// it drives a slice. MAX_MESSAGE, the transport-wide reassembly ceiling,
-// lives in the parent module; MAX_BODY derives from it here.
+// Declared limits (SPEC BE-TR-05): every attacker-influenced size on the
+// channel wire, bounded before it drives a slice. MAX_MESSAGE (the reassembly
+// ceiling) lives in the parent module; MAX_BODY derives from it here.
 // ---------------------------------------------------------------------------
 
 pub const MAX_HEADER: usize = 512; // envelope overhead (version..sig, slack)
@@ -41,8 +31,7 @@ pub const MAX_RESOURCE: usize = 256; // Intent.resource_id (SPEC 6.3)
 pub const MAX_ACTION: u32 = 256 * 1024; // Intent.action, opaque (SPEC 6.3)
 pub const MAX_RATIONALE: usize = 4 * 1024; // Intent.rationale (SPEC 6.3)
 
-// Fixed field widths, named so every magic number in the parser is traceable
-// to the SPEC grammar.
+// Fixed field widths, traceable to the SPEC grammar.
 pub const LEN_CHANNEL_ID: usize = 32;
 pub const LEN_PARENT: usize = 32;
 pub const LEN_SIG: usize = 64;
@@ -157,12 +146,7 @@ pub fn parseIntent(buf: []const u8) ParseError!Intent {
     const rationale = try c.field16(MAX_RATIONALE);
     if (c.pos != buf.len) return coverage.reject(.intent_trailing);
     coverage.accept(.intent_accepted);
-    return .{
-        .intent_id = intent_id,
-        .resource_id = resource_id,
-        .action = action,
-        .rationale = rationale,
-    };
+    return .{ .intent_id = intent_id, .resource_id = resource_id, .action = action, .rationale = rationale };
 }
 
 // ---------------------------------------------------------------------------
@@ -173,14 +157,12 @@ pub fn parseIntent(buf: []const u8) ParseError!Intent {
 //   [32] action_digest | u64 not_after | [64] sig
 //
 // tbs is every byte before sig; sig is Ed25519 over (DOMAIN_GRANT || tbs).
-// Like the Envelope, version is parsed here but refused by the verifier
-// (BE-GRANT-03 step 0), keeping parsing total and policy out of the parser.
+// version parsed, refused by verifier (BE-GRANT-03 step 0).
 //
-// wire is the full input buffer this Grant was parsed from (tbs || sig). The
-// verifier borrows it to seal the capability by content (BE-GRANT-03c): a
-// keyed digest over wire is frozen at verification time and recomputed over the
-// same live bytes at every access, so a caller write to the buffer between
-// verification and consumption is detected, not silently honored.
+// wire is the full input buffer (tbs || sig). The verifier seals the capability
+// by content (BE-GRANT-03c): a keyed digest over wire frozen at verification
+// and recomputed over the live bytes at every access, so a caller write between
+// verification and consumption is detected, not honored.
 // ---------------------------------------------------------------------------
 
 pub const Grant = struct {
@@ -239,17 +221,11 @@ pub fn parseGrant(buf: []const u8) ParseError!Grant {
 //
 // sig is Ed25519 over all preceding bytes, domain tag 0x03 (BE-SIG-01). The
 // evidence class is DERIVED from method_id by the receiver (BE-EVID-15), never
-// carried on the wire, so the parser records method_id and decides nothing
-// about class here. volatility is the executor's declaration; BE-EVID-06 makes
-// an unrecognized value the receiver's floor, also a verifier concern. Version
-// is parsed but not refused, same as Envelope and Grant: policy stays out of
-// the parser, BE-WIRE-02 totality stays in.
-//
-// readSpan advances a SHARED cursor over one Span with no trailing check: the
-// byte that ends one span is the first byte of the next (inline spans inside
-// an Effect, SPEC 6.3) or of a following field. The trailing check belongs to
-// the parser that owns the buffer, not to the reader. Every exit routes through
-// the shared Cursor rejection, so readSpan adds no exit point of its own (M9).
+// on the wire; volatility is the executor's declaration (BE-EVID-06 floor),
+// also a verifier concern. readSpan advances a SHARED cursor with no trailing
+// check: the byte ending one span is the first of the next (inline spans in an
+// Effect). readSpan adds no exit point of its own; every exit routes through
+// the shared Cursor rejection (M9).
 // ---------------------------------------------------------------------------
 
 pub const Span = struct {
@@ -313,15 +289,13 @@ pub fn parseSpan(buf: []const u8) ParseError!Span {
 //   u8 span_count | Span[] | [32] output_digest
 //
 // The Effect is a body (body_type 4) inside a signed Envelope (SPEC 6.2); it
-// authenticates nothing itself, so parseEffect takes the body slice. Inline
-// spans are full Span wires (tbs || sig, SPEC 7.1) walked here for totality:
-// readSpan consumes every byte of the span region before output_digest is read,
-// so a truncated or overlong span is rejected, not silently mis-sliced.
-// exit_code is i32 on the wire; read as u32 and bit-cast (identical 4 bytes,
-// no pointer mint: @bitCast to a non-pointer is outside the M8 forbidden set).
-// ok, exit_code and span_count are parsed, not policy-checked: BE-EFF-01 and the
-// Utterance-level span bound (BE-EVID-10) are verifier concerns. No per-Effect
-// span cap is declared in BE-TR-05, so none is invented here; body_len bounds
+// authenticates nothing itself. Inline spans are full Span wires walked here for
+// totality: readSpan consumes every byte of the span region before
+// output_digest is read, so a truncated or overlong span is rejected, not
+// mis-sliced. exit_code is i32 on the wire, read as u32 and @bitCast (no pointer
+// mint: bit-cast to a non-pointer is outside the M8 forbidden set). ok,
+// exit_code and span_count are parsed not policy-checked (BE-EFF-01, BE-EVID-10
+// are verifier concerns). No per-Effect span cap in BE-TR-05; body_len bounds
 // the whole input and a span_count past the buffer truncates via readSpan.
 // ---------------------------------------------------------------------------
 
@@ -368,14 +342,13 @@ pub fn parseEffect(buf: []const u8) ParseError!Effect {
 //   u16 text_len, text(<=1KiB) | u16 subject_len, subject(<=256)
 //   u8 confidence_q8 | u8 span_count | [16]* span_ids
 //
-// A Claim carries no signature of its own: it is authenticated only inside a
-// signed Utterance envelope (BE-EVID-08). The Utterance grammar is deferred to
-// RED-TEAM-09 F1, so this parser fixes the Claim body layout against the
-// vector in test/vectors.json. confidence_q8 is the sender's upper-bound
-// request (BE-EVID-02); the receiver recomputes, so the parser records the
-// byte and enforces nothing about it. span_ids are 16 bytes each; span_count is
-// bounded by the enclosing body_len, not by a per-claim cap (BE-TR-05 declares
-// none; the 64-span bound is on the Utterance, BE-EVID-10).
+// A Claim carries no signature of its own: authenticated only inside a signed
+// Utterance envelope (BE-EVID-08). The Utterance grammar is deferred to
+// RED-TEAM-09 F1, so this parser fixes the Claim body layout against the vector
+// in test/vectors.json. confidence_q8 is the sender's upper-bound request
+// (BE-EVID-02); the receiver recomputes, so the byte is recorded not enforced.
+// span_count is bounded by the enclosing body_len, not a per-claim cap (the
+// 64-span bound is on the Utterance, BE-EVID-10).
 // ---------------------------------------------------------------------------
 
 pub const Claim = struct {
@@ -395,11 +368,63 @@ pub fn parseClaim(buf: []const u8) ParseError!Claim {
     const span_ids = try c.take(@as(usize, span_count) * LEN_SPAN_REF);
     if (c.pos != buf.len) return coverage.reject(.claim_trailing);
     coverage.accept(.claim_accepted);
-    return .{
-        .text = text,
-        .subject = subject,
-        .confidence_q8 = confidence_q8,
-        .span_count = span_count,
-        .span_ids = span_ids,
-    };
+    return .{ .text = text, .subject = subject, .confidence_q8 = confidence_q8, .span_count = span_count, .span_ids = span_ids };
+}
+
+// ---------------------------------------------------------------------------
+// Channel control structures (SPEC 6.1b, 6.1c). ControlGenesis is the
+// immutable body of the genesis envelope (parent_count 0, body_type 5);
+// Control is every later control envelope's body. Both flat. version and
+// match_rule are parsed not rejected (SPEC 2.2); ca_keys ascending order is a
+// verify-time concern (BE-GEN-03 derives channel_id from ca_key_0).
+// ---------------------------------------------------------------------------
+
+pub const LEN_MEMBER_GROUP: usize = 8; // SPEC 6.1b member_group / admin_group
+pub const LEN_ADMIN_GROUP: usize = 8;
+pub const LEN_CA_KEY: usize = 32; // SPEC 6.1b ca_keys element
+pub const MAX_GENESIS_NAME: usize = 64; // SPEC 6.1b name_len bound
+pub const MAX_CA_COUNT: u8 = 16; // BE-TR-05: bound ca_count before the slice
+pub const MAX_CONTROL_BODY: usize = 1024; // BE-TR-05: Control body bound
+
+// ControlGenesis (SPEC 6.1b): u8 version | u16 name_len,name(<=64) | [8]
+// member_group | [8] admin_group | u8 ca_count,[32]* ca_keys | u8 match_rule.
+pub const ControlGenesis = struct {
+    version: u8,
+    name: []const u8,
+    member_group: []const u8,
+    admin_group: []const u8,
+    ca_count: u8,
+    ca_keys: []const u8,
+    match_rule: u8,
+};
+
+pub fn parseControlGenesis(buf: []const u8) ParseError!ControlGenesis {
+    var c = Cursor{ .buf = buf };
+    const version = try c.u8r();
+    const name = try c.field16(MAX_GENESIS_NAME);
+    const member_group = try c.take(LEN_MEMBER_GROUP);
+    const admin_group = try c.take(LEN_ADMIN_GROUP);
+    const ca_count = try c.u8r();
+    if (ca_count == 0) return coverage.reject(.genesis_ca_count_zero);
+    if (ca_count > MAX_CA_COUNT) return coverage.reject(.genesis_ca_count_oversize);
+    const ca_keys = try c.take(@as(usize, ca_count) * LEN_CA_KEY);
+    const match_rule = try c.u8r();
+    if (c.pos != buf.len) return coverage.reject(.genesis_trailing);
+    coverage.accept(.genesis_accepted);
+    return .{ .version = version, .name = name, .member_group = member_group, .admin_group = admin_group, .ca_count = ca_count, .ca_keys = ca_keys, .match_rule = match_rule };
+}
+
+// Control (SPEC 6.1c): u8 version | u8 action_type(1=Genesis,2=Revoke) | [32]
+// subject(zero for Genesis) | u16 body_len,body. action_type parsed not rejected.
+pub const Control = struct { action_type: u8, subject: []const u8, body: []const u8 };
+
+pub fn parseControl(buf: []const u8) ParseError!Control {
+    var c = Cursor{ .buf = buf };
+    _ = try c.u8r(); // version; refused by verifier (SPEC 2.2)
+    const action_type = try c.u8r();
+    const subject = try c.take(LEN_PUBKEY);
+    const body = try c.field16(MAX_CONTROL_BODY);
+    if (c.pos != buf.len) return coverage.reject(.control_trailing);
+    coverage.accept(.control_accepted);
+    return .{ .action_type = action_type, .subject = subject, .body = body };
 }

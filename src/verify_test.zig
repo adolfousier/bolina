@@ -473,3 +473,131 @@ test "BE_GRANT_03 check 8 resource_id mismatch refused" {
     try std.testing.expectError(error.WrongResource, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
     try std.testing.expectEqual(@as(usize, 0), effect_calls);
 }
+
+// ---------------------------------------------------------------------------
+// Channel control verification (SPEC 6.1b, 6.1c). The channel layer runs over
+// parsed ControlGenesis/Control bodies and caller-verified certs: the cert
+// chain (BE-ID-02..04) is the caller's job (D-018 boundary), so these tests
+// build minimal Cert literals carrying only the group_ids / sig_pubkey the
+// channel checks read. genesis_exists and is_revoked are package-level hooks
+// mirroring GrantContext.already_consumed.
+
+// GENESIS: member_group=0xAA*8, admin_group=0xBB*8, name="test", one ca_key.
+const CHAN_GENESIS_HEX =
+    "01" ++ "0004" ++ "74657374" ++ // version, name_len, "test"
+    "aaaaaaaaaaaaaaaa" ++ "bbbbbbbbbbbbbbbb" ++ // member_group, admin_group
+    "01" ++ "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" ++ // ca_count=1, one 32-byte key
+    "01"; // match_rule (byte equality, BE-GEN-04)
+
+// action_type=3 (outside the {1,2} set) and action_type=2 (Revoke), empty body.
+const CHAN_CONTROL_BAD_HEX = "01" ++ "03" ++ "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" ++ "0000";
+const CHAN_REVOKE_HEX = "01" ++ "02" ++ "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" ++ "0000";
+
+const CHAN_MEMBER_GROUP = [_]u8{0xaa} ** parser.session.LEN_GROUP_ID; // 8 bytes
+const CHAN_ADMIN_GROUP = [_]u8{0xbb} ** parser.session.LEN_GROUP_ID; // 8 bytes
+const CHAN_SENDER_PUB = [_]u8{0xdd} ** parser.LEN_PUBKEY; // 32 bytes
+const WRONG_ID = [_]u8{0xff} ** 32;
+
+fn genesisExistsNo(_: []const u8) bool {
+    return false;
+}
+fn genesisExistsYes(_: []const u8) bool {
+    return true;
+}
+fn revokedNo(_: []const u8) bool {
+    return false;
+}
+fn revokedYes(_: []const u8) bool {
+    return true;
+}
+
+// A Cert literal carrying only the fields the channel layer reads. group_count,
+// group_ids, and sig_pubkey drive every membership / admin check; the cert
+// chain is verified before these run, so the remaining fields are inert dummies.
+fn channelCert(groups: []const u8, pubkey: []const u8) parser.session.Cert {
+    return .{
+        .version = 2,
+        .role_bits = 0,
+        .sig_pubkey = pubkey,
+        .kex_pubkey = "",
+        .not_before = 0,
+        .not_after = 0,
+        .name = "",
+        .group_count = @intCast(groups.len / parser.session.LEN_GROUP_ID),
+        .group_ids = groups,
+        .ca_sig_count = 0,
+        .ca_sigs = "",
+        .tbs = "",
+    };
+}
+
+// channel_id = BLAKE2s(name || ca_key_0) (SPEC 6.1b). Independent computation
+// of the derivation the verifier runs; not a copy of the code under test.
+fn deriveChannelId(name: []const u8, ca_key_0: []const u8) [32]u8 {
+    var hasher = std.crypto.hash.blake2.Blake2s256.init(.{});
+    hasher.update(name);
+    hasher.update(ca_key_0);
+    var out: [32]u8 = undefined;
+    hasher.final(&out);
+    return out;
+}
+
+fn chanCtx(genesis_yes: bool, revoked_yes: bool) verify.ChannelContext {
+    return .{
+        .genesis_exists = if (genesis_yes) &genesisExistsYes else &genesisExistsNo,
+        .is_revoked = if (revoked_yes) &revokedYes else &revokedNo,
+    };
+}
+
+test "BE_GEN_04 genesis match_rule != 1 is refused" {
+    var bytes = decodeHex(CHAN_GENESIS_HEX);
+    bytes[56] = 0x02; // match_rule: only byte equality (1) is defined
+    const genesis = try parser.channel.parseControlGenesis(&bytes);
+    const admin = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.BadMatchRule, verify.verifyControlGenesis(genesis, admin, &WRONG_ID, chanCtx(false, false)));
+}
+
+test "BE_GEN_03 genesis from a non-admin cert is refused" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const non_admin = channelCert(&CHAN_MEMBER_GROUP, &CHAN_SENDER_PUB); // carries member, not admin
+    try std.testing.expectError(error.GenesisNotAdmin, verify.verifyControlGenesis(genesis, non_admin, &WRONG_ID, chanCtx(false, false)));
+}
+
+test "BE_GEN_03 genesis with a mismatched channel_id is refused" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const admin = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.BadChannelId, verify.verifyControlGenesis(genesis, admin, &WRONG_ID, chanCtx(false, false)));
+}
+
+test "BE_GEN_01 a second genesis for a known channel_id is refused" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const admin = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB);
+    const channel_id = deriveChannelId("test", &[_]u8{0xcc} ** 32);
+    try std.testing.expectError(error.DuplicateGenesis, verify.verifyControlGenesis(genesis, admin, &channel_id, chanCtx(true, false)));
+}
+
+test "BE_CTRL_01 control action_type outside 1,2 is refused" {
+    const control = try parser.channel.parseControl(&decodeHex(CHAN_CONTROL_BAD_HEX));
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const sender = channelCert(&CHAN_MEMBER_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.BadActionType, verify.verifyControl(control, genesis, sender));
+}
+
+test "BE_CTRL_02 revoke from a non-admin cert is refused" {
+    const control = try parser.channel.parseControl(&decodeHex(CHAN_REVOKE_HEX));
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const non_admin = channelCert(&CHAN_MEMBER_GROUP, &CHAN_SENDER_PUB); // member, not admin
+    try std.testing.expectError(error.RevokeNotAdmin, verify.verifyControl(control, genesis, non_admin));
+}
+
+test "BE_CHAN_02 a revoked subject is refused before the group check" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const member = channelCert(&CHAN_MEMBER_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.SubjectRevoked, verify.requireMember(member, genesis, chanCtx(false, true)));
+}
+
+test "BE_CHAN_01 a cert without member_group is refused" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const non_member = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB); // admin, not member
+    try std.testing.expectError(error.NotMember, verify.requireMember(non_member, genesis, chanCtx(false, false)));
+}

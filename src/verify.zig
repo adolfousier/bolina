@@ -236,3 +236,102 @@ pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.ch
     // the call-graph wall M10 makes load-bearing.
     execute(grant);
 }
+
+// ---------------------------------------------------------------------------
+// Channel control verification (SPEC 6.1a-c, BE-CHAN/BE-GEN/BE-CTRL).
+//
+// Same split as the Grant verifier (D-018): the parser turns control bytes
+// into typed values, these checks run over those values plus caller-supplied
+// ledger state. Membership (BE-CHAN-01) and authority (BE-GEN-03, BE-CTRL-02)
+// are read from the certificate at verification time, never from accumulated
+// channel state (SPEC 6.1b/c). The envelope signature (BE-ENV-02) and the
+// cert chain (BE-ID-02..04) are verified by the caller before these run.
+// ---------------------------------------------------------------------------
+
+pub const ChannelError = error{
+    BadMatchRule, // BE-GEN-04: match_rule != 1 (not byte equality)
+    BadChannelId, // channel_id != BLAKE2s(name || ca_key_0) (SPEC 6.1b, BE-GEN-03)
+    DuplicateGenesis, // BE-GEN-01: a second genesis for an existing channel_id
+    GenesisNotAdmin, // BE-GEN-03: genesis not signed by an admin_group cert
+    BadActionType, // BE-CTRL-01: action_type not in {1, 2}
+    RevokeNotAdmin, // BE-CTRL-02: Revoke sender cert lacks admin_group
+    SubjectRevoked, // BE-CHAN-02/03: subject in the grow-only revoked set
+    NotMember, // BE-CHAN-01/03: cert does not carry member_group
+};
+
+// Ledger hooks the channel checks need. Both are caller-supplied state, like
+// GrantContext.already_consumed: the durable genesis index (BE-GEN-01) and the
+// grow-only revoked-subject set (BE-CHAN-02).
+pub const ChannelContext = struct {
+    genesis_exists: *const fn (channel_id: []const u8) bool, // BE-GEN-01
+    is_revoked: *const fn (subject: []const u8) bool, // BE-CHAN-02 grow-only set
+};
+
+// BE-CHAN-01 helper: a cert carries an 8-byte group iff the group appears in
+// its group_ids (BLAKE2s-256 prefixes, SPEC 3.1). Equality is byte equality,
+// the only rule a channel defines (BE-GEN-04).
+fn certCarriesGroup(cert: parser.session.Cert, group: []const u8) bool {
+    var i: usize = 0;
+    while (i < cert.group_count) : (i += 1) {
+        const off = i * parser.session.LEN_GROUP_ID;
+        if (std.mem.eql(u8, cert.group_ids[off .. off + parser.session.LEN_GROUP_ID], group)) return true;
+    }
+    return false;
+}
+
+// BE-GEN-01/03/04 and channel_id derivation. The genesis envelope's signature
+// and the admin cert's chain are verified separately; this runs the
+// genesis-specific invariants over the parsed body.
+pub fn verifyControlGenesis(
+    genesis: parser.channel.ControlGenesis,
+    admin_cert: parser.session.Cert,
+    channel_id: []const u8,
+    ctx: ChannelContext,
+) ChannelError!void {
+    // BE-GEN-04: match_rule fixed at byte equality (1); no other value defined.
+    if (genesis.match_rule != 1) return error.BadMatchRule;
+    // BE-GEN-03: the genesis envelope is signed by a cert carrying admin_group.
+    if (!certCarriesGroup(admin_cert, genesis.admin_group)) return error.GenesisNotAdmin;
+    // channel_id = BLAKE2s(name || ca_key_0) (SPEC 6.1b). ca_keys are
+    // ascending-ordered at parse time (canonical encoding), so ca_key_0 is the
+    // first key. Streamed in two chunks; no tagged buffer is allocated.
+    var hasher = B2s.init(.{});
+    hasher.update(genesis.name);
+    hasher.update(genesis.ca_keys[0..parser.channel.LEN_CA_KEY]);
+    var derived: [32]u8 = undefined;
+    hasher.final(&derived);
+    if (!std.mem.eql(u8, channel_id, &derived)) return error.BadChannelId;
+    // BE-GEN-01: exactly one genesis per channel_id; a second is rejected.
+    if (ctx.genesis_exists(channel_id)) return error.DuplicateGenesis;
+}
+
+// BE-CTRL-01/02: validate a control body. action_type 1 (Genesis) takes the
+// ControlGenesis path above; action_type 2 (Revoke) requires admin authority.
+pub fn verifyControl(
+    control: parser.channel.Control,
+    genesis: parser.channel.ControlGenesis,
+    sender_cert: parser.session.Cert,
+) ChannelError!void {
+    // BE-CTRL-01: action_type must be 1 or 2; no forward-compat path (SPEC 2.2).
+    switch (control.action_type) {
+        1, 2 => {},
+        else => return error.BadActionType,
+    }
+    // BE-CTRL-02: a Revoke must be signed by a cert carrying admin_group.
+    if (control.action_type == 2 and !certCarriesGroup(sender_cert, genesis.admin_group))
+        return error.RevokeNotAdmin;
+}
+
+// BE-CHAN-01/02/03: gate a channel message on the sender's membership. A node
+// is a member iff its cert carries member_group (BE-CHAN-01) AND its sig_pubkey
+// is not in the grow-only revoked set (BE-CHAN-02); a revoked subject is
+// treated as a non-member from the moment its revocation is accepted
+// (BE-CHAN-03), so the revoked check precedes the group check.
+pub fn requireMember(
+    sender_cert: parser.session.Cert,
+    genesis: parser.channel.ControlGenesis,
+    ctx: ChannelContext,
+) ChannelError!void {
+    if (ctx.is_revoked(sender_cert.sig_pubkey)) return error.SubjectRevoked;
+    if (!certCarriesGroup(sender_cert, genesis.member_group)) return error.NotMember;
+}
