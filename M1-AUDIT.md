@@ -286,3 +286,34 @@ then pin the final count.
 
 Every test is read against its SPEC paragraph before it is named, and no test
 references the constant it verifies (D-027 - literals only).
+
+---
+
+## Resolution - sprint outcome (2026-08-07)
+
+The keying pass bound nineteen markers. `tools/m1-high-water` rose 48 -> 67;
+the live gate reads `67/109 bound, high water 67, missing 42`. Every marker
+named in this audit now carries a final verdict:
+
+- **BOUND (19)** - one real behavioural test each, across eight atomic
+  commits (`5062364` through `e435166`): ROLE-01/02/04, CA-01, SIG-01,
+  EFF-01, TR-07, EVID-12, BODY-02/03, ENV-01, CHAN-03, REV-02, GEN-02,
+  GRANT-03a, MESH-07, SURF-01/02, DEP-02.
+- **GATE-BOUND, unbound (3)** - SURF-03 (M5/M11 line budget), DEP-01 (M6
+  offline-build graph), WIRE-03 (covered by streaming `verifySigned`; D-027
+  forbids a redundant test). A runtime test for a build-time property would
+  be theatre; the gate is the proof.
+- **NEEDS-CODE (the relay round's worklist)** - TR-06 (dispatch must check
+  `session.bound`; `main.zig` is a stub), ENV-03 (body_type -> role map),
+  ENV-04 (envelope-layer seq replay), REV-01 (30-day duration cap), EVID-11
+  (executor method_id interface). Each is traced to live source with the
+  absent line named.
+- **OUT-OF-SLICE** - the executor, restart handler, approving UI, and
+  hardware key-isolation markers. Declared and MISSING until their milestone
+  lands (D-041 decision 3).
+
+Full gauntlet after the pass: `zig fmt --check` clean; `zig build test`
+213/213; em-dash scan clean over `src/` and `tools/`; `verify-vectors`
+PASSED 77 FAILED 0; mutation 57/57 killed, 0 survived (chunked, one writer
+per domain; D-035/D-040). The mechanism decisions behind these verdicts are
+D-041 (denominator law) and D-042 (keying-pass verdicts).
