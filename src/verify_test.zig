@@ -10,6 +10,8 @@
 const std = @import("std");
 const parser = @import("parser.zig");
 const verify = @import("verify.zig");
+const binding = @import("binding.zig");
+const cth = @import("cert_test_helpers.zig");
 
 fn decodeHex(comptime hex: []const u8) [hex.len / 2]u8 {
     var b: [hex.len / 2]u8 = undefined;
@@ -129,6 +131,12 @@ fn grantEnvelope(grant: parser.channel.Grant) parser.channel.Envelope {
 fn baseContext(action: []const u8, hook: *const fn ([]const u8) bool) verify.GrantContext {
     return .{
         .own_pubkey = &EXECUTOR_BYTES,
+        .trusted_ca_keys = cth.trustedSet(),
+        .approver_cert = cth.approverCert(),
+        .subject_cert = cth.subjectCert(),
+        .intent_sender = &cth.SUBJECT_PUB,
+        .pending_intent_id = &cth.INTENT_ID,
+        .pending_resource_id = cth.RESOURCE_ID,
         .intent_action = action,
         .now_ms = NOW_MS,
         .first_receipt_ms = FIRST_RECEIPT_MS,
@@ -383,4 +391,85 @@ test "BE_GRANT_03b valid grant runs the effect exactly once with matching fields
     // a storable handle the caller can keep and mutate.
     try std.testing.expectEqualSlices(u8, grant.grant_id, effect_grant_id);
     try std.testing.expectEqualSlices(u8, grant.action_digest, grant.action_digest);
+}
+
+// ---------------------------------------------------------------------------
+// Folded checks 3, 4, 6, 7, 8 (D-008 provisional debt retired). The cert store
+// and pending-intent table the slice used to defer are now supplied through
+// GrantContext, so the routine models the full twelve-check chain. Each test
+// invalidates exactly one folded check and confirms the grant is refused there
+// before the effect runs.
+// ---------------------------------------------------------------------------
+
+test "BE_GRANT_03 check 3 approver cert without approver role refused" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    // Approver-positioned cert that carries the agent role, not approver.
+    var wire: [512]u8 = undefined;
+    ctx.approver_cert = cth.buildCertInto(
+        &wire,
+        cth.APPROVER_PUB,
+        binding.ROLE_AGENT,
+        &[_]u8{0xc0},
+        cth.CERT_NOT_BEFORE,
+        cth.CERT_NOT_AFTER,
+    );
+    resetEffect();
+    try std.testing.expectError(error.BadApproverCert, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
+test "BE_GRANT_03 check 4 subject cert without agent role refused" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    var wire: [512]u8 = undefined;
+    ctx.subject_cert = cth.buildCertInto(
+        &wire,
+        cth.SUBJECT_PUB,
+        binding.ROLE_EXECUTOR,
+        &[_]u8{0xc0},
+        cth.CERT_NOT_BEFORE,
+        cth.CERT_NOT_AFTER,
+    );
+    resetEffect();
+    try std.testing.expectError(error.BadSubjectCert, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
+test "BE_GRANT_03 check 6 subject not the pending intent sender refused" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    ctx.intent_sender = cth.APPROVER_PUB[0..]; // not the grant's subject
+    resetEffect();
+    try std.testing.expectError(error.WrongSubject, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
+test "BE_GRANT_03 check 7 intent_id matching no pending intent refused" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    const wrong = decodeHex("ffffffffffffffffffffffffffffffff");
+    ctx.pending_intent_id = &wrong;
+    resetEffect();
+    try std.testing.expectError(error.NoMatchingIntent, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
+test "BE_GRANT_03 check 8 resource_id mismatch refused" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    ctx.pending_resource_id = "bol:other/resource";
+    resetEffect();
+    try std.testing.expectError(error.WrongResource, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
 }

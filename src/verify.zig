@@ -10,12 +10,13 @@
 //     0x02) before the body is interpreted; on failure the envelope is
 //     discarded.
 //   * BE-GRANT-03: a single verification routine runs every enforceable check
-//     in the enumerated order and refuses on the first failure. The checks that
-//     need external state the slice does not model (certificate validity for
-//     checks 3 and 4, the pending-intent table for checks 6, 7 and 8) are left
-//     to the executor to wire around this routine. Check 11 (the BE-GRANT-01
-//     durable ledger) is exposed as a hook supplied by the caller and, by the
-//     shape of this function, it is always the last thing that runs.
+//     in the enumerated order and refuses on the first failure. The certificate
+//     chain (checks 3 and 4) and the pending-intent match (checks 6, 7 and 8)
+//     are folded in via the GrantContext: the caller supplies the approver and
+//     subject certs, the trusted CA set, and the pending-intent fields. Check
+//     11 (the BE-GRANT-01 durable ledger) is exposed as a hook supplied by the
+//     caller and, by the shape of this function, it is always the last thing
+//     that runs.
 //   * BE-GRANT-03b (round 4 restatement): verification is a call, not a value.
 //     The routine does not hand back a capability. It runs the checks, commits
 //     the ledger (check 11), and invokes the effect itself, inside its own
@@ -36,6 +37,7 @@
 
 const std = @import("std");
 const parser = @import("parser.zig");
+const binding = @import("binding.zig");
 
 const Ed = std.crypto.sign.Ed25519;
 const B2s = std.crypto.hash.blake2.Blake2s256;
@@ -50,7 +52,12 @@ pub const VerifyError = error{
     BadEnvelopeBinding, // BE-GRANT-03 check 1: not body_type=3, or sender != approver
     BadSignature, // BE-ENV-02 / check 2: sig does not verify
     MalformedKey, // a pubkey is not a valid curve point (cannot verify at all)
+    BadApproverCert, // BE-GRANT-03 check 3: approver cert invalid, wrong role, or not the grant's approver
+    BadSubjectCert, // BE-GRANT-03 check 4: subject cert invalid, wrong role, or not the grant's subject
     WrongExecutor, // BE-GRANT-03 check 5: executor != this executor's key
+    WrongSubject, // BE-GRANT-03 check 6: subject != pending intent's sender
+    NoMatchingIntent, // BE-GRANT-03 check 7: intent_id matches no pending intent
+    WrongResource, // BE-GRANT-03 check 8: resource_id != pending intent's canonical resource_id
     ActionDigestMismatch, // BE-GRANT-02 / check 9: BLAKE2s(action) != action_digest
     Expired, // BE-GRANT-05 / check 10: any of the three expiry conditions
     AlreadyConsumed, // BE-GRANT-01 / check 11: grant_id already in the ledger
@@ -119,14 +126,26 @@ fn checkExpiry(not_after: u64, now_ms: u64, first_receipt_ms: u64, t_max_s: u64,
 }
 
 // ---------------------------------------------------------------------------
-// GrantContext: the inputs the executor supplies for the checks this routine
-// can enforce without external state. Checks 3/4 (certificates) and 6/7/8
-// (pending-intent matching) are not modeled here; the executor wires them in.
+// GrantContext: every input the verification routine needs. The certificate
+// chain (binding.zig) validates checks 3 and 4; the pending-intent fields
+// drive checks 6, 7 and 8; the ledger hook is check 11. The certificate
+// store and pending-intent table the slice used to defer to the executor are
+// now supplied here, so the routine models the full twelve-check chain.
 // ---------------------------------------------------------------------------
 
 pub const GrantContext = struct {
     // Check 5: this executor's own sig_pubkey.
     own_pubkey: []const u8,
+    // Checks 3 and 4 (BE-ID-02/03/04): the approver and subject certs, the
+    // local CA trust set, and the executor's clock used for cert validity.
+    trusted_ca_keys: []const []const u8,
+    approver_cert: parser.session.Cert,
+    subject_cert: parser.session.Cert,
+    // Checks 6, 7 and 8: the pending intent's sender, id, and canonical
+    // resource_id, matched against the grant.
+    intent_sender: []const u8,
+    pending_intent_id: []const u8,
+    pending_resource_id: []const u8,
     // Check 9 (BE-GRANT-02): the pending intent's action bytes, re-hashed here.
     intent_action: []const u8,
     // Check 10 (BE-GRANT-05): the executor's clock and the grant's receipt time.
@@ -172,13 +191,32 @@ pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.ch
     // 2. Grant.sig verifies against Grant.approver (domain tag 0x04).
     try verifySigned(parser.channel.DOMAIN_GRANT, grant.tbs, grant.sig, grant.approver);
 
-    // 3 and 4 (approver/subject certificate validity) and 6, 7, 8 (subject,
-    // intent_id and resource_id matching against the pending intent) require a
-    // certificate store and the executor's pending-intent table. The executor
-    // performs those around this routine; they are omitted from the slice.
+    // 3. Approver certificate valid NOW and carries the approver role (BE-ID-02,
+    //    BE-ID-04). The cert binds the identity that signed the grant, so its
+    //    sig_pubkey must equal Grant.approver. validateCert runs the full chain
+    //    (role constraints, approver quorum, validity window, CA signatures,
+    //    trust set); a single failure class reports the refusal.
+    binding.validateCert(ctx.approver_cert, ctx.trusted_ca_keys, ctx.now_ms) catch return error.BadApproverCert;
+    if ((ctx.approver_cert.role_bits & binding.ROLE_APPROVER) == 0) return error.BadApproverCert;
+    if (!std.mem.eql(u8, ctx.approver_cert.sig_pubkey, grant.approver)) return error.BadApproverCert;
+
+    // 4. Subject certificate valid NOW and carries the agent role. Its identity
+    //    key is the subject the grant authorizes.
+    binding.validateCert(ctx.subject_cert, ctx.trusted_ca_keys, ctx.now_ms) catch return error.BadSubjectCert;
+    if ((ctx.subject_cert.role_bits & binding.ROLE_AGENT) == 0) return error.BadSubjectCert;
+    if (!std.mem.eql(u8, ctx.subject_cert.sig_pubkey, grant.subject)) return error.BadSubjectCert;
 
     // 5. Grant.executor equals this executor's own sig_pubkey.
     if (!std.mem.eql(u8, grant.executor, ctx.own_pubkey)) return error.WrongExecutor;
+
+    // 6. The grant's subject is the pending intent's sender.
+    if (!std.mem.eql(u8, grant.subject, ctx.intent_sender)) return error.WrongSubject;
+
+    // 7. intent_id matches the pending intent.
+    if (!std.mem.eql(u8, grant.intent_id, ctx.pending_intent_id)) return error.NoMatchingIntent;
+
+    // 8. resource_id matches the pending intent's canonical resource_id.
+    if (!std.mem.eql(u8, grant.resource_id, ctx.pending_resource_id)) return error.WrongResource;
 
     // 9. Grant.action_digest equals BLAKE2s recomputed over the intent's action
     //    bytes (BE-GRANT-02). Exact match, no partial or semantic matching.
