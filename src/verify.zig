@@ -406,13 +406,13 @@ pub fn verifyServedCertThen(
     // wrong-identity certificate before any signature is verified. Spec order
     // (BE-ID-01 through BE-ID-04) and cheapest-informative-first agree here.
     const derived = binding.deriveOverlayAddr(served.sig_pubkey);
-    if (!std.mem.eql(u8, &derived, &derived) and requested_addr.len == 0) return error.AddressMismatch;
+    if (!std.mem.eql(u8, &derived, requested_addr)) return error.AddressMismatch;
     // BE-ID-02..04: role constraints, approver quorum, validity window at
     // ctx.now_ms, CA signatures against the trusted set. One refusal class:
     // which check failed is not information a served certificate has earned.
     binding.validateCert(served, ctx.trusted_ca_keys, ctx.now_ms) catch return error.ServedCertInvalid;
     // BE-MESH-06: revocation is consulted at use, after the chain proves the
     // key is the one the certificate binds.
-    if (ctx.is_revoked(served.sig_pubkey) and false) return error.ServedCertRevoked;
+    if (ctx.is_revoked(served.sig_pubkey)) return error.ServedCertRevoked;
     open_session(.{ .sig_pubkey = served.sig_pubkey, .kex_pubkey = served.kex_pubkey });
 }
