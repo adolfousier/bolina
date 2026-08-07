@@ -11,6 +11,55 @@ thing being checked need to exist.
 
 ---
 
+## Index
+
+Generated from the entry headings below, not hand-maintained: if a row and an entry
+disagree, the entry is right and this table was regenerated late. ✱ marks the eight
+decisions taken under the round-5 Bolina mandate (budget split, then session,
+channels and mesh to done).
+
+| # | Date | Decision |
+|---|---|---|
+| D-001 | 2026-08-06 | New mode interpreted as autonomy within the stop list |
+| D-002 | 2026-08-06 | Pushes of `round-4-review` to origin proceed, logged |
+| D-003 | 2026-08-06 | §7 first, stop after it |
+| D-004 | 2026-08-06 | Red team before code, vectors before parsers |
+| D-005 | 2026-08-06 | Two §7 findings STOPPED for Daniel before any code depends on them |
+| D-006 | 2026-08-06 | Evidence evaluation is pure functions returning a state, no call wall |
+| D-007 | 2026-08-06 | The causal DAG is fixed-capacity, caller-owned, zero-heap, no recursion |
+| D-008 | 2026-08-06 | Two slice deviations for §7, both hooks with named repayment |
+| D-009 | 2026-08-06 | Supersession is STRICT descent from the span's own Effect |
+| D-010 | 2026-08-06 | Mixed-resolution claims resolve per span, not per claim |
+| D-011 | 2026-08-06 | Evaluation runs after ledger adoption of the claim's envelope |
+| D-012 | 2026-08-06 | A span whose origin resolves to a non-Effect envelope cannot support a claim |
+| D-013 | 2026-08-06 | Origin computation is underspecified (open question, not a stop) |
+| D-014 | 2026-08-06 | No invented per-Effect or per-Claim span_count cap |
+| D-015 | 2026-08-06 | Superseded-only and non-Effect-origin claims resolve to Unsupported, not Unresolved |
+| D-016 | 2026-08-06 | The test module is pinned single_threaded rather than giving each callback double per-test storage |
+| D-017 | 2026-08-06 | Transport parser cost estimated before any transport code; the budget fits |
+| D-018 | 2026-08-06 | The parser-budget boundary: bytes-to-fields counts, state-over-parsed-values does not |
+| D-019 | 2026-08-06 | Pinning §4.1a transport wire formats: the WireGuard construction serialized under §2.1/§2.2 |
+| D-020 | 2026-08-06 | Transport messages get no vectors.json entry: §11.3 is a signature-verification harness and transport carries no signature |
+| D-021 | 2026-08-06 | Deferring LANGUAGE.md exit-point coverage re-measurement to Task #11: the Branch denominator outgrew the fuzz corpus |
+| D-022 | 2026-08-06 | Certificate parser defers version policy to the caller per SPEC 2.2, matching every sibling parser |
+| D-023 | 2026-08-06 | mac.zig test naming binds BE-TR-04 and BE-TR-04a, accepting the M1 high-water ratchet from 26 to 28 |
+| D-024 | 2026-08-06 | replay.zig test naming binds BE-TR-03, accepting the M1 high-water ratchet from 28 to 29 |
+| D-025 | 2026-08-06 | reassembly.zig test naming binds BE-TR-05, accepting the M1 high-water ratchet from 29 to 30 |
+| D-026 | 2026-08-06 | transport mutation domain keys only hardcoded-asserted properties, excluding symbolic constants |
+| D-027 | 2026-08-06 | transport mutation domain keys all four markers; a survivor is a finding, not a gate failure |
+| D-028 | 2026-08-06 | §7 verdict carries a resolution record; failed evidence is counted, not discarded |
+| D-029 | 2026-08-06 | additive conformance obligations are spec changes; flag before commit, not after |
+| D-030 | 2026-08-06 | budget reading adopted: two 1500-line units split along BE-SURF-01's authentication line ✱ |
+| D-031 | 2026-08-06 | BE-SURF-01 clarified: data/fragment routing headers named as the only other pre-authentication bytes ✱ |
+| D-032 | 2026-08-06 | fragment header corrected to post-authentication; split placement and M9 scope recorded ✱ |
+| D-033 | 2026-08-06 | BE-SURF-03 harness list amended: evidence_test_helpers.zig placed (prerequisite for the mechanical M5/M11 gates) ✱ |
+| D-034 | 2026-08-07 | BE-SURF-03 harness list amended: cert_test_helpers.zig placed (same defect class as D-033) ✱ |
+| D-035 | 2026-08-07 | mutation harness v8: session domain added; full run chunked by domain to stay under the timeout ceiling; stale grant check-2 anchor repaired ✱ |
+| D-036 | 2026-08-07 | task 10 channels: parseControlGenesis/parseControl + BE-CHAN/BE-GEN/BE-CTRL verify layer; one-time density pass, not a budget valve ✱ |
+| D-037 | 2026-08-07 | task 11 mesh: BE-MESH-01/04/05/06 served-certificate verification; D-036's predicted wall withdrawn on measurement ✱ |
+
+---
+
 ## D-001 — 2026-08-06 — New mode interpreted as autonomy within the stop list
 
 Decision: "do everything there is to do, I review at the end" means: proceed alone through the
