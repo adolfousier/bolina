@@ -771,3 +771,25 @@ test "BE_BODY_02 intent carries no transmitted action digest" {
     // The raw action bytes are present (opaque); the daemon digests them.
     try std.testing.expect(@hasField(parser.channel.Intent, "action"));
 }
+
+// ---------------------------------------------------------------------------
+// BE-MESH-07 (lookups are authenticated). LookupRequest and LookupResponse
+// MUST travel inside an established session with the lighthouse and MUST NOT be
+// parsed from unauthenticated input. Both carry variable-length fields,
+// including a certificate with its own variable-length signature list, so
+// BE-SURF-01 puts them behind authentication. Bound structurally: the lookup
+// parsers are declared in the post-authentication session unit
+// (parser/session.zig) and are absent from the pre-auth surface (parser.zig
+// parses handshake + cookie reply + transport data only). Declaring a lookup
+// parser in the pre-auth module would fail this test.
+// ---------------------------------------------------------------------------
+
+test "BE_MESH_07 lookup parsers live behind authentication, not in the pre-auth surface" {
+    // The lookup parsers exist in the post-authentication session unit.
+    try std.testing.expect(@hasDecl(parser.session, "parseLookupRequest"));
+    try std.testing.expect(@hasDecl(parser.session, "parseLookupResponse"));
+    // The pre-authentication surface does NOT expose lookup parsing: a lookup
+    // cannot be parsed from unauthenticated input.
+    try std.testing.expect(!@hasDecl(parser, "parseLookupRequest"));
+    try std.testing.expect(!@hasDecl(parser, "parseLookupResponse"));
+}

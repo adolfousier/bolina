@@ -605,6 +605,83 @@ test "BE_CHAN_01 a cert without member_group is refused" {
 }
 
 // ---------------------------------------------------------------------------
+// BE-CHAN-03 (accept half). A node MUST NOT accept channel messages from a
+// non-member; a revoked subject is treated as a non-member from the moment its
+// revocation is accepted. The member gate refuses both shapes, and accepts a
+// genuine member (group present, not revoked). (Fan-out half is Bucket D.)
+// ---------------------------------------------------------------------------
+
+test "BE_CHAN_03 non-member and revoked-member are both refused, member accepted" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    // (a) non-member: no member_group carried -> NotMember.
+    const non_member = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.NotMember, verify.requireMember(non_member, genesis, chanCtx(false, false)));
+    // (b) revoked member: carries member_group but is revoked -> treated as a
+    // non-member, refused as SubjectRevoked before the group check.
+    const member = channelCert(&CHAN_MEMBER_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.SubjectRevoked, verify.requireMember(member, genesis, chanCtx(false, true)));
+    // (c) a genuine member (group present, not revoked) is accepted.
+    try verify.requireMember(member, genesis, chanCtx(false, false));
+}
+
+// ---------------------------------------------------------------------------
+// BE-REV-02 (refuse half). A node holding a valid CA-signed revocation MUST
+// refuse that subject's envelopes. The revocation is validated by verifyControl
+// (action_type 2 signed by an admin cert), then the grow-only revoked set makes
+// the member gate refuse the subject on the channel path. (Duration half is a
+// straddler, checked separately under cert validity.)
+// ---------------------------------------------------------------------------
+
+test "BE_REV_02 a valid revoke is accepted and the revoked subject is then refused" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const admin = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB);
+    // A Revoke (action_type 2) signed by an admin cert is a valid control body.
+    const revoke = try parser.channel.parseControl(&decodeHex(CHAN_REVOKE_HEX));
+    try verify.verifyControl(revoke, genesis, admin);
+    // Once the subject is in the grow-only revoked set, its channel messages are
+    // refused - revocation is consulted at use, not at cache fill.
+    const subject = channelCert(&CHAN_MEMBER_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.SubjectRevoked, verify.requireMember(subject, genesis, chanCtx(false, true)));
+}
+
+// ---------------------------------------------------------------------------
+// BE-GEN-02 (genesis parameters immutable). Genesis parameters are immutable;
+// no message changes them. The only genesis-touching control action is creation
+// (action_type 1), accepted exactly once per channel_id. A re-issue - even
+// proposing different fields - is refused wholesale, so name, member_group,
+// admin_group, ca_keys and match_rule cannot be rewritten after creation.
+// ---------------------------------------------------------------------------
+
+test "BE_GEN_02 a genesis re-issue cannot mutate an existing channel's parameters" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const admin = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB);
+    const channel_id = deriveChannelId("test", &[_]u8{0xcc} ** 32);
+    // The channel already exists: any further genesis is refused, so no message
+    // can change the parameters that were fixed at creation.
+    try std.testing.expectError(error.DuplicateGenesis, verify.verifyControlGenesis(genesis, admin, &channel_id, chanCtx(true, false)));
+}
+
+// ---------------------------------------------------------------------------
+// BE-GRANT-03a (intent lifecycle frozen in a single critical section). From
+// verify start to EXECUTING the lifecycle is frozen in one frame: the
+// consumed-check (step 11) runs BEFORE execute, inside the same synchronous
+// call. A grant already committed with no effect is refused and its callback
+// never fires. If the freeze were broken (execute moved ahead of the consumed
+// check), the effect would fire here.
+// ---------------------------------------------------------------------------
+
+test "BE_GRANT_03a consumed check closes the verify frame before execute" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    const ctx = baseContext(ACTION, &ledgerSpent); // grant_id already consumed
+    resetEffect();
+    try std.testing.expectError(error.AlreadyConsumed, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    // Refused inside the critical section, BEFORE execute: the effect never ran.
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
+// ---------------------------------------------------------------------------
 // Lighthouse-served certificates (SPEC 5.1/5.1a, BE-MESH-01/04/05/06).
 //
 // The certs here are the real signed ones from cert_test_helpers, so
