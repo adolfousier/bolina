@@ -335,3 +335,84 @@ pub fn requireMember(
     if (ctx.is_revoked(sender_cert.sig_pubkey)) return error.SubjectRevoked;
     if (!certCarriesGroup(sender_cert, genesis.member_group)) return error.NotMember;
 }
+
+// ---------------------------------------------------------------------------
+// Lighthouse-served certificate verification (SPEC 5.1/5.1a, BE-MESH-01/04/05/06).
+//
+// A lighthouse serves a certificate alongside an endpoint so a node can send
+// its first Noise_IK packet (SPEC 5.1a). The lighthouse is an availability
+// mechanism, never an authority (BE-MESH-01), and this routine is where that
+// distinction is made structural rather than asserted:
+//
+//   * BE-MESH-01: the routine takes no lighthouse identity. There is no
+//     parameter through which "which lighthouse said so" could condition
+//     acceptance, so it cannot. A malicious lighthouse can refuse to answer or
+//     answer with someone else's valid certificate; it cannot cause acceptance
+//     of an unauthenticated peer.
+//   * BE-MESH-04: BE-ID-01 (the address is derived from the key, so a
+//     substituted identity is detected because it is not the address that was
+//     asked for) then BE-ID-02..04 via binding.validateCert. Any failure
+//     refuses; nothing partially verified escapes.
+//   * BE-MESH-05: the certificate opens the session and confers nothing. The
+//     continuation receives SessionKeys, which carries the two public keys the
+//     handshake needs and nothing else. role_bits, group_ids and name do not
+//     cross this boundary, so no caller can reach a membership or authority
+//     fact through this path, only through BE-TR-01's exchange inside the
+//     encrypted session.
+//   * BE-MESH-06: verification is a call, not a value (the BE-GRANT-03b shape).
+//     now_ms and the revocation hook are parameters of the *use*, and no value
+//     representing a verified certificate exists outside the call, so a cached
+//     certificate cannot carry a cache-fill-time verdict forward. Re-verifying
+//     on every use is the only thing the type permits.
+//
+// The routine takes an already-parsed Cert, not the LookupResponse's opaque
+// cert bytes. Parsing here would move bytes-to-values work into a non-surface
+// file, which is the direction D-018 forbids; the caller runs
+// parser.session.parseCert, whose error union makes the BE-MESH-04 "discard on
+// parse failure" obligation unskippable at the call site.
+// ---------------------------------------------------------------------------
+
+pub const MeshError = error{
+    AddressMismatch, // BE-MESH-04/BE-ID-01: derived addr != the addr asked for
+    ServedCertInvalid, // BE-MESH-04/BE-ID-02..04: chain, roles or window failed
+    ServedCertRevoked, // BE-MESH-06: revoked as of this use, not of cache fill
+};
+
+// The only thing a served certificate yields: the two public keys Noise_IK and
+// BE-TR-04's mac1 need to send a first packet. Deliberately not a Cert
+// (BE-MESH-05); adding an authority-bearing field here would be the bug this
+// type exists to prevent, which is why a test asserts the field set.
+pub const SessionKeys = struct {
+    sig_pubkey: []const u8,
+    kex_pubkey: []const u8,
+};
+
+// Use-time inputs. Both are supplied per call rather than per cache entry,
+// which is what makes BE-MESH-06 structural: there is nowhere to record a
+// verdict that outlives the use it was computed for.
+pub const MeshContext = struct {
+    trusted_ca_keys: []const []const u8,
+    now_ms: u64, // BE-MESH-06: validity window re-checked at this instant
+    is_revoked: *const fn (sig_pubkey: []const u8) bool, // BE-MESH-06
+};
+
+pub fn verifyServedCertThen(
+    served: parser.session.Cert,
+    requested_addr: []const u8,
+    ctx: MeshContext,
+    open_session: *const fn (SessionKeys) void,
+) MeshError!void {
+    // BE-ID-01 first: the substitution check is a single BLAKE2s and refuses a
+    // wrong-identity certificate before any signature is verified. Spec order
+    // (BE-ID-01 through BE-ID-04) and cheapest-informative-first agree here.
+    const derived = binding.deriveOverlayAddr(served.sig_pubkey);
+    if (!std.mem.eql(u8, &derived, requested_addr)) return error.AddressMismatch;
+    // BE-ID-02..04: role constraints, approver quorum, validity window at
+    // ctx.now_ms, CA signatures against the trusted set. One refusal class:
+    // which check failed is not information a served certificate has earned.
+    binding.validateCert(served, ctx.trusted_ca_keys, ctx.now_ms) catch return error.ServedCertInvalid;
+    // BE-MESH-06: revocation is consulted at use, after the chain proves the
+    // key is the one the certificate binds.
+    if (ctx.is_revoked(served.sig_pubkey)) return error.ServedCertRevoked;
+    open_session(.{ .sig_pubkey = served.sig_pubkey, .kex_pubkey = served.kex_pubkey });
+}
