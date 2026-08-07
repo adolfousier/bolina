@@ -252,3 +252,39 @@ pub fn parseCert(buf: []const u8) ParseError!Cert {
         .tbs = tbs,
     };
 }
+
+// ---------------------------------------------------------------------------
+// Binding message (SPEC section 4.1, BE-TR-01).
+//
+// The binding message is the first AEAD plaintext exchanged after the Noise
+// handshake: a length-prefixed certificate followed by a 64-byte Ed25519
+// signature by sig_pubkey over the Noise handshake hash h (domain 0x05). It
+// rides inside an established session, so like the fragment header it has no
+// type byte of its own (BE-TR-07 forbids certificates in the handshake). The
+// certificate is returned as an opaque slice here; the caller runs parseCert
+// and the BE-ID-01..04 checks (binding.zig), the same opaque-cert convention
+// as the lighthouse LookupResponse (BE-MESH-04).
+// ---------------------------------------------------------------------------
+
+pub const LEN_BINDING_SIG: usize = 64; // Ed25519 over (0x05 || Noise h), BE-TR-01
+
+pub const BindingMessage = struct {
+    cert: []const u8, // cert_len bytes; caller runs parseCert + BE-ID-01..04 (binding.zig)
+    sig: []const u8, // 64-byte Ed25519 signature over (0x05 || h), aliases the caller buffer
+};
+
+// parseBindingMessage frames a cert+sig pair (SPEC 4.1 BE-TR-01). A u16
+// cert_len bounds the certificate before it drives a slice; the signature is a
+// fixed 64 bytes that close the message, so any byte after it is trailing and
+// a parse failure (SPEC 2.2). The certificate's internal structure is walked
+// by parseCert when the caller runs the BE-ID checks, not here.
+pub fn parseBindingMessage(buf: []const u8) ParseError!BindingMessage {
+    var c = Cursor{ .buf = buf };
+    const cert_len = try c.u16be();
+    if (cert_len == 0) return coverage.reject(.bind_cert_len_zero);
+    const cert = try c.take(@as(usize, cert_len));
+    const sig = try c.take(LEN_BINDING_SIG);
+    if (c.pos != buf.len) return coverage.reject(.bind_trailing);
+    coverage.accept(.bind_accepted);
+    return .{ .cert = cert, .sig = sig };
+}
