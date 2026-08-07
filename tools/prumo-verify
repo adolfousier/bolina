@@ -48,7 +48,7 @@
 #   M7: build.zig hardcodes ReleaseSafe and exposes no optimize option
 #        (LANGUAGE.md O1). Compiler version and flags are recorded above.
 #   M9: coverage denominator law: every error exit of the parser module
-#        (src/parser.zig and src/parser/; the module straddles the
+#        (src/parser.zig, src/relay.zig, and src/parser/; the module straddles the
 #        authentication line and is not one of the M5/M11 unit lists)
 #        routes through coverage.reject(), every accepted return through
 #        coverage.accept() (both wrappers in src/coverage.zig); zero raw
@@ -359,7 +359,7 @@ fi
 # Every parser error exit routes through coverage.reject() and every accepted
 # return through coverage.accept(); both wrappers live in src/coverage.zig.
 # The denominator is counted HERE from the parser module's wrapper call sites
-# at run time (src/parser.zig plus src/parser/; the module straddles the
+# at run time (src/parser.zig, src/relay.zig, plus src/parser/; the module straddles the
 # authentication line and is not one of the M5/M11 unit lists), never taken
 # from the enum alone: the Branch enum must match the
 # source one for one (one counter per exit site), a new exit point fails
@@ -368,7 +368,7 @@ fi
 # exceptions: one exception is the start of a list, and a list is where M8
 # once hid a gap.
 M9_STRIP='s|//.*||'
-PARSER_MODULE_FILES="src/parser.zig $(find src/parser -name '*.zig' -type f 2>/dev/null | sort | tr '\n' ' ')"
+PARSER_MODULE_FILES="src/parser.zig src/relay.zig $(find src/parser -name '*.zig' -type f 2>/dev/null | sort | tr '\n' ' ')"
 RAW_RET="$(cat $PARSER_MODULE_FILES | sed "$M9_STRIP" | grep -c 'return error\.' || true)"
 REJECT_TAGS="$(cat $PARSER_MODULE_FILES | sed "$M9_STRIP" | grep -o 'coverage\.reject(\.[a-z_0-9]*' | sed 's/.*\.//' | sort)"
 ACCEPT_TAGS="$(cat $PARSER_MODULE_FILES | sed "$M9_STRIP" | grep -o 'coverage\.accept(\.[a-z_0-9]*' | sed 's/.*\.//' | sort)"
