@@ -752,3 +752,22 @@ test "BE_EVID_12 intent carries no observation-method selector" {
     try std.testing.expect(!@hasField(parser.channel.Intent, "method"));
     try std.testing.expect(!@hasField(parser.channel.Intent, "method_id"));
 }
+
+// ---------------------------------------------------------------------------
+// BE-BODY-02 (action digest recomputed, never transmitted). An action digest
+// is always recomputed and never transmitted: no wire structure carries a
+// digest of its own action, and no party accepts a digest supplied by the
+// party whose action it describes. The agent's own structure carries raw
+// action bytes (opaque, never parsed); the daemon recomputes BLAKE2s(action)
+// at verify time and compares it against the approver-supplied grant digest.
+// The grant (an approver structure) may carry action_digest as its binding;
+// the Intent (the agent's own structure) MUST NOT. Bound structurally: the
+// Intent type has no action_digest field. Adding one fails this test.
+// ---------------------------------------------------------------------------
+
+test "BE_BODY_02 intent carries no transmitted action digest" {
+    // The agent's own structure carries the raw action, not a digest of it.
+    try std.testing.expect(!@hasField(parser.channel.Intent, "action_digest"));
+    // The raw action bytes are present (opaque); the daemon digests them.
+    try std.testing.expect(@hasField(parser.channel.Intent, "action"));
+}

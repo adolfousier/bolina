@@ -776,3 +776,62 @@ test "BE_SIG_01 signature under one domain tag rejected under another" {
     // Rejected under the Grant tag (0x04) for the same reason.
     try std.testing.expectError(error.BadSignature, verify.verifySigned(parser.channel.DOMAIN_GRANT, &tbs, &sig, &pubkey));
 }
+
+// ---------------------------------------------------------------------------
+// BE-BODY-03 (rationale is prose, not a binding input). Intent.rationale is
+// agent-authored prose, untrusted, and MUST NOT influence any authorization
+// decision. It is not covered by the grant binding (BE-GRANT-02 hashes the
+// action bytes alone). The guarantee is structural: actionDigest takes only
+// the action, so rationale has no path into the digest regardless of its
+// contents. Proof: the recomputed action digest over the canonical action
+// matches the grant's stored digest, and that recomputation is a function of
+// the action alone. rationale rides Intent for human display and is never
+// read by the verifier (no read site outside parsing). If rationale were
+// mixed into the digest, this recomputation would no longer match.
+// ---------------------------------------------------------------------------
+
+test "BE_BODY_03 rationale excluded from the grant binding" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+
+    // The grant bound exactly this action under exactly this digest. The
+    // daemon recomputes actionDigest(ACTION) and compares to grant.action_digest.
+    // rationale is not an argument to actionDigest, so it cannot perturb the
+    // binding no matter its contents.
+    try std.testing.expectEqualSlices(u8, grant.action_digest, &verify.actionDigest(ACTION));
+
+    // rationale rides Intent as prose (present for human display) but is not
+    // part of any digest input.
+    try std.testing.expect(@hasField(parser.channel.Intent, "rationale"));
+}
+
+// ---------------------------------------------------------------------------
+// BE-ENV-01 (envelope ts is not a security input). The sender's claimed ts
+// MUST NOT drive any security decision: clocks lie and an adversary controls
+// its own. Expiry is the grant's not_after against the verifier's own clock
+// and time-since-receipt (BE-GRANT-05); replay is the per-(sender,channel)
+// counter bitmap keyed on seq (BE-TR-03). env.ts rides tbs (tamper-evident)
+// but no decision consults it. Proof: a grant verifying under ts=0 verifies
+// identically under an arbitrarily different ts. If ts gated anything, the
+// second call would diverge.
+// ---------------------------------------------------------------------------
+
+test "BE_ENV_01 envelope ts is not a security input" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const ctx = baseContext(ACTION, &ledgerFresh);
+
+    // ts = 0: verifies.
+    var env_zero = grantEnvelope(grant);
+    env_zero.ts = 0;
+    resetEffect();
+    try verify.verifyGrantThen(env_zero, &grant, ctx, &recordEffect);
+    try std.testing.expectEqual(@as(usize, 1), effect_calls);
+
+    // ts = maxInt: same grant, same outcome. ts gates nothing.
+    var env_far = grantEnvelope(grant);
+    env_far.ts = std.math.maxInt(u64);
+    resetEffect();
+    try verify.verifyGrantThen(env_far, &grant, ctx, &recordEffect);
+    try std.testing.expectEqual(@as(usize, 1), effect_calls);
+}
