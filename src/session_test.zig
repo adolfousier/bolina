@@ -39,6 +39,7 @@ test "BE_TR_02 rekey rotation zeroes the old state and restarts the epoch" {
     var pkt: [session.HEADER_SIZE + 4 + noise.TAGLEN]u8 = undefined;
     _ = try s.seal(&pkt, &[4]u8{ 1, 2, 3, 4 });
     try testing.expectEqual(@as(u64, 1), s.send.counter);
+    _ = s.recv.window.check(9); // dirty the recv window: rotation must reset it
 
     const fresh = result(0x55, 0x66, 0xCC);
     s.rotate(fresh, 5_000);
@@ -72,10 +73,12 @@ test "BE_TR_02 seal refuses at the 2^48 message bound" {
     const i = try t.admit(1, result(0x11, 0x22, 0xAA), 0);
     const s = t.lookup(i).?;
 
-    s.send.counter = session.REKEY_AFTER_MESSAGES - 1;
+    // Literals, not session.REKEY_AFTER_MESSAGES: D-027, a test that walks the
+    // constant it verifies scales with a mutant on it and can never kill it.
+    s.send.counter = 281_474_976_710_655; // 2^48 - 1
     var pkt: [session.HEADER_SIZE + noise.TAGLEN]u8 = undefined;
     _ = try s.seal(&pkt, &[0]u8{}); // the last legal message
-    try testing.expectEqual(session.REKEY_AFTER_MESSAGES, s.send.counter);
+    try testing.expectEqual(@as(u64, 281_474_976_710_656), s.send.counter); // 2^48
     try testing.expectError(session.Error.RekeyRequired, s.seal(&pkt, &[0]u8{}));
     try testing.expect(s.dueForRekey(0));
 }
@@ -85,8 +88,10 @@ test "BE_TR_02 rekey is due at 120 seconds and not a millisecond before" {
     const i = try t.admit(1, result(0x11, 0x22, 0xAA), 1_000);
     const s = t.lookup(i).?;
 
-    try testing.expect(!s.dueForRekey(1_000 + session.REKEY_AFTER_MS - 1));
-    try testing.expect(s.dueForRekey(1_000 + session.REKEY_AFTER_MS));
+    // Literals, not session.REKEY_AFTER_MS (D-027): epoch is 1_000, so the
+    // boundary is 121_000 and not a millisecond before.
+    try testing.expect(!s.dueForRekey(120_999));
+    try testing.expect(s.dueForRekey(121_000));
 }
 
 test "transport frame layout matches SPEC 4.1a and a keepalive is 32 bytes" {

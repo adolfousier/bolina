@@ -30,8 +30,10 @@ test "BE_TR_04 nonce is four zero bytes then a big-endian counter" {
 test "BE_TR_04 symmetric state seeds from the protocol name, no key" {
     var s = noise.SymmetricState.init();
     // h = BLAKE2s("Noise_IK_25519_ChaChaPoly_BLAKE2s"), ck == h, no key.
-    var want: [noise.HASHLEN]u8 = undefined;
-    std.crypto.hash.blake2.Blake2s256.hash(noise.PROTOCOL_NAME, &want, .{});
+    // Literal KAT from an independent Python hashlib run: D-027, the test must
+    // not hash the module's own PROTOCOL_NAME or a mutant on the name hashes
+    // its own mutation and survives.
+    const want = [32]u8{ 0xbb, 0xea, 0x02, 0x2b, 0x94, 0x8c, 0xf3, 0xbc, 0x58, 0x57, 0xd7, 0x08, 0x04, 0x22, 0x91, 0x79, 0xe1, 0x11, 0x6b, 0xc4, 0x0c, 0xb8, 0xcc, 0x07, 0x48, 0x35, 0x34, 0x9c, 0x46, 0x4b, 0xca, 0x36 };
     try testing.expectEqualSlices(u8, &want, &s.h);
     try testing.expectEqualSlices(u8, &want, &s.ck);
     try testing.expect(!s.has_key);
@@ -52,6 +54,14 @@ test "BE_TR_04 mixHash and mixKey are deterministic and key the state" {
     try testing.expect(a.has_key);
     try testing.expectEqualSlices(u8, &a.ck, &b.ck);
     try testing.expectEqualSlices(u8, &a.k, &b.k);
+
+    // Literal KATs from an independent Python HMAC-BLAKE2s run (Noise HKDF,
+    // counter bytes 0x01/0x02): the a/b cross-check scales with any HKDF
+    // mutant, only fixed bytes kill it. D-027.
+    const want_ck = [32]u8{ 0xac, 0x82, 0xdc, 0x08, 0xb0, 0x53, 0x30, 0x33, 0x7a, 0x44, 0xd3, 0x43, 0xf0, 0x87, 0x8a, 0xe5, 0xa6, 0x78, 0x1c, 0x5a, 0x75, 0xbe, 0x87, 0x06, 0xd2, 0xe2, 0x8a, 0xbc, 0x33, 0xa8, 0x4b, 0x5e };
+    const want_k = [32]u8{ 0x65, 0xe4, 0x46, 0xab, 0xf5, 0xca, 0x10, 0x61, 0x0a, 0x94, 0x96, 0x4f, 0x31, 0x25, 0xe8, 0xe2, 0x04, 0xb7, 0x72, 0xd2, 0x04, 0xd0, 0xda, 0x80, 0x57, 0x62, 0xe3, 0xa1, 0xad, 0xd7, 0xd5, 0x4e };
+    try testing.expectEqualSlices(u8, &want_ck, &a.ck);
+    try testing.expectEqualSlices(u8, &want_k, &a.k);
 }
 
 test "BE_TR_04 mixKeyAndHash runs the three-output HKDF and stays keyed" {
@@ -64,6 +74,15 @@ test "BE_TR_04 mixKeyAndHash runs the three-output HKDF and stays keyed" {
     try testing.expectEqualSlices(u8, &a.h, &b.h);
     try testing.expectEqualSlices(u8, &a.ck, &b.ck);
     try testing.expectEqualSlices(u8, &a.k, &b.k);
+
+    // Literal KATs from the same independent Python run: ck = o1,
+    // h = BLAKE2s(h0 || o2), k = o3. D-027.
+    const want_ck = [32]u8{ 0xef, 0xb9, 0xbc, 0xe0, 0x54, 0xda, 0xf0, 0x75, 0xc5, 0x6f, 0x80, 0x8f, 0xdc, 0x17, 0xb3, 0x4c, 0x11, 0x1f, 0xeb, 0x49, 0x12, 0x8e, 0x20, 0x86, 0xa9, 0x61, 0xbf, 0xaa, 0x69, 0x89, 0xbc, 0x97 };
+    const want_h = [32]u8{ 0x1d, 0x1b, 0x64, 0x61, 0x68, 0x49, 0x11, 0x35, 0x42, 0x8c, 0x88, 0xf3, 0xce, 0x9e, 0x02, 0x6b, 0x93, 0x3c, 0xc9, 0xc3, 0x4e, 0x00, 0xdb, 0x69, 0x2f, 0x3c, 0xa1, 0x0a, 0xd1, 0xe5, 0x4a, 0xfa };
+    const want_k = [32]u8{ 0xb9, 0xe5, 0x92, 0xb3, 0xf9, 0x13, 0xf5, 0x17, 0x2d, 0x1c, 0x5b, 0x46, 0x53, 0x50, 0x36, 0x29, 0x7a, 0x5b, 0x8e, 0xd4, 0x8e, 0xce, 0xe1, 0x51, 0xd4, 0x79, 0x5a, 0xbd, 0xe1, 0xea, 0x1a, 0xae };
+    try testing.expectEqualSlices(u8, &want_ck, &a.ck);
+    try testing.expectEqualSlices(u8, &want_h, &a.h);
+    try testing.expectEqualSlices(u8, &want_k, &a.k);
 }
 
 test "BE_TR_04 split yields a fixed pair from a fixed chaining key" {
@@ -78,6 +97,14 @@ test "BE_TR_04 split yields a fixed pair from a fixed chaining key" {
     try testing.expectEqualSlices(u8, &sa.c2, &sb.c2);
     // The two split halves of a non-degenerate state differ.
     try testing.expect(!std.mem.eql(u8, &sa.c1, &sa.c2));
+
+    // Literal KATs from the independent Python run (hkdf2 over empty ikm).
+    // A c1/c2 swap mutant is invisible to the symmetric round trip because
+    // both sides split the same way; only fixed bytes kill it. D-027.
+    const want_c1 = [32]u8{ 0x0c, 0xea, 0xe9, 0xb4, 0x13, 0x3d, 0xd8, 0x9a, 0xc6, 0xf4, 0x73, 0xad, 0x26, 0x5f, 0x86, 0xa1, 0x6d, 0xc2, 0xfc, 0xc0, 0x5a, 0x20, 0x89, 0xdf, 0x5a, 0xbe, 0x01, 0x49, 0x59, 0x60, 0xff, 0x4a };
+    const want_c2 = [32]u8{ 0x4b, 0x57, 0x8d, 0xe5, 0x0b, 0x39, 0xce, 0xbe, 0x26, 0x63, 0x56, 0x5d, 0xbf, 0x32, 0xb8, 0xa5, 0x10, 0xe0, 0x31, 0xd8, 0xdd, 0x85, 0x33, 0x00, 0xa8, 0x20, 0x4b, 0x84, 0x0e, 0xc3, 0xfe, 0xb6 };
+    try testing.expectEqualSlices(u8, &want_c1, &sa.c1);
+    try testing.expectEqualSlices(u8, &want_c2, &sa.c2);
 }
 
 test "BE_TR_04 EncryptAndHash and DecryptAndHash are inverses" {
@@ -199,4 +226,31 @@ test "BE_TR_04 initiator rejects a tampered response mac1 before any X25519" {
 
     msg2[noise.OFF2_MAC1] ^= 0x01;
     try testing.expectError(noise.Error.Mac1Failed, initiator.readResponse(&msg2, sig_pub));
+}
+
+test "BE_TR_04 mac1 failure precedes the first X25519 even on a degenerate ephemeral" {
+    // The ordering witness: an identity-point ephemeral makes the first DH
+    // error with IdentityPoint. If the responder ran the curve before the
+    // mac1 check, that error would surface instead of Mac1Failed. The two
+    // tampered-mac1 tests above only prove the refusal exists, not that it
+    // precedes every curve operation, because a delayed check still returns
+    // Mac1Failed on a healthy ephemeral.
+    var seed_init: [32]u8 = undefined;
+    var seed_resp: [32]u8 = undefined;
+    var sig_pub: mac.ResponderSigPubkey = undefined;
+    testing.io.random(&seed_init);
+    testing.io.random(&seed_resp);
+    testing.io.random(&sig_pub);
+
+    const resp_static = try noise.keypairFromSecret(seed_resp);
+    var initiator = noise.Initiator.init(testing.io, try noise.keypairFromSecret(seed_init), resp_static.public);
+    var responder = noise.Responder.init(testing.io, resp_static);
+
+    var msg1: [noise.MSG1_SIZE]u8 = undefined;
+    const no_cookie = [_]u8{0} ** mac.MAC_BYTES;
+    try initiator.writeInitiation(&msg1, 1, 1_700_000_000_000, sig_pub, no_cookie);
+
+    @memset(msg1[noise.OFF1_EPHEMERAL..][0..noise.DHLEN], 0); // identity point
+    msg1[noise.OFF1_MAC1] ^= 0x01; // and an invalid mac1
+    try testing.expectError(noise.Error.Mac1Failed, responder.readInitiation(&msg1, sig_pub));
 }
