@@ -723,3 +723,32 @@ test "BE_EFF_01 ok and exit_code are distinct fields on the wire" {
     try std.testing.expectEqual(@as(u8, 0), eff_norun.ok);
     try std.testing.expectEqual(@as(i32, 0), eff_norun.exit_code);
 }
+
+// ---------------------------------------------------------------------------
+// BE-TR-07 (no handshake payloads). Handshake messages MUST carry no
+// application payload. In Noise_IK, message-1's payload is encrypted under
+// es+ss only: replayable and not forward-secret, so no payload (and no cert)
+// may ride the handshake. Bound structurally: neither handshake message type
+// has a payload field, and the response carries encrypted_nothing (a
+// zero-length encrypted body). Adding a payload field fails this test.
+// ---------------------------------------------------------------------------
+
+test "BE_TR_07 handshake messages carry no payload field" {
+    try std.testing.expect(!@hasField(parser.HandshakeInitiation, "payload"));
+    try std.testing.expect(!@hasField(parser.HandshakeResponse, "payload"));
+    // The response's body is literally encrypted_nothing: zero payload.
+    try std.testing.expect(@hasField(parser.HandshakeResponse, "encrypted_nothing"));
+}
+
+// ---------------------------------------------------------------------------
+// BE-EVID-12 (intent carries no observation method). An Intent MUST NOT name,
+// hint at, or constrain the observation method. The Intent body is action +
+// rationale only; no method selector may ride it, so an agent cannot pin or
+// bias how its action is observed. Bound structurally: the Intent type has no
+// method field. Adding one fails this test.
+// ---------------------------------------------------------------------------
+
+test "BE_EVID_12 intent carries no observation-method selector" {
+    try std.testing.expect(!@hasField(parser.channel.Intent, "method"));
+    try std.testing.expect(!@hasField(parser.channel.Intent, "method_id"));
+}
