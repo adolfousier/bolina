@@ -661,9 +661,10 @@ Type6RelayRegistration :=
   u32   relay_index       ; the relay's own session index
   u32   client_index      ; the client's assigned session index
   u64   timestamp         ; unix epoch seconds, relay local time
-  u8[32] overlay_addr     ; the client's overlay address (BE-ID-01)
+  u8[16] overlay_addr     ; the client's overlay address (BE-ID-01)
   u64   expiry            ; registration expiry, unix epoch seconds
-  u8[12] _padding         ; reserved, MUST be zero on send, ignored on recv
+  u8[64] sig              ; Ed25519 over all preceding bytes, domain tag 0x07 (BE-SIG-01)
+  u8[16] _padding         ; reserved, MUST be zero on send, ignored on recv
 ```
 
 Registration is signed by the client under domain tag 0x07 (BE-SIG-01). The relay verifies the
