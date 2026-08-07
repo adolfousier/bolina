@@ -742,3 +742,144 @@ test "BE_MESH_06 revocation is consulted at use, not at cache fill" {
     try std.testing.expectError(error.ServedCertRevoked, verify.verifyServedCertThen(served, &addr, meshCtx(MESH_NOW, true), &recordOpen));
     try std.testing.expectEqual(@as(usize, 1), open_calls);
 }
+
+// ---------------------------------------------------------------------------
+// Lighthouse-served certificates (SPEC 5.1/5.1a, BE-MESH-01/04/05/06).
+//
+// The certs here are the real signed ones from cert_test_helpers, so
+// validateCert runs its full chain rather than a stub. Per D-027 the expected
+// overlay address is recomputed from BLAKE2s in the test rather than taken from
+// binding.deriveOverlayAddr, which is the constant under test.
+// ---------------------------------------------------------------------------
+
+var opened_sig: []const u8 = &[_]u8{};
+var opened_kex: []const u8 = &[_]u8{};
+var open_calls: usize = 0;
+
+fn recordOpen(keys: verify.SessionKeys) void {
+    opened_sig = keys.sig_pubkey;
+    opened_kex = keys.kex_pubkey;
+    open_calls += 1;
+}
+
+fn resetOpen() void {
+    opened_sig = &[_]u8{};
+    opened_kex = &[_]u8{};
+    open_calls = 0;
+}
+
+fn neverRevoked(sig_pubkey: []const u8) bool {
+    _ = sig_pubkey;
+    return false;
+}
+
+fn alwaysRevoked(sig_pubkey: []const u8) bool {
+    _ = sig_pubkey;
+    return true;
+}
+
+// Independent overlay-address derivation: 0xfd prefix over the first 15 bytes
+// of BLAKE2s-256(sig_pubkey) (SPEC 5.1). Recomputed here, not imported.
+fn expectedOverlayAddr(sig_pubkey: []const u8) [16]u8 {
+    var full: [32]u8 = undefined;
+    std.crypto.hash.blake2.Blake2s256.hash(sig_pubkey, &full, .{});
+    var addr: [16]u8 = undefined;
+    addr[0] = 0xfd;
+    @memcpy(addr[1..16], full[0..15]);
+    return addr;
+}
+
+// A time inside the helper certs' validity window (cert_test_helpers pins the
+// window to CERT_NOT_BEFORE..CERT_NOT_AFTER).
+const MESH_NOW: u64 = 1_500_000_000_000;
+
+fn meshCtx(now_ms: u64, revoked: bool) verify.MeshContext {
+    return .{
+        .trusted_ca_keys = cth.trustedSet(),
+        .now_ms = now_ms,
+        .is_revoked = if (revoked) &alwaysRevoked else &neverRevoked,
+    };
+}
+
+test "BE_MESH_04 a served cert whose derived address matches opens the session" {
+    resetOpen();
+    const served = cth.subjectCert();
+    const addr = expectedOverlayAddr(&cth.SUBJECT_PUB);
+    try verify.verifyServedCertThen(served, &addr, meshCtx(MESH_NOW, false), &recordOpen);
+    try std.testing.expectEqual(@as(usize, 1), open_calls);
+    try std.testing.expectEqualSlices(u8, &cth.SUBJECT_PUB, opened_sig);
+    try std.testing.expectEqualSlices(u8, served.kex_pubkey, opened_kex);
+}
+
+test "BE_MESH_04 an address that does not derive from the served key is refused" {
+    resetOpen();
+    const served = cth.subjectCert();
+    var addr = expectedOverlayAddr(&cth.SUBJECT_PUB);
+    addr[15] ^= 0x01; // one bit off the address that was asked for
+    try std.testing.expectError(error.AddressMismatch, verify.verifyServedCertThen(served, &addr, meshCtx(MESH_NOW, false), &recordOpen));
+    try std.testing.expectEqual(@as(usize, 0), open_calls);
+}
+
+test "BE_MESH_04 a served cert signed by an untrusted CA is refused" {
+    resetOpen();
+    const served = cth.subjectCert();
+    const addr = expectedOverlayAddr(&cth.SUBJECT_PUB);
+    const empty_trust: []const []const u8 = &[_][]const u8{};
+    const ctx: verify.MeshContext = .{
+        .trusted_ca_keys = empty_trust,
+        .now_ms = MESH_NOW,
+        .is_revoked = &neverRevoked,
+    };
+    try std.testing.expectError(error.ServedCertInvalid, verify.verifyServedCertThen(served, &addr, ctx, &recordOpen));
+    try std.testing.expectEqual(@as(usize, 0), open_calls);
+}
+
+// The BE-MESH-01 case that matters: a lighthouse cannot forge, so its best
+// attack is to answer a lookup with somebody else's genuinely valid
+// certificate. BE-ID-01 detects it because the address is derived from the key,
+// so the answer is not the identity that was asked for.
+test "BE_MESH_01 a valid cert for a different identity is refused as a substitution" {
+    resetOpen();
+    const substituted = cth.approverCert(); // valid, trusted, in window, wrong identity
+    const asked_for = expectedOverlayAddr(&cth.SUBJECT_PUB);
+    try std.testing.expectError(error.AddressMismatch, verify.verifyServedCertThen(substituted, &asked_for, meshCtx(MESH_NOW, false), &recordOpen));
+    try std.testing.expectEqual(@as(usize, 0), open_calls);
+    // The same certificate is accepted for its own address, so the refusal
+    // above is identity substitution and not a broken certificate.
+    const own = expectedOverlayAddr(&cth.APPROVER_PUB);
+    try verify.verifyServedCertThen(substituted, &own, meshCtx(MESH_NOW, false), &recordOpen);
+    try std.testing.expectEqual(@as(usize, 1), open_calls);
+}
+
+// BE-MESH-05 is a shape guarantee, so it is asserted over the type rather than
+// over one call: the continuation must not be able to carry an authority fact.
+// Adding role_bits, group_ids or name to SessionKeys fails here.
+test "BE_MESH_05 the session-open continuation carries the two keys and nothing else" {
+    const fields = @typeInfo(verify.SessionKeys).@"struct".fields;
+    try std.testing.expectEqual(@as(usize, 2), fields.len);
+    try std.testing.expectEqualStrings("sig_pubkey", fields[0].name);
+    try std.testing.expectEqualStrings("kex_pubkey", fields[1].name);
+}
+
+// BE-MESH-06: the same certificate, cached and reused. Accepted while its
+// window holds, refused once it has passed, with no re-parse and no re-fill in
+// between: the verdict cannot be carried forward because no verdict is stored.
+test "BE_MESH_06 a cached cert is refused once its validity window has passed" {
+    resetOpen();
+    const served = cth.subjectCert();
+    const addr = expectedOverlayAddr(&cth.SUBJECT_PUB);
+    try verify.verifyServedCertThen(served, &addr, meshCtx(MESH_NOW, false), &recordOpen);
+    try std.testing.expectEqual(@as(usize, 1), open_calls);
+    try std.testing.expectError(error.ServedCertInvalid, verify.verifyServedCertThen(served, &addr, meshCtx(cth.CERT_NOT_AFTER, false), &recordOpen));
+    try std.testing.expectEqual(@as(usize, 1), open_calls);
+}
+
+test "BE_MESH_06 revocation is consulted at use, not at cache fill" {
+    resetOpen();
+    const served = cth.subjectCert();
+    const addr = expectedOverlayAddr(&cth.SUBJECT_PUB);
+    try verify.verifyServedCertThen(served, &addr, meshCtx(MESH_NOW, false), &recordOpen);
+    try std.testing.expectEqual(@as(usize, 1), open_calls);
+    try std.testing.expectError(error.ServedCertRevoked, verify.verifyServedCertThen(served, &addr, meshCtx(MESH_NOW, true), &recordOpen));
+    try std.testing.expectEqual(@as(usize, 1), open_calls);
+}
