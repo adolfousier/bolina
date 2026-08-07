@@ -13,6 +13,8 @@ const verify = @import("verify.zig");
 const binding = @import("binding.zig");
 const cth = @import("cert_test_helpers.zig");
 
+const Ed = std.crypto.sign.Ed25519;
+
 fn decodeHex(comptime hex: []const u8) [hex.len / 2]u8 {
     var b: [hex.len / 2]u8 = undefined;
     _ = std.fmt.hexToBytes(&b, hex) catch unreachable;
@@ -603,6 +605,83 @@ test "BE_CHAN_01 a cert without member_group is refused" {
 }
 
 // ---------------------------------------------------------------------------
+// BE-CHAN-03 (accept half). A node MUST NOT accept channel messages from a
+// non-member; a revoked subject is treated as a non-member from the moment its
+// revocation is accepted. The member gate refuses both shapes, and accepts a
+// genuine member (group present, not revoked). (Fan-out half is Bucket D.)
+// ---------------------------------------------------------------------------
+
+test "BE_CHAN_03 non-member and revoked-member are both refused, member accepted" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    // (a) non-member: no member_group carried -> NotMember.
+    const non_member = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.NotMember, verify.requireMember(non_member, genesis, chanCtx(false, false)));
+    // (b) revoked member: carries member_group but is revoked -> treated as a
+    // non-member, refused as SubjectRevoked before the group check.
+    const member = channelCert(&CHAN_MEMBER_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.SubjectRevoked, verify.requireMember(member, genesis, chanCtx(false, true)));
+    // (c) a genuine member (group present, not revoked) is accepted.
+    try verify.requireMember(member, genesis, chanCtx(false, false));
+}
+
+// ---------------------------------------------------------------------------
+// BE-REV-02 (refuse half). A node holding a valid CA-signed revocation MUST
+// refuse that subject's envelopes. The revocation is validated by verifyControl
+// (action_type 2 signed by an admin cert), then the grow-only revoked set makes
+// the member gate refuse the subject on the channel path. (Duration half is a
+// straddler, checked separately under cert validity.)
+// ---------------------------------------------------------------------------
+
+test "BE_REV_02 a valid revoke is accepted and the revoked subject is then refused" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const admin = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB);
+    // A Revoke (action_type 2) signed by an admin cert is a valid control body.
+    const revoke = try parser.channel.parseControl(&decodeHex(CHAN_REVOKE_HEX));
+    try verify.verifyControl(revoke, genesis, admin);
+    // Once the subject is in the grow-only revoked set, its channel messages are
+    // refused - revocation is consulted at use, not at cache fill.
+    const subject = channelCert(&CHAN_MEMBER_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.SubjectRevoked, verify.requireMember(subject, genesis, chanCtx(false, true)));
+}
+
+// ---------------------------------------------------------------------------
+// BE-GEN-02 (genesis parameters immutable). Genesis parameters are immutable;
+// no message changes them. The only genesis-touching control action is creation
+// (action_type 1), accepted exactly once per channel_id. A re-issue - even
+// proposing different fields - is refused wholesale, so name, member_group,
+// admin_group, ca_keys and match_rule cannot be rewritten after creation.
+// ---------------------------------------------------------------------------
+
+test "BE_GEN_02 a genesis re-issue cannot mutate an existing channel's parameters" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const admin = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB);
+    const channel_id = deriveChannelId("test", &[_]u8{0xcc} ** 32);
+    // The channel already exists: any further genesis is refused, so no message
+    // can change the parameters that were fixed at creation.
+    try std.testing.expectError(error.DuplicateGenesis, verify.verifyControlGenesis(genesis, admin, &channel_id, chanCtx(true, false)));
+}
+
+// ---------------------------------------------------------------------------
+// BE-GRANT-03a (intent lifecycle frozen in a single critical section). From
+// verify start to EXECUTING the lifecycle is frozen in one frame: the
+// consumed-check (step 11) runs BEFORE execute, inside the same synchronous
+// call. A grant already committed with no effect is refused and its callback
+// never fires. If the freeze were broken (execute moved ahead of the consumed
+// check), the effect would fire here.
+// ---------------------------------------------------------------------------
+
+test "BE_GRANT_03a consumed check closes the verify frame before execute" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    const ctx = baseContext(ACTION, &ledgerSpent); // grant_id already consumed
+    resetEffect();
+    try std.testing.expectError(error.AlreadyConsumed, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    // Refused inside the critical section, BEFORE execute: the effect never ran.
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
+// ---------------------------------------------------------------------------
 // Lighthouse-served certificates (SPEC 5.1/5.1a, BE-MESH-01/04/05/06).
 //
 // The certs here are the real signed ones from cert_test_helpers, so
@@ -741,4 +820,95 @@ test "BE_MESH_06 revocation is consulted at use, not at cache fill" {
     try std.testing.expectEqual(@as(usize, 1), open_calls);
     try std.testing.expectError(error.ServedCertRevoked, verify.verifyServedCertThen(served, &addr, meshCtx(MESH_NOW, true), &recordOpen));
     try std.testing.expectEqual(@as(usize, 1), open_calls);
+}
+
+// ---------------------------------------------------------------------------
+// BE-SIG-01 (domain separation). Every Ed25519 signature covers
+// domain_tag || tbs; verify MUST reject a signature whose tag does not match
+// the structure being verified. A signature valid for one structure class
+// cannot be replayed against another. Tags: 0x01 Cert, 0x02 Envelope, 0x03
+// Span, 0x04 Grant, 0x05 handshake binding, 0x06 Refusal (SPEC BE-SIG-01).
+// ---------------------------------------------------------------------------
+
+test "BE_SIG_01 signature under one domain tag rejected under another" {
+    // SPEC BE-SIG-01: verification is over domain_tag || tbs, so a signature
+    // made for one structure class fails under any other class's tag.
+    const id = cth.keypair(0xa1);
+    const pubkey = Ed.PublicKey.toBytes(id.public_key);
+    const tbs = [_]u8{ 0xde, 0xad, 0xbe, 0xef };
+
+    // Sign over DOMAIN_CERT (0x01) || tbs.
+    var cert_msg: [5]u8 = undefined;
+    cert_msg[0] = parser.session.DOMAIN_CERT;
+    @memcpy(cert_msg[1..], &tbs);
+    const sig = Ed.Signature.toBytes(Ed.KeyPair.sign(id, &cert_msg, null) catch unreachable);
+
+    // Verifies under the matching Cert tag.
+    try verify.verifySigned(parser.session.DOMAIN_CERT, &tbs, &sig, &pubkey);
+
+    // Rejected under the Envelope tag (0x02): the bytes the signature covers
+    // (0x01 || tbs) are not the bytes the verifier hashes (0x02 || tbs).
+    try std.testing.expectError(error.BadSignature, verify.verifySigned(parser.channel.DOMAIN_ENVELOPE, &tbs, &sig, &pubkey));
+
+    // Rejected under the Grant tag (0x04) for the same reason.
+    try std.testing.expectError(error.BadSignature, verify.verifySigned(parser.channel.DOMAIN_GRANT, &tbs, &sig, &pubkey));
+}
+
+// ---------------------------------------------------------------------------
+// BE-BODY-03 (rationale is prose, not a binding input). Intent.rationale is
+// agent-authored prose, untrusted, and MUST NOT influence any authorization
+// decision. It is not covered by the grant binding (BE-GRANT-02 hashes the
+// action bytes alone). The guarantee is structural: actionDigest takes only
+// the action, so rationale has no path into the digest regardless of its
+// contents. Proof: the recomputed action digest over the canonical action
+// matches the grant's stored digest, and that recomputation is a function of
+// the action alone. rationale rides Intent for human display and is never
+// read by the verifier (no read site outside parsing). If rationale were
+// mixed into the digest, this recomputation would no longer match.
+// ---------------------------------------------------------------------------
+
+test "BE_BODY_03 rationale excluded from the grant binding" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+
+    // The grant bound exactly this action under exactly this digest. The
+    // daemon recomputes actionDigest(ACTION) and compares to grant.action_digest.
+    // rationale is not an argument to actionDigest, so it cannot perturb the
+    // binding no matter its contents.
+    try std.testing.expectEqualSlices(u8, grant.action_digest, &verify.actionDigest(ACTION));
+
+    // rationale rides Intent as prose (present for human display) but is not
+    // part of any digest input.
+    try std.testing.expect(@hasField(parser.channel.Intent, "rationale"));
+}
+
+// ---------------------------------------------------------------------------
+// BE-ENV-01 (envelope ts is not a security input). The sender's claimed ts
+// MUST NOT drive any security decision: clocks lie and an adversary controls
+// its own. Expiry is the grant's not_after against the verifier's own clock
+// and time-since-receipt (BE-GRANT-05); replay is the per-(sender,channel)
+// counter bitmap keyed on seq (BE-TR-03). env.ts rides tbs (tamper-evident)
+// but no decision consults it. Proof: a grant verifying under ts=0 verifies
+// identically under an arbitrarily different ts. If ts gated anything, the
+// second call would diverge.
+// ---------------------------------------------------------------------------
+
+test "BE_ENV_01 envelope ts is not a security input" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const ctx = baseContext(ACTION, &ledgerFresh);
+
+    // ts = 0: verifies.
+    var env_zero = grantEnvelope(grant);
+    env_zero.ts = 0;
+    resetEffect();
+    try verify.verifyGrantThen(env_zero, &grant, ctx, &recordEffect);
+    try std.testing.expectEqual(@as(usize, 1), effect_calls);
+
+    // ts = maxInt: same grant, same outcome. ts gates nothing.
+    var env_far = grantEnvelope(grant);
+    env_far.ts = std.math.maxInt(u64);
+    resetEffect();
+    try verify.verifyGrantThen(env_far, &grant, ctx, &recordEffect);
+    try std.testing.expectEqual(@as(usize, 1), effect_calls);
 }

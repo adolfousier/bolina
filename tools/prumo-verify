@@ -89,7 +89,11 @@ HIGH_WATER_FILE="tools/m1-high-water"
 HIGH_WATER="$(cat "$HIGH_WATER_FILE" 2>/dev/null | tr -d '[:space:]')"
 case "$HIGH_WATER" in ''|*[!0-9]*) HIGH_WATER=0 ;; esac
 
-DECL="$(grep -oE '^\*\*BE-[A-Z]+-[0-9]+[a-z]?' SPEC.md | sed 's/^\*\*//' | sort -u)"
+# Declarations are derived from SPEC.md. A marker whose own declaration
+# paragraph says "SUPERSEDED BY REMOVAL" (SPEC itself voids it, kept only as
+# a historical note) is excluded here, so the denominator stays SPEC-derived
+# rather than a hand-edited list. See DECISION-LOG D-041.
+DECL="$(grep -v 'SUPERSEDED BY REMOVAL' SPEC.md | grep -oE '^\*\*BE-[A-Z]+-[0-9]+[a-z]?' | sed 's/^\*\*//' | sort -u)"
 DECL_COUNT="$(printf '%s\n' "$DECL" | grep -c '^BE-' || true)"
 
 TESTED="$(find src test -name '*.zig' -type f -exec grep -hoE 'test "BE_[A-Z]+_[0-9]+[a-z]?' {} + 2>/dev/null | sed -e 's/^test "//' -e 'y/_/-/' | sort -u || true)"
