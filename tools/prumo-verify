@@ -28,8 +28,14 @@
 #        (tools/verify-vectors.py: Ed25519/BLAKE2s/X25519) and the field-by-field
 #        byte-layout walker (tools/verify-layout.py). PENDING only when python3
 #        with cryptography is unavailable.
-#   M5: The network-parsing module lives at src/parser.zig (and src/parser/
-#        if it is ever split). Absent counts as 0 lines.
+#   M5/M11: BE-SURF-03 splits the surface into two capped units at the
+#        authentication line. Both gates parse the four normative file lists
+#        and the cap from SPEC.md BE-SURF-03 at run time (denominator law),
+#        and sum the listed files from the source tree; absent listed files
+#        count as 0 lines. M5 gates the pre-authentication unit and also
+#        enforces the exhaustiveness clause (every non-test src file in
+#        exactly one list, no file in two); M11 gates the post-authentication
+#        unit and fails while placement is broken.
 #   M6: Offline build: the gate is "build succeeds with the network
 #        disabled". Isolation is tried in order: unshare -rn, then sudo
 #        ip netns (runner-friendly, build runs as the invoking user).
@@ -41,16 +47,18 @@
 #        so it never happens.
 #   M7: build.zig hardcodes ReleaseSafe and exposes no optimize option
 #        (LANGUAGE.md O1). Compiler version and flags are recorded above.
-#   M9: coverage denominator law: every error exit of src/parser.zig routes
-#        through coverage.reject(), every accepted return through
+#   M9: coverage denominator law: every error exit of the parser module
+#        (src/parser.zig and src/parser/; the module straddles the
+#        authentication line and is not one of the M5/M11 unit lists)
+#        routes through coverage.reject(), every accepted return through
 #        coverage.accept() (both wrappers in src/coverage.zig); zero raw
 #        error returns remain, no exceptions. The exit-point denominator is
-#        counted from parser.zig wrapper call sites at run time, and the
+#        counted from the module's wrapper call sites at run time, and the
 #        Branch enum in coverage.zig must match the source one for one: a
 #        new exit fails the gate until the enum grows, a dead enum member
 #        fails it the other way (CONTRIBUTING.md M9).
 #
-# Exit code: number of failing ENFORCED gates (M1, M3, M5, M6, M7, M8, M9).
+# Exit code: number of failing ENFORCED gates (M1, M3, M5, M6, M7, M8, M9, M10, M11).
 # Usage: run from anywhere; ZIG=/path/to/zig overrides PATH lookup.
 
 set -u
@@ -158,13 +166,84 @@ if [ "$m3_verdict" = "FAIL" ]; then
     FAILS=$((FAILS + 1))
 fi
 
-# ---- M5: network-parsing module line budget ----
-PARSER_LINES="$( { find src/parser.zig src/parser -name '*.zig' -type f 2>/dev/null || true; } | while read -r f; do wc -l < "$f"; done | awk '{ s += $1 } END { print s + 0 }')"
-if [ "$PARSER_LINES" -le 1500 ]; then
-    row M5 PASS "parser module $PARSER_LINES/1500 lines (BE-SURF-03)"
-else
-    row M5 FAIL "parser module $PARSER_LINES/1500 lines: over budget (BE-SURF-03)"
+# ---- M5/M11: BE-SURF-03 surface units, denominators parsed from SPEC.md ----
+# Both gates read the four normative file lists and the line cap from the
+# BE-SURF-03 text at run time (denominator law): nothing about the units is
+# stored in this script. M5 gates the pre-authentication unit and enforces
+# the exhaustiveness clause (every non-test src file in exactly one list, no
+# file in two); M11 gates the post-authentication unit. Absent listed files
+# count as 0 lines: the lists are normative placement, ahead of the code.
+SURF_SECTION="$(sed -n '/\*\*BE-SURF-03/,/no unmeasured place/p' SPEC.md)"
+SURF_JOINED="$(printf '%s\n' "$SURF_SECTION" | awk '
+    /^- \*\*/ { if (b != "") print b; b = $0; next }
+    /^  / && b != "" { line = $0; sub(/^ +/, " ", line); b = b line; next }
+    { if (b != "") { print b; b = "" } }
+    END { if (b != "") print b }')"
+surf_bullet_files() { # label -> one file path per line
+    printf '%s\n' "$SURF_JOINED" | grep -F "$1" | grep -o 'src/[a-z0-9_/]*\.zig' | sort
+}
+PRE_AUTH_FILES="$(surf_bullet_files '**Pre-authentication unit:**')"
+POST_AUTH_FILES="$(surf_bullet_files '**Post-authentication unit:**')"
+NON_SURFACE_FILES="$(surf_bullet_files '**Non-surface:**')"
+HARNESS_FILES="$(surf_bullet_files '**Harness and entry:**')"
+HARNESS_TEST_GLOB=0
+printf '%s\n' "$SURF_JOINED" | grep -F '**Harness and entry:**' | grep -q '\*_test\.zig' && HARNESS_TEST_GLOB=1
+SURF_CAP="$(printf '%s\n' "$SURF_SECTION" | tr '\n' ' ' | grep -o 'MUST NOT exceed \*\*[0-9][0-9]* lines\*\*' | head -1 | grep -o '[0-9][0-9]*')"
+
+SURF_PROBLEMS=""
+[ -z "$SURF_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS line cap not parsed from SPEC.md BE-SURF-03;"
+[ -z "$PRE_AUTH_FILES" ] && SURF_PROBLEMS="$SURF_PROBLEMS pre-authentication list not parsed from SPEC.md BE-SURF-03;"
+[ -z "$POST_AUTH_FILES" ] && SURF_PROBLEMS="$SURF_PROBLEMS post-authentication list not parsed from SPEC.md BE-SURF-03;"
+[ "$HARNESS_TEST_GLOB" -eq 0 ] && SURF_PROBLEMS="$SURF_PROBLEMS harness *_test.zig glob not found in SPEC.md BE-SURF-03;"
+SURF_DUPES="$(printf '%s\n%s\n%s\n%s\n' "$PRE_AUTH_FILES" "$POST_AUTH_FILES" "$NON_SURFACE_FILES" "$HARNESS_FILES" | grep -v '^$' | sort | uniq -d)"
+[ -n "$SURF_DUPES" ] && SURF_PROBLEMS="$SURF_PROBLEMS placed in more than one BE-SURF-03 list: $(printf '%s\n' "$SURF_DUPES" | tr '\n' ' ');"
+SURF_PLACED="$(printf '%s\n%s\n%s\n%s\n' "$PRE_AUTH_FILES" "$POST_AUTH_FILES" "$NON_SURFACE_FILES" "$HARNESS_FILES" | grep -v '^$' | sort)"
+SURF_UNPLACED=""
+for f in $(find src -name '*.zig' -type f ! -name '*_test.zig' | sort); do
+    printf '%s\n' "$SURF_PLACED" | grep -qx "$f" || SURF_UNPLACED="$SURF_UNPLACED $f"
+done
+[ -n "$SURF_UNPLACED" ] && SURF_PROBLEMS="$SURF_PROBLEMS not placed by SPEC.md BE-SURF-03:$SURF_UNPLACED;"
+
+surf_unit_lines() { # newline-separated file list -> total lines, absent = 0
+    local total=0 f
+    for f in $1; do
+        if [ -f "$f" ]; then total=$((total + $(wc -l < "$f"))); fi
+    done
+    echo "$total"
+}
+surf_unit_detail() { # newline-separated file list -> "name N," per file
+    local out="" f n
+    for f in $1; do
+        if [ -f "$f" ]; then
+            n="$(wc -l < "$f" | tr -d ' ')"
+            out="$out ${f#src/} $n,"
+        else
+            out="$out ${f#src/} absent,"
+        fi
+    done
+    echo "$out"
+}
+PRE_AUTH_LINES="$(surf_unit_lines "$PRE_AUTH_FILES")"
+POST_AUTH_LINES="$(surf_unit_lines "$POST_AUTH_FILES")"
+
+if [ -n "$SURF_PROBLEMS" ]; then
+    row M5 FAIL "${SURF_PROBLEMS# } (BE-SURF-03)"
     FAILS=$((FAILS + 1))
+elif [ "$PRE_AUTH_LINES" -le "$SURF_CAP" ]; then
+    row M5 PASS "pre-authentication unit $PRE_AUTH_LINES/$SURF_CAP lines:$(surf_unit_detail "$PRE_AUTH_FILES") lists and cap parsed from SPEC.md BE-SURF-03"
+else
+    row M5 FAIL "pre-authentication unit $PRE_AUTH_LINES/$SURF_CAP lines, over budget:$(surf_unit_detail "$PRE_AUTH_FILES") (BE-SURF-03)"
+    FAILS=$((FAILS + 1))
+fi
+if [ -n "$SURF_PROBLEMS" ]; then
+    M11_VERDICT="FAIL"
+    M11_DETAIL="BE-SURF-03 placement broken, post-authentication sum not trustworthy (see M5)"
+elif [ "$POST_AUTH_LINES" -le "$SURF_CAP" ]; then
+    M11_VERDICT="PASS"
+    M11_DETAIL="post-authentication unit $POST_AUTH_LINES/$SURF_CAP lines:$(surf_unit_detail "$POST_AUTH_FILES") lists and cap parsed from SPEC.md BE-SURF-03"
+else
+    M11_VERDICT="FAIL"
+    M11_DETAIL="post-authentication unit $POST_AUTH_LINES/$SURF_CAP lines, over budget:$(surf_unit_detail "$POST_AUTH_FILES") (BE-SURF-03)"
 fi
 
 # ---- M6: build with the network disabled, no package manager ----
@@ -252,19 +331,23 @@ else
     FAILS=$((FAILS + 1))
 fi
 
-# ---- M9: coverage denominator derived from parser.zig, zero raw error returns ----
+# ---- M9: coverage denominator derived from the parser module, zero raw error returns ----
 # Every parser error exit routes through coverage.reject() and every accepted
 # return through coverage.accept(); both wrappers live in src/coverage.zig.
-# The denominator is counted HERE from parser.zig wrapper call sites at run
-# time, never taken from the enum alone: the Branch enum must match the source
-# one for one (one counter per exit site), a new exit point fails until the
-# enum grows, and a dead enum member fails the other way. Comments are
-# stripped before every count so prose cannot mask an exit. Zero exceptions:
-# one exception is the start of a list, and a list is where M8 once hid a gap.
+# The denominator is counted HERE from the parser module's wrapper call sites
+# at run time (src/parser.zig plus src/parser/; the module straddles the
+# authentication line and is not one of the M5/M11 unit lists), never taken
+# from the enum alone: the Branch enum must match the
+# source one for one (one counter per exit site), a new exit point fails
+# until the enum grows, and a dead enum member fails the other way. Comments
+# are stripped before every count so prose cannot mask an exit. Zero
+# exceptions: one exception is the start of a list, and a list is where M8
+# once hid a gap.
 M9_STRIP='s|//.*||'
-RAW_RET="$(sed "$M9_STRIP" src/parser.zig | grep -c 'return error\.' || true)"
-REJECT_TAGS="$(sed "$M9_STRIP" src/parser.zig | grep -o 'coverage\.reject(\.[a-z_0-9]*' | sed 's/.*\.//' | sort)"
-ACCEPT_TAGS="$(sed "$M9_STRIP" src/parser.zig | grep -o 'coverage\.accept(\.[a-z_0-9]*' | sed 's/.*\.//' | sort)"
+PARSER_MODULE_FILES="src/parser.zig $(find src/parser -name '*.zig' -type f 2>/dev/null | sort | tr '\n' ' ')"
+RAW_RET="$(cat $PARSER_MODULE_FILES | sed "$M9_STRIP" | grep -c 'return error\.' || true)"
+REJECT_TAGS="$(cat $PARSER_MODULE_FILES | sed "$M9_STRIP" | grep -o 'coverage\.reject(\.[a-z_0-9]*' | sed 's/.*\.//' | sort)"
+ACCEPT_TAGS="$(cat $PARSER_MODULE_FILES | sed "$M9_STRIP" | grep -o 'coverage\.accept(\.[a-z_0-9]*' | sed 's/.*\.//' | sort)"
 REJECT_COUNT="$(printf '%s\n' "$REJECT_TAGS" | grep -c '[a-z_]' || true)"
 ACCEPT_COUNT="$(printf '%s\n' "$ACCEPT_TAGS" | grep -c '[a-z_]' || true)"
 SITE_COUNT=$((REJECT_COUNT + ACCEPT_COUNT))
@@ -276,10 +359,10 @@ MISSING_IN_ENUM="$(comm -23 <(printf '%s\n' "$USED_TAGS") <(printf '%s\n' "$ENUM
 DEAD_IN_ENUM="$(comm -13 <(printf '%s\n' "$USED_TAGS") <(printf '%s\n' "$ENUM_TAGS") | tr '\n' ' ')"
 M9_PROBLEMS=""
 if [ "$RAW_RET" -ne 0 ]; then
-    M9_PROBLEMS="$M9_PROBLEMS $RAW_RET raw error return(s) in src/parser.zig: every error exit routes through coverage.reject(), zero exceptions;"
+    M9_PROBLEMS="$M9_PROBLEMS $RAW_RET raw error return(s) in the parser module: every error exit routes through coverage.reject(), zero exceptions;"
 fi
 if [ "$SITE_COUNT" -eq 0 ]; then
-    M9_PROBLEMS="$M9_PROBLEMS no wrapper call sites found in src/parser.zig: the extractor broke or the parser moved;"
+    M9_PROBLEMS="$M9_PROBLEMS no wrapper call sites found in the parser module: the extractor broke or the parser moved;"
 elif [ "$SITE_COUNT" -ne "$ENUM_COUNT" ]; then
     M9_PROBLEMS="$M9_PROBLEMS $SITE_COUNT wrapper call sites but $ENUM_COUNT Branch enum members: one counter per exit site, one for one;"
 fi
@@ -293,7 +376,7 @@ if [ -n "$DEAD_IN_ENUM" ]; then
     M9_PROBLEMS="$M9_PROBLEMS dead Branch enum members with no call site: $DEAD_IN_ENUM;"
 fi
 if [ -z "$M9_PROBLEMS" ]; then
-    row M9 PASS "coverage denominator: $SITE_COUNT exit points derived from src/parser.zig ($REJECT_COUNT reject + $ACCEPT_COUNT accept); Branch enum matches one for one; zero raw error returns (SPEC.md section 11.6)"
+    row M9 PASS "coverage denominator: $SITE_COUNT exit points derived from the parser module ($REJECT_COUNT reject + $ACCEPT_COUNT accept); Branch enum matches one for one; zero raw error returns (SPEC.md section 11.6)"
 else
     row M9 FAIL "${M9_PROBLEMS# } (SPEC.md section 11.6)"
     FAILS=$((FAILS + 1))
@@ -329,7 +412,12 @@ else
     FAILS=$((FAILS + 1))
 fi
 
+row M11 "$M11_VERDICT" "$M11_DETAIL"
+if [ "$M11_VERDICT" = "FAIL" ]; then
+    FAILS=$((FAILS + 1))
+fi
+
 echo
-echo "enforced gates: M1 M3 M5 M6 M7 M8 M9 M10, failing: $FAILS"
+echo "enforced gates: M1 M3 M5 M6 M7 M8 M9 M10 M11, failing: $FAILS"
 echo "not yet enforced: M2 M4, printed above, excluded from the exit code"
 exit "$FAILS"

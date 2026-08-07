@@ -1,11 +1,48 @@
 #!/usr/bin/env python3
 # mutation-test.py
 #
-# Mutation harness v6 for the Grant verifier, the attestation layer, AND the
-# transport DoS gate (LANGUAGE.md section 4 metric; SPEC.md section 11.2).
+# Mutation harness v9 for the Grant verifier, the attestation layer, the
+# transport DoS gate, the session phase, the channel layer AND the mesh
+# identity boundary (LANGUAGE.md section 4 metric; SPEC.md section 11.2).
 # cargo-mutants does not exist for Zig, so this applies one mutant at a time to
 # a source file, rebuilds, runs the full test suite, and records whether the
 # suite kills it.
+#
+# v9 (bolina mandate task 12): the channel and mesh domains. Tasks 10 and 11
+# shipped verify code with unit tests but nothing trying to break it, so those
+# two layers carried no mutation evidence at all. Both denominators are
+# detected from SPEC markers like every other domain, never stated here:
+#   channel <- section 6 BE-CHAN / BE-GEN / BE-CTRL markers
+#   mesh    <- section 5 BE-MESH markers
+# Deliberately not keyed, each for a stated reason rather than convenience:
+# BE-CHAN-03's acceptance half is the same requireMember code already keyed
+# under chan-01/chan-02 and its error priority is not normative in SPEC, so
+# pinning an order would invent a requirement (the D-014 sin); BE-MESH-02 and
+# BE-MESH-03 are relay obligations with no relay in this slice (D-037); and
+# BE-MESH-07 is satisfied by placement, since the lookup parsers live in the
+# post-authentication unit.
+#
+# v8 (bolina mandate task 8): the session domain. Five properties the session
+# phase declares in SPEC section 4 get keys detected from their normative
+# sentences, so deleting a sentence deletes its key (the denominator law):
+#   key-schedule   <- the pinned protocol name (Noise_IK over BLAKE2s HKDF)
+#   mac1-first     <- BE-TR-04's "before any X25519 operation"
+#   nonce-counter  <- the [0x00 x4] || counter nonce layout and 2^48 bound
+#   rekey-bound    <- BE-TR-02's earlier-of 120s/2^48 replacement
+#   rekey-zero     <- BE-TR-02's old keys zeroed on replacement
+#   binding-sig    <- BE-TR-01's signature over the handshake hash h
+# Two test defects fixed in the preceding commit before these mutants could be
+# honest (D-027, a test MUST NOT reference the constant it verifies):
+# noise_test.zig hashed the module's own PROTOCOL_NAME and cross-checked the
+# HKDF a-vs-b (every KDF mutant scales with both), and session_test.zig walked
+# REKEY_AFTER_MESSAGES / REKEY_AFTER_MS symbolically. All now assert literal
+# bytes and values from an independent Python run. One mutant class needed a
+# new witness shape: a delayed mac1 check still returns Mac1Failed on a healthy
+# ephemeral, so the ordering test feeds an identity-point ephemeral, where the
+# first DH errors IdentityPoint and only a mac1-first ordering surfaces
+# Mac1Failed. The key-schedule KATs are what make the split-swap mutant
+# killable at all: both sides of the round trip split identically, so a swap is
+# invisible to key-agreement assertions and only fixed bytes catch it.
 #
 # v7 (round-4 review): the transport domain keys ALL FOUR section-4 markers,
 # not just the two the symbolic tests could kill. D-026 excluded WINDOW_BITS
@@ -53,6 +90,7 @@ import re
 import subprocess
 import sys
 import pathlib
+import os
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
@@ -68,6 +106,9 @@ TARGETS = {
     "mac.zig": SRC / "mac.zig",
     "replay.zig": SRC / "replay.zig",
     "reassembly.zig": SRC / "reassembly.zig",
+    "noise.zig": SRC / "noise.zig",
+    "session.zig": SRC / "session.zig",
+    "binding.zig": SRC / "binding.zig",
 }
 ORIGINALS = {name: path.read_text() for name, path in TARGETS.items()}
 
@@ -182,6 +223,115 @@ def transport_properties_from_spec():
     return props
 
 
+# --- session denominator, derived from SPEC.md section 4 ------------------
+#
+# The session phase (Noise_IK key schedule, session lifetime, binding). Each
+# key is detected from the normative sentence it protects; removing the
+# sentence from SPEC removes the key and the mutants that trace to it. The
+# rekey rule yields two keys because it makes two independent promises (the
+# replacement bound and the zeroization of replaced keys), exactly as BE-TR-04
+# feeds both the mac1 label (transport domain) and the mac1 ordering (here).
+
+SESSION_MARKERS = [
+    # (denominator key, what SPEC says, marker text that must be present)
+    ("key-schedule", "the pinned Noise_IK protocol name seeding the BLAKE2s HKDF",
+     r"\*\*`Noise_IK_25519_ChaChaPoly_BLAKE2s`\*\*"),
+    ("mac1-first", "BE-TR-04 mac1 verified before any X25519 operation",
+     r"verify `mac1` \*\*before any X25519 operation\*\*"),
+    ("nonce-counter", "the [0x00 x4] || big-endian counter nonce within 2^48",
+     r"\[0x00 x 4\] \|\| counter"),
+    ("rekey-bound", "BE-TR-02 replace at the earlier of 120 s or 2^48 messages",
+     r"after the earlier of 120 seconds or 2\u2074\u2078 messages"),
+    ("rekey-zero", "BE-TR-02 old keys zeroed on replacement",
+     r"Old keys MUST be zeroed on replacement"),
+    ("binding-sig", "BE-TR-01 binding signature verified against the handshake hash h",
+     r"that signature verifies against `h`"),
+]
+
+
+def session_properties_from_spec():
+    """The set of session-phase properties the slice must prove, each detected
+    from its normative sentence in SPEC section 4. Removing a sentence removes
+    its key here, so the gate cannot hide an untested property without editing
+    SPEC."""
+    text = SPEC.read_text()
+    props = set()
+    for key, _what, pattern in SESSION_MARKERS:
+        if re.search(pattern, text):
+            props.add(key)
+    return props
+
+
+# --- channel denominator, derived from SPEC.md section 6 ------------------
+#
+# The channel control verify layer (BE-CHAN/BE-GEN/BE-CTRL, tasks 10-11 era).
+# Each key is detected from its bold marker in SPEC section 6; removing a rule
+# from SPEC removes its key here. BE-CHAN-03 is deliberately NOT keyed: its
+# acceptance half is modelled by the same requireMember code keyed under
+# chan-01/chan-02, and its fan-out half has no caller in this slice. That
+# exclusion is named in D-038 rather than dropped, the D-037-decision-5 shape.
+
+CHANNEL_MARKERS = [
+    # (denominator key, what SPEC says, marker text that must be present)
+    ("chan-01", "BE-CHAN-01 membership granted by the CA, cert carries member_group",
+     r"\*\*BE-CHAN-01"),
+    ("chan-02", "BE-CHAN-02 removal is monotonic, grow-only revoked set",
+     r"\*\*BE-CHAN-02"),
+    ("gen-01", "BE-GEN-01 exactly one genesis envelope per channel",
+     r"\*\*BE-GEN-01"),
+    ("gen-03", "BE-GEN-03 genesis signed by admin_group cert, channel_id derived",
+     r"\*\*BE-GEN-03"),
+    ("gen-04", "BE-GEN-04 match_rule fixed at byte equality",
+     r"\*\*BE-GEN-04"),
+    ("ctrl-01", "BE-CTRL-01 action_type outside {1, 2} rejected",
+     r"\*\*BE-CTRL-01"),
+    ("ctrl-02", "BE-CTRL-02 Revoke requires admin_group",
+     r"\*\*BE-CTRL-02"),
+]
+
+
+def channel_properties_from_spec():
+    """The set of section-6 channel properties the slice must prove, each
+    detected from its bold marker in SPEC section 6."""
+    text = SPEC.read_text()
+    props = set()
+    for key, _what, pattern in CHANNEL_MARKERS:
+        if re.search(pattern, text):
+            props.add(key)
+    return props
+
+
+# --- mesh denominator, derived from SPEC.md section 5 ----------------------
+#
+# The lighthouse-served certificate verifier (BE-MESH-01/04/05/06). Keyed from
+# the bold markers in SPEC section 5. BE-MESH-02/03 are relay obligations with
+# no relay in this slice and BE-MESH-07 is satisfied by placement; all three
+# are excluded here and named in D-037 decision 5, not silently dropped.
+
+MESH_MARKERS = [
+    # (denominator key, what SPEC says, marker text that must be present)
+    ("mesh-01", "BE-MESH-01 a lighthouse is availability, never authority",
+     r"\*\*BE-MESH-01"),
+    ("mesh-04", "BE-MESH-04 served cert verified under BE-ID-01 through BE-ID-04",
+     r"\*\*BE-MESH-04"),
+    ("mesh-05", "BE-MESH-05 served cert opens the session and confers nothing",
+     r"\*\*BE-MESH-05"),
+    ("mesh-06", "BE-MESH-06 windows and revocation re-verified at every use",
+     r"\*\*BE-MESH-06"),
+]
+
+
+def mesh_properties_from_spec():
+    """The set of section-5 mesh properties the slice must prove, each detected
+    from its bold marker in SPEC section 5."""
+    text = SPEC.read_text()
+    props = set()
+    for key, _what, pattern in MESH_MARKERS:
+        if re.search(pattern, text):
+            props.add(key)
+    return props
+
+
 # --- mutants --------------------------------------------------------------
 # Each mutant: (domain, target, class, key, name, find, replace).
 #   domain: "grant" or "evidence" - which derived denominator it gates against.
@@ -199,8 +349,8 @@ MUTANTS = [
      "if (grant.version != 3) return error.BadVersion; // MUTANT"),
     ("grant", "verify.zig", "WRONG-CONSTANT", 2,
      "check 2 grant domain tag (DOMAIN_GRANT -> DOMAIN_ENVELOPE)",
-     "try verifySigned(parser.DOMAIN_GRANT, grant.tbs, grant.sig, grant.approver);",
-     "try verifySigned(parser.DOMAIN_ENVELOPE, grant.tbs, grant.sig, grant.approver); // MUTANT"),
+     "try verifySigned(parser.channel.DOMAIN_GRANT, grant.tbs, grant.sig, grant.approver);",
+     "try verifySigned(parser.channel.DOMAIN_ENVELOPE, grant.tbs, grant.sig, grant.approver); // MUTANT"),
     ("grant", "verify.zig", "WRONG-FIELD", 1,
      "check 1 binding compares sender to subject not approver",
      "if (!std.mem.eql(u8, env.sender, grant.approver)) return error.BadEnvelopeBinding;",
@@ -209,6 +359,30 @@ MUTANTS = [
      "check 5 executor compares executor to approver not own key",
      "if (!std.mem.eql(u8, grant.executor, ctx.own_pubkey)) return error.WrongExecutor;",
      "if (!std.mem.eql(u8, grant.executor, grant.approver)) return error.WrongExecutor; // MUTANT"),
+    # Checks 3, 4, 6, 7 and 8 folded into the routine when GrantContext gained
+    # the certificate store and the pending-intent fields. SPEC's conformance
+    # sentence records the repayment, so the derived denominator now demands
+    # these five be attacked like every other modelled check.
+    ("grant", "verify.zig", "CHECK-ABSENCE", 3,
+     "check 3 approver role constraint never enforced",
+     "if ((ctx.approver_cert.role_bits & binding.ROLE_APPROVER) == 0) return error.BadApproverCert;",
+     "// MUTANT: approver role constraint removed"),
+    ("grant", "verify.zig", "CHECK-ABSENCE", 4,
+     "check 4 subject role constraint never enforced",
+     "if ((ctx.subject_cert.role_bits & binding.ROLE_AGENT) == 0) return error.BadSubjectCert;",
+     "// MUTANT: subject role constraint removed"),
+    ("grant", "verify.zig", "CHECK-ABSENCE", 6,
+     "check 6 subject never matched against the pending intent's sender",
+     "if (!std.mem.eql(u8, grant.subject, ctx.intent_sender)) return error.WrongSubject;",
+     "// MUTANT: pending-intent sender match removed"),
+    ("grant", "verify.zig", "CHECK-ABSENCE", 7,
+     "check 7 intent_id never matched against the pending intent",
+     "if (!std.mem.eql(u8, grant.intent_id, ctx.pending_intent_id)) return error.NoMatchingIntent;",
+     "// MUTANT: intent_id match removed"),
+    ("grant", "verify.zig", "CHECK-ABSENCE", 8,
+     "check 8 resource_id never matched against the pending intent",
+     "if (!std.mem.eql(u8, grant.resource_id, ctx.pending_resource_id)) return error.WrongResource;",
+     "// MUTANT: resource_id match removed"),
     ("grant", "verify.zig", "WRONG-FIELD", 9,
      "check 9 digest hashed over grant_id not the intent action",
      "const digest = actionDigest(ctx.intent_action);",
@@ -356,6 +530,183 @@ MUTANTS = [
      "per-message ceiling halved (1 MiB -> 512 KiB)",
      "pub const MAX_MESSAGE: usize = 1 << 20; // 1 MiB: the ceiling every size derives from",
      "pub const MAX_MESSAGE: usize = 1 << 19; // MUTANT"),
+
+    # --- session domain: Noise_IK key schedule, lifetime, binding ----------
+    # key-schedule: the pinned protocol name. The init-state test asserts the
+    # LITERAL BLAKE2s of the name (independent Python run), so a renamed
+    # protocol hashes to a different h0 and dies there. The old test hashed the
+    # module's own PROTOCOL_NAME and scaled with this mutant; that was the
+    # D-027 defect fixed in the preceding commit.
+    ("session", "noise.zig", "WRONG-CONSTANT", "key-schedule",
+     "protocol name BLAKE2s -> BLAKE2b changes the seed of the whole schedule",
+     'pub const PROTOCOL_NAME: []const u8 = "Noise_IK_25519_ChaChaPoly_BLAKE2s";',
+     'pub const PROTOCOL_NAME: []const u8 = "Noise_IK_25519_ChaChaPoly_BLAKE2b"; // MUTANT'),
+    # key-schedule: the HKDF counter byte. First occurrence is hkdf2 (used by
+    # mixKey and split); the literal mixKey KATs kill a wrong o1. An a-vs-b
+    # cross-check could never kill this mutant because both states run the same
+    # wrong KDF; fixed bytes from the independent Python run can.
+    ("session", "noise.zig", "WRONG-CONSTANT", "key-schedule",
+     "hkdf2 o1 counter byte 0x01 -> 0x02 corrupts every derived key",
+     "    HmacBlake2s256.create(&o1, &[_]u8{1}, &temp_key);",
+     "    HmacBlake2s256.create(&o1, &[_]u8{2}, &temp_key); // MUTANT"),
+    # key-schedule: split halves swapped. Invisible to the round trip because
+    # initiator and responder split identically; the literal split KATs kill it.
+    ("session", "noise.zig", "WRONG-FIELD", "key-schedule",
+     "split halves swapped (c1 <-> c2) silently cross-wires directions",
+     "        return .{ .c1 = out.o1, .c2 = out.o2 };",
+     "        return .{ .c1 = out.o2, .c2 = out.o1 }; // MUTANT"),
+    # mac1-first: the check removed. Both tampered-mac1 tests expect
+    # Mac1Failed; without the check a tampered mac1 byte never touches the
+    # transcript, readInitiation succeeds, and the suite dies.
+    ("session", "noise.zig", "CHECK-ABSENCE", "mac1-first",
+     "responder never verifies mac1 (floods reach the curve)",
+     "        const m1_in: [mac.MAC_BYTES]u8 = field(mac.MAC_BYTES, msg1, OFF1_MAC1);\n        if (!mac.verifyMac1(responder_sig_pubkey, msg1[0..MSG1_BEFORE_MAC1], m1_in)) return Error.Mac1Failed;",
+     "        // MUTANT: mac1 never verified"),
+    # mac1-first: the check DELAYED past the first DH. Behaviorally identical
+    # on a healthy ephemeral (the existing tampered-mac1 tests still pass), so
+    # the ordering witness feeds an identity-point ephemeral: the first DH then
+    # errors IdentityPoint, and only a mac1-first ordering surfaces Mac1Failed.
+    ("session", "noise.zig", "WRONG-ORDER", "mac1-first",
+     "mac1 check delayed past the first X25519 (curve work before proof)",
+     "        // BE-TR-04: mac1 before any X25519.\n        const m1_in: [mac.MAC_BYTES]u8 = field(mac.MAC_BYTES, msg1, OFF1_MAC1);\n        if (!mac.verifyMac1(responder_sig_pubkey, msg1[0..MSG1_BEFORE_MAC1], m1_in)) return Error.Mac1Failed;\n\n        // e: initiator ephemeral, hashed; captured for es/ee.\n        const eph_i = field(DHLEN, msg1, OFF1_EPHEMERAL);\n        self.re = eph_i;\n        self.sym.mixHash(&eph_i);\n\n        // es: DH(s_R, e_I).\n        self.sym.mixKey(try dh(self.static_kp, self.re));",
+     "        // e: initiator ephemeral, hashed; captured for es/ee.\n        const eph_i = field(DHLEN, msg1, OFF1_EPHEMERAL);\n        self.re = eph_i;\n        self.sym.mixHash(&eph_i);\n\n        // es: DH(s_R, e_I).\n        self.sym.mixKey(try dh(self.static_kp, self.re)); // MUTANT: DH runs first\n\n        // MUTANT: mac1 check delayed past the first X25519.\n        const m1_in: [mac.MAC_BYTES]u8 = field(mac.MAC_BYTES, msg1, OFF1_MAC1);\n        if (!mac.verifyMac1(responder_sig_pubkey, msg1[0..MSG1_BEFORE_MAC1], m1_in)) return Error.Mac1Failed;"),
+    # nonce-counter: little-endian counter. The nonce test asserts literal byte
+    # positions (0x01 at index 11 for counter 1, 0x01 at index 4 for the big
+    # counter), which an endian flip violates.
+    ("session", "noise.zig", "WRONG-ENDIAN", "nonce-counter",
+     "transport nonce counter written little-endian",
+     "    std.mem.writeInt(u64, nb[4..], counter, .big);",
+     "    std.mem.writeInt(u64, nb[4..], counter, .little); // MUTANT"),
+    # nonce-counter: the 2^48 message ceiling halved. The test sets the counter
+    # to the literal 2^48 - 1 and expects one more legal seal; under a 2^47
+    # ceiling that seal refuses, killing the mutant. The old test walked
+    # session.REKEY_AFTER_MESSAGES symbolically and scaled with it.
+    ("session", "session.zig", "WRONG-CONSTANT", "nonce-counter",
+     "message ceiling halved (2^48 -> 2^47) rekeys sessions twice as early",
+     "pub const REKEY_AFTER_MESSAGES: u64 = 1 << 48;",
+     "pub const REKEY_AFTER_MESSAGES: u64 = 1 << 47; // MUTANT"),
+    # rekey-bound: the 120 s time bound shifted one ms. The literal boundary
+    # test expects due at epoch + 120_000 exactly; 120_001 is not due there.
+    ("session", "session.zig", "WRONG-CONSTANT", "rekey-bound",
+     "time bound 120_000 -> 120_001 shifts the rekey deadline",
+     "pub const REKEY_AFTER_MS: u64 = 120_000;",
+     "pub const REKEY_AFTER_MS: u64 = 120_001; // MUTANT"),
+    # rekey-zero: the send zeroization dropped. The rotate test advances the
+    # send counter under the old key and asserts it is 0 after rotation; the
+    # counter reset lives inside zero(), so the witness catches the drop.
+    ("session", "session.zig", "DROP-ZERO", "rekey-zero",
+     "rotate never zeroes the old send state",
+     "    pub fn rotate(s: *Session, result: noise.HandshakeResult, now_ms: u64) void {\n        s.send.zero();\n        s.recv.zero();",
+     "    pub fn rotate(s: *Session, result: noise.HandshakeResult, now_ms: u64) void {\n        // MUTANT: old send state never zeroed\n        s.recv.zero();"),
+    # rekey-zero: the recv zeroization dropped. The rotate test dirties the
+    # recv window before rotation and asserts a fresh (uninitialized) window
+    # after; the fresh window comes from zero().
+    ("session", "session.zig", "DROP-ZERO", "rekey-zero",
+     "rotate never zeroes the old recv state",
+     "    pub fn rotate(s: *Session, result: noise.HandshakeResult, now_ms: u64) void {\n        s.send.zero();\n        s.recv.zero();",
+     "    pub fn rotate(s: *Session, result: noise.HandshakeResult, now_ms: u64) void {\n        s.send.zero();\n        // MUTANT: old recv state never zeroed"),
+    # binding-sig: the signature never verified. The tampered-signature test
+    # expects BadBindingSig; without the check bindSession succeeds and the
+    # suite dies. Unused parameters are legal in Zig, so the file compiles.
+    ("session", "binding.zig", "CHECK-ABSENCE", "binding-sig",
+     "bindSession never verifies the signature over h",
+     "    verifySig(DOMAIN_BINDING, handshake_hash, binding_sig, cert.sig_pubkey) catch |e| switch (e) {\n        error.MalformedKey => return error.MalformedKey,\n        error.SignatureRejected => return error.BadBindingSig,\n    };",
+     "    // MUTANT: the binding signature is never verified"),
+
+    # --- channel domain: control verification (src/verify.zig, SPEC 6.1a-c)
+    # chan-01: membership inverted. The BE_CHAN_01 test expects NotMember for a
+    # cert without member_group; under the inversion it is accepted.
+    ("channel", "verify.zig", "WRONG-LOGIC", "chan-01",
+     "membership check inverted (non-members accepted, members refused)",
+     "    if (!certCarriesGroup(sender_cert, genesis.member_group)) return error.NotMember;",
+     "    if (certCarriesGroup(sender_cert, genesis.member_group)) return error.NotMember; // MUTANT"),
+    # chan-02: revocation inverted. The BE_CHAN_02 test expects SubjectRevoked
+    # for a revoked subject; under the inversion only unrevoked subjects fail.
+    ("channel", "verify.zig", "WRONG-LOGIC", "chan-02",
+     "revocation check inverted (revoked subjects accepted)",
+     "    if (ctx.is_revoked(sender_cert.sig_pubkey)) return error.SubjectRevoked;",
+     "    if (!ctx.is_revoked(sender_cert.sig_pubkey)) return error.SubjectRevoked; // MUTANT"),
+    # gen-01: duplicate-genesis check inverted. The BE_GEN_01 test expects
+     # DuplicateGenesis when the ledger hook says the channel exists.
+    ("channel", "verify.zig", "WRONG-LOGIC", "gen-01",
+     "duplicate genesis check inverted (second genesis accepted)",
+     "    if (ctx.genesis_exists(channel_id)) return error.DuplicateGenesis;",
+     "    if (!ctx.genesis_exists(channel_id)) return error.DuplicateGenesis; // MUTANT"),
+    # gen-03 (authority half): admin-group check dropped. The BE_GEN_03
+    # non-admin test expects GenesisNotAdmin.
+    ("channel", "verify.zig", "CHECK-ABSENCE", "gen-03",
+     "genesis admin-group authority never checked",
+     "    if (!certCarriesGroup(admin_cert, genesis.admin_group)) return error.GenesisNotAdmin;",
+     "    // MUTANT: admin group never checked"),
+    # gen-03 (derivation half): channel_id comparison dropped. The BE_GEN_03
+    # mismatched-id test expects BadChannelId.
+    ("channel", "verify.zig", "CHECK-ABSENCE", "gen-03",
+     "channel_id never compared against BLAKE2s(name || ca_key_0)",
+     "    if (!std.mem.eql(u8, channel_id, &derived)) return error.BadChannelId;",
+     "    // MUTANT: channel_id never compared"),
+    # gen-04: match_rule constant shifted. The BE_GEN_04 test refuses
+    # match_rule 2; under != 2 the value 2 passes and the refusal disappears.
+    ("channel", "verify.zig", "WRONG-CONSTANT", "gen-04",
+     "match_rule byte-equality value shifted (1 -> 2)",
+     "    if (genesis.match_rule != 1) return error.BadMatchRule;",
+     "    if (genesis.match_rule != 2) return error.BadMatchRule; // MUTANT"),
+    # ctrl-01: the Revoke arm removed from the accept set. The BE_CTRL_02 test
+    # drives action_type 2 and expects RevokeNotAdmin; under {1, 3} it hits
+    # BadActionType instead, and the grant-arm action 3 becomes legal.
+    ("channel", "verify.zig", "WRONG-CONSTANT", "ctrl-01",
+     "action_type accept set shifted ({1, 2} -> {1, 3})",
+     "        1, 2 => {},",
+     "        1, 3 => {}, // MUTANT"),
+    # ctrl-02: the admin requirement inverted. The BE_CTRL_02 test expects
+    # RevokeNotAdmin for a non-admin sender; under the inversion non-admins
+    # pass and admins are refused.
+    ("channel", "verify.zig", "WRONG-LOGIC", "ctrl-02",
+     "revoke admin requirement inverted (non-admins accepted)",
+     "    if (control.action_type == 2 and !certCarriesGroup(sender_cert, genesis.admin_group))",
+     "    if (control.action_type == 2 and certCarriesGroup(sender_cert, genesis.admin_group)) // MUTANT"),
+
+    # --- mesh domain: served-certificate verification (src/verify.zig, SPEC 5)
+    # mesh-01: identity taken from the wrong key. The overlay address derives
+    # from sig_pubkey (BE-ID-01); deriving it from kex_pubkey makes every
+    # honest lookup mismatch, so the happy-path tests kill it.
+    ("mesh", "verify.zig", "WRONG-FIELD", "mesh-01",
+     "overlay address derived from kex_pubkey instead of sig_pubkey",
+     "    const derived = binding.deriveOverlayAddr(served.sig_pubkey);",
+     "    const derived = binding.deriveOverlayAddr(served.kex_pubkey); // MUTANT"),
+    # mesh-04 (substitution half): the address comparison dropped. The
+    # BE_MESH_04 mismatch and BE_MESH_01 substitution tests both expect
+    # AddressMismatch with open_calls still zero.
+    ("mesh", "verify.zig", "CHECK-ABSENCE", "mesh-04",
+     "served identity substitution never checked",
+     "    const derived = binding.deriveOverlayAddr(served.sig_pubkey);\n    if (!std.mem.eql(u8, &derived, requested_addr)) return error.AddressMismatch;",
+     "    _ = requested_addr; // MUTANT: substitution never checked"),
+    # mesh-04 (chain half): validateCert dropped. The untrusted-CA test and the
+    # BE_MESH_06 window test both expect ServedCertInvalid.
+    ("mesh", "verify.zig", "CHECK-ABSENCE", "mesh-04",
+     "served certificate chain never validated (BE-ID-02..04 skipped)",
+     "    binding.validateCert(served, ctx.trusted_ca_keys, ctx.now_ms) catch return error.ServedCertInvalid;",
+     "    // MUTANT: served certificate chain never validated"),
+    # mesh-04 call boundary: the continuation never invoked despite a valid
+    # cert. The happy-path tests assert open_calls == 1.
+    ("mesh", "verify.zig", "CALLBACK-ABSENCE", "mesh-04",
+     "session never opened despite a fully verified served cert",
+     "    open_session(.{ .sig_pubkey = served.sig_pubkey, .kex_pubkey = served.kex_pubkey });",
+     "    _ = open_session; // MUTANT: session never opened"),
+    # mesh-05: the boundary wired wrong. The continuation must carry exactly
+    # the two keys the handshake needs; feeding sig_pubkey twice is caught by
+    # the happy-path assertion that opened_kex equals the cert's kex_pubkey.
+    # The field-set reflection test (BE_MESH_05) guards the type's shape; this
+    # mutant guards what crosses it.
+    ("mesh", "verify.zig", "WRONG-FIELD", "mesh-05",
+     "kex half of the boundary carries sig_pubkey (key material crossed)",
+     "    open_session(.{ .sig_pubkey = served.sig_pubkey, .kex_pubkey = served.kex_pubkey });",
+     "    open_session(.{ .sig_pubkey = served.sig_pubkey, .kex_pubkey = served.sig_pubkey }); // MUTANT"),
+    # mesh-06: revocation at use dropped. The BE_MESH_06 revocation test
+    # accepts while unrevoked, then expects ServedCertRevoked on reuse.
+    ("mesh", "verify.zig", "CHECK-ABSENCE", "mesh-06",
+     "revocation never consulted at use (cached verdict carried forward)",
+     "    if (ctx.is_revoked(served.sig_pubkey)) return error.ServedCertRevoked;",
+     "    // MUTANT: revocation never consulted at use"),
 ]
 
 
@@ -382,6 +733,15 @@ def main():
     transport_props = transport_properties_from_spec()
     if not transport_props:
         sys.exit("FATAL: no transport properties detected in section 4 of SPEC")
+    session_props = session_properties_from_spec()
+    if not session_props:
+        sys.exit("FATAL: no session properties detected in section 4 of SPEC")
+    channel_props = channel_properties_from_spec()
+    if not channel_props:
+        sys.exit("FATAL: no channel properties detected in section 6 of SPEC")
+    mesh_props = mesh_properties_from_spec()
+    if not mesh_props:
+        sys.exit("FATAL: no mesh properties detected in section 5 of SPEC")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -389,6 +749,9 @@ def main():
     print(f"  BE-GRANT-03b callback:         call-boundary property modelled")
     print(f"  section-7 evidence properties: {sorted(evidence_props)} ({len(evidence_props)})")
     print(f"  section-4 transport properties: {sorted(transport_props)} ({len(transport_props)})")
+    print(f"  session-phase properties:        {sorted(session_props)} ({len(session_props)})")
+    print(f"  section-6 channel properties:    {sorted(channel_props)} ({len(channel_props)})")
+    print(f"  section-5 mesh properties:       {sorted(mesh_props)} ({len(mesh_props)})")
     print()
 
     # 2. scope check: no mutant may attack a key its domain's SPEC does not list
@@ -401,15 +764,36 @@ def main():
             if key not in evidence_props:
                 sys.exit(f"FATAL: evidence mutant '{name}' attacks '{key}', which "
                          "section 7 of SPEC does not declare (scope lie)")
-        else:  # transport
+        elif domain == "transport":
             if key not in transport_props:
                 sys.exit(f"FATAL: transport mutant '{name}' attacks '{key}', which "
                          "section 4 of SPEC does not declare (scope lie)")
+        elif domain == "session":
+            if key not in session_props:
+                sys.exit(f"FATAL: session mutant '{name}' attacks '{key}', which "
+                         "SPEC does not declare (scope lie)")
+        elif domain == "channel":
+            if key not in channel_props:
+                sys.exit(f"FATAL: channel mutant '{name}' attacks '{key}', which "
+                         "section 6 of SPEC does not declare (scope lie)")
+        elif domain == "mesh":
+            if key not in mesh_props:
+                sys.exit(f"FATAL: mesh mutant '{name}' attacks '{key}', which "
+                         "section 5 of SPEC does not declare (scope lie)")
+        else:
+            sys.exit(f"FATAL: mutant '{name}' in unknown domain '{domain}'")
 
     # 3. run mutants
+    # Optional domain filter (MUTATION_DOMAIN env var) so a chunked run stays
+    # under the tool-timeout ceiling. A SIGKILL mid-run bypasses the finally
+    # block below and leaves a live mutant in the tree; each domain fits
+    # comfortably under the ceiling on its own, so filtering avoids that path.
+    _domain_filter = os.environ.get("MUTATION_DOMAIN")
+    run_mutants = ([m for m in MUTANTS if m[0] == _domain_filter]
+                   if _domain_filter else MUTANTS)
     results = []
     try:
-        for domain, target, klass, key, name, find, replace in MUTANTS:
+        for domain, target, klass, key, name, find, replace in run_mutants:
             if find not in ORIGINALS[target]:
                 print(f"SKIP   [{domain}/{klass}] {name}: anchor not found ({target} changed?)")
                 results.append({"domain": domain, "klass": klass, "key": key,
@@ -434,7 +818,21 @@ def main():
             path.write_text(ORIGINALS[name])
 
     # 4. gate each domain against its externally-derived denominator
+    #
+    # A chunked run (MUTATION_DOMAIN set, D-035) executes one domain only. The
+    # gate used to evaluate all six regardless, so every chunk reported the
+    # five unrun domains as 0/N covered and returned 1. That made the exit code
+    # decorative in the only mode the timeout ceiling permits: the pass signal
+    # had to be read by eye off one printed row. Out-of-scope domains are now
+    # reported as not run and excluded from the ok condition, so each chunk
+    # returns 0 exactly when the domain it ran is fully covered with no
+    # survivors. An unfiltered run still gates all six.
+    def in_scope(dom):
+        return _domain_filter is None or dom == _domain_filter
+
     def gate_domain(dom, keys, callback_key=None):
+        if not in_scope(dom):
+            return [], [], [], True
         run = [r for r in results if r["domain"] == dom and not r["skipped"]]
         killed_keys = {r["key"] for r in run if r["killed"]}
         survivors = [r["name"] for r in run if not r["killed"]]
@@ -443,39 +841,75 @@ def main():
         return run, survivors, uncovered, cb
 
     print()
+    if _domain_filter:
+        print(f"chunked run: MUTATION_DOMAIN={_domain_filter}, other domains "
+              f"not run and not gated (D-035)")
     g_run, g_surv, g_uncov, g_cb = gate_domain("grant", modelled, "03b")
-    g_cov = {r["key"] for r in g_run if r["killed"] and r["key"] != "03b"}
-    print(f"grant:   {len(g_cov)}/{len(modelled)} modelled BE-GRANT-03 checks + "
-          f"{'1' if g_cb else '0'}/1 callback covered")
+    if in_scope("grant"):
+        g_cov = {r["key"] for r in g_run if r["killed"] and r["key"] != "03b"}
+        print(f"grant:   {len(g_cov)}/{len(modelled)} modelled BE-GRANT-03 "
+              f"checks + {'1' if g_cb else '0'}/1 callback covered")
     e_run, e_surv, e_uncov, _ = gate_domain("evidence", evidence_props)
-    e_cov = {r["key"] for r in e_run if r["killed"]}
-    print(f"evidence: {len(e_cov)}/{len(evidence_props)} section-7 properties "
-          f"covered by killed mutants")
+    if in_scope("evidence"):
+        e_cov = {r["key"] for r in e_run if r["killed"]}
+        print(f"evidence: {len(e_cov)}/{len(evidence_props)} section-7 "
+              f"properties covered by killed mutants")
     t_run, t_surv, t_uncov, _ = gate_domain("transport", transport_props)
-    t_cov = {r["key"] for r in t_run if r["killed"]}
-    print(f"transport: {len(t_cov)}/{len(transport_props)} section-4 properties "
-          f"covered by killed mutants")
+    if in_scope("transport"):
+        t_cov = {r["key"] for r in t_run if r["killed"]}
+        print(f"transport: {len(t_cov)}/{len(transport_props)} section-4 "
+              f"properties covered by killed mutants")
+    s_run, s_surv, s_uncov, _ = gate_domain("session", session_props)
+    if in_scope("session"):
+        s_cov = {r["key"] for r in s_run if r["killed"]}
+        print(f"session:  {len(s_cov)}/{len(session_props)} session-phase "
+              f"properties covered by killed mutants")
+    c_run, c_surv, c_uncov, _ = gate_domain("channel", channel_props)
+    if in_scope("channel"):
+        c_cov = {r["key"] for r in c_run if r["killed"]}
+        print(f"channel:  {len(c_cov)}/{len(channel_props)} section-6 "
+              f"properties covered by killed mutants")
+    m_run, m_surv, m_uncov, _ = gate_domain("mesh", mesh_props)
+    if in_scope("mesh"):
+        m_cov = {r["key"] for r in m_run if r["killed"]}
+        print(f"mesh:     {len(m_cov)}/{len(mesh_props)} section-5 "
+              f"properties covered by killed mutants")
     total_run = [r for r in results if not r["skipped"]]
     total_killed = sum(1 for r in total_run if r["killed"])
     print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
-          f"{len(g_surv) + len(e_surv) + len(t_surv)} survived")
+          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv)}"
+          f" survived")
     if g_surv:
         print(f"  grant SURVIVORS: {g_surv}")
     if e_surv:
         print(f"  evidence SURVIVORS: {e_surv}")
     if t_surv:
         print(f"  transport SURVIVORS: {t_surv}")
+    if s_surv:
+        print(f"  session SURVIVORS: {s_surv}")
+    if c_surv:
+        print(f"  channel SURVIVORS: {c_surv}")
+    if m_surv:
+        print(f"  mesh SURVIVORS: {m_surv}")
     if g_uncov:
         print(f"  UNCOVERED grant checks: {g_uncov}")
     if e_uncov:
         print(f"  UNCOVERED evidence properties: {e_uncov}")
     if t_uncov:
         print(f"  UNCOVERED transport properties: {t_uncov}")
+    if s_uncov:
+        print(f"  UNCOVERED session properties: {s_uncov}")
+    if c_uncov:
+        print(f"  UNCOVERED channel properties: {c_uncov}")
+    if m_uncov:
+        print(f"  UNCOVERED mesh properties: {m_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
-    ok = ((not g_surv) and (not e_surv) and (not t_surv) and (not g_uncov)
-          and (not e_uncov) and (not t_uncov) and g_cb)
+    ok = ((not g_surv) and (not e_surv) and (not t_surv) and (not s_surv)
+          and (not c_surv) and (not m_surv)
+          and (not g_uncov) and (not e_uncov) and (not t_uncov)
+          and (not s_uncov) and (not c_uncov) and (not m_uncov) and g_cb)
     return 0 if ok else 1
 
 

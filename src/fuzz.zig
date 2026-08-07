@@ -45,8 +45,8 @@ fn loadSeeds(a: std.mem.Allocator) !Seeds {
     const span_wire = try decodeHex(a, s.get("span").?.object.get("wire_hex").?.string);
     const claim_wire = try decodeHex(a, s.get("claim").?.object.get("wire_hex").?.string);
     const eff_env_wire = try decodeHex(a, s.get("effect").?.object.get("wire_hex").?.string);
-    const env = try parser.parseEnvelope(env_wire);
-    const eff_env = try parser.parseEnvelope(eff_env_wire);
+    const env = try parser.channel.parseEnvelope(env_wire);
+    const eff_env = try parser.channel.parseEnvelope(eff_env_wire);
     // The intent/effect seeds are the envelope bodies, which alias their wires.
     // The span/claim seeds are full standalone structures (claim carries no sig).
     return .{
@@ -113,12 +113,12 @@ pub fn main() !void {
 
     while (iter < budget) {
         const input = nextInput(rnd, seeds, &buf);
-        _ = parser.parseEnvelope(input) catch {};
-        _ = parser.parseGrant(input) catch {};
-        _ = parser.parseIntent(input) catch {};
-        _ = parser.parseSpan(input) catch {};
-        _ = parser.parseEffect(input) catch {};
-        _ = parser.parseClaim(input) catch {};
+        _ = parser.channel.parseEnvelope(input) catch {};
+        _ = parser.channel.parseGrant(input) catch {};
+        _ = parser.channel.parseIntent(input) catch {};
+        _ = parser.channel.parseSpan(input) catch {};
+        _ = parser.channel.parseEffect(input) catch {};
+        _ = parser.channel.parseClaim(input) catch {};
         iter += 1;
         if (iter % 250_000_000 == 0) std.debug.print("fuzz progress: {d}M / {d}M\n", .{ iter / 1_000_000, budget / 1_000_000 });
     }

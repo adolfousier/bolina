@@ -10,6 +10,8 @@
 const std = @import("std");
 const parser = @import("parser.zig");
 const verify = @import("verify.zig");
+const binding = @import("binding.zig");
+const cth = @import("cert_test_helpers.zig");
 
 fn decodeHex(comptime hex: []const u8) [hex.len / 2]u8 {
     var b: [hex.len / 2]u8 = undefined;
@@ -96,7 +98,7 @@ fn ledgerCounting(grant_id: []const u8) bool {
 var effect_calls: usize = 0;
 var effect_grant_id: []const u8 = &[_]u8{};
 
-fn recordEffect(grant: parser.Grant) void {
+fn recordEffect(grant: parser.channel.Grant) void {
     effect_calls += 1;
     effect_grant_id = grant.grant_id;
 }
@@ -110,7 +112,7 @@ fn resetEffect() void {
 // approver (BE-GRANT-03 check 1). The canonical vector is the bare grant, so
 // the tests synthesize that envelope around it; verifyGrantThen only reads
 // body_type and sender from it.
-fn grantEnvelope(grant: parser.Grant) parser.Envelope {
+fn grantEnvelope(grant: parser.channel.Grant) parser.channel.Envelope {
     return .{
         .version = 2,
         .channel_id = &[_]u8{},
@@ -119,7 +121,7 @@ fn grantEnvelope(grant: parser.Grant) parser.Envelope {
         .parent_count = 0,
         .parents = &[_]u8{},
         .ts = 0,
-        .body_type = parser.BODY_GRANT,
+        .body_type = parser.channel.BODY_GRANT,
         .body = &[_]u8{},
         .tbs = &[_]u8{},
         .sig = &[_]u8{},
@@ -129,6 +131,12 @@ fn grantEnvelope(grant: parser.Grant) parser.Envelope {
 fn baseContext(action: []const u8, hook: *const fn ([]const u8) bool) verify.GrantContext {
     return .{
         .own_pubkey = &EXECUTOR_BYTES,
+        .trusted_ca_keys = cth.trustedSet(),
+        .approver_cert = cth.approverCert(),
+        .subject_cert = cth.subjectCert(),
+        .intent_sender = &cth.SUBJECT_PUB,
+        .pending_intent_id = &cth.INTENT_ID,
+        .pending_resource_id = cth.RESOURCE_ID,
         .intent_action = action,
         .now_ms = NOW_MS,
         .first_receipt_ms = FIRST_RECEIPT_MS,
@@ -140,20 +148,20 @@ fn baseContext(action: []const u8, hook: *const fn ([]const u8) bool) verify.Gra
 
 test "BE_ENV_02 envelope sig verifies against sender before body" {
     const env_bytes = decodeHex(ENVELOPE_HEX);
-    const env = try parser.parseEnvelope(&env_bytes);
+    const env = try parser.channel.parseEnvelope(&env_bytes);
     try verify.verifyEnvelope(env);
 }
 
 test "BE_ENV_02 corrupted envelope sig is discarded" {
     var env_bytes = decodeHex(ENVELOPE_HEX);
     env_bytes[220] ^= 0xff; // flip one byte inside the 64-byte sig (216..280)
-    const env = try parser.parseEnvelope(&env_bytes);
+    const env = try parser.channel.parseEnvelope(&env_bytes);
     try std.testing.expectError(error.BadSignature, verify.verifyEnvelope(env));
 }
 
 test "BE_GRANT_03 canonical grant verifies end to end" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
     resetEffect();
@@ -166,7 +174,7 @@ test "BE_GRANT_03 canonical grant verifies end to end" {
 test "BE_GRANT_03 version other than 2 refused first" {
     var grant_bytes = decodeHex(GRANT_HEX);
     grant_bytes[0] = 3; // version field; flipping it also breaks the sig, but
-    const grant = try parser.parseGrant(&grant_bytes); // check 0 runs before check 2
+    const grant = try parser.channel.parseGrant(&grant_bytes); // check 0 runs before check 2
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
     resetEffect();
@@ -177,9 +185,9 @@ test "BE_GRANT_03 version other than 2 refused first" {
 
 test "BE_GRANT_03 grant not delivered as body_type 3 envelope refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     var env = grantEnvelope(grant);
-    env.body_type = parser.BODY_INTENT; // wrong delivery path
+    env.body_type = parser.channel.BODY_INTENT; // wrong delivery path
     const ctx = baseContext(ACTION, &ledgerFresh);
     resetEffect();
     try std.testing.expectError(error.BadEnvelopeBinding, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
@@ -188,7 +196,7 @@ test "BE_GRANT_03 grant not delivered as body_type 3 envelope refused" {
 
 test "BE_GRANT_03 envelope sender not the approver refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     var env = grantEnvelope(grant);
     env.sender = grant.subject; // delivered by the agent, not the approver
     const ctx = baseContext(ACTION, &ledgerFresh);
@@ -200,7 +208,7 @@ test "BE_GRANT_03 envelope sender not the approver refused" {
 test "BE_GRANT_03 corrupted grant sig is refused" {
     var grant_bytes = decodeHex(GRANT_HEX);
     grant_bytes[210] ^= 0xff; // inside the 64-byte sig (207..271)
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
     resetEffect();
@@ -210,7 +218,7 @@ test "BE_GRANT_03 corrupted grant sig is refused" {
 
 test "BE_GRANT_03 executor mismatch refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.own_pubkey = grant.subject; // this executor is not the named one
@@ -221,7 +229,7 @@ test "BE_GRANT_03 executor mismatch refused" {
 
 test "BE_GRANT_02 action digest must match byte for byte" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     // Approving "apt-get install -y sqlite3" does not approve a different
     // command: the recomputed digest over other bytes must not match.
@@ -233,7 +241,7 @@ test "BE_GRANT_02 action digest must match byte for byte" {
 
 test "BE_GRANT_05 not_after in the past is refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.now_ms = grant.not_after + 1; // clock is past the expiry
@@ -247,7 +255,7 @@ test "BE_GRANT_05 not_after in the past is refused" {
 
 test "BE_GRANT_05 not_after beyond T_max from receipt is refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     // First receipt far enough back that not_after exceeds receipt + T_max.
@@ -259,7 +267,7 @@ test "BE_GRANT_05 not_after beyond T_max from receipt is refused" {
 
 test "BE_GRANT_05 more than T_recv since first receipt is refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.now_ms = FIRST_RECEIPT_MS + (T_RECV_S * 1000) + 1;
@@ -273,7 +281,7 @@ test "BE_GRANT_05 more than T_recv since first receipt is refused" {
 // last millisecond before it is the final valid moment.
 test "BE_GRANT_05 not_after exact instant is refused (boundary deny)" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.now_ms = grant.not_after; // equal, not strictly past
@@ -284,7 +292,7 @@ test "BE_GRANT_05 not_after exact instant is refused (boundary deny)" {
 
 test "BE_GRANT_05 not_after minus 1ms is accepted (boundary deny)" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     ctx.now_ms = grant.not_after - 1; // the last valid millisecond
@@ -301,7 +309,7 @@ test "BE_GRANT_05 not_after minus 1ms is accepted (boundary deny)" {
 // harness (tools/mutation-test.py): a >= mutant would refuse at equality.
 test "BE_GRANT_05 not_after exactly T_max from receipt is accepted (boundary)" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     // not_after sits exactly first_receipt + T_max. "More than T_max" is the
@@ -316,7 +324,7 @@ test "BE_GRANT_05 not_after exactly T_max from receipt is accepted (boundary)" {
 
 test "BE_GRANT_05 now exactly T_recv since receipt is accepted (boundary)" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     var ctx = baseContext(ACTION, &ledgerFresh);
     // now sits exactly first_receipt + T_recv. "More than T_recv" is the refuse
@@ -331,7 +339,7 @@ test "BE_GRANT_05 now exactly T_recv since receipt is accepted (boundary)" {
 
 test "BE_GRANT_01 already-consumed grant_id refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerSpent);
     resetEffect();
@@ -345,7 +353,7 @@ test "BE_GRANT_01 already-consumed grant_id refused" {
 test "BE_GRANT_01 ledger hook runs last, after expiry" {
     ledger_calls = 0;
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     // Make expiry fail (check 10). The ledger (check 11) must not be
     // reached, proving the I/O step is ordered after every compute check.
@@ -373,7 +381,7 @@ test "BE_GRANT_01 ledger hook runs last, after expiry" {
 // effect at all.
 test "BE_GRANT_03b valid grant runs the effect exactly once with matching fields" {
     const grant_bytes = decodeHex(GRANT_HEX);
-    const grant = try parser.parseGrant(&grant_bytes);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
     resetEffect();
@@ -383,4 +391,354 @@ test "BE_GRANT_03b valid grant runs the effect exactly once with matching fields
     // a storable handle the caller can keep and mutate.
     try std.testing.expectEqualSlices(u8, grant.grant_id, effect_grant_id);
     try std.testing.expectEqualSlices(u8, grant.action_digest, grant.action_digest);
+}
+
+// ---------------------------------------------------------------------------
+// Folded checks 3, 4, 6, 7, 8 (D-008 provisional debt retired). The cert store
+// and pending-intent table the slice used to defer are now supplied through
+// GrantContext, so the routine models the full twelve-check chain. Each test
+// invalidates exactly one folded check and confirms the grant is refused there
+// before the effect runs.
+// ---------------------------------------------------------------------------
+
+test "BE_GRANT_03 check 3 approver cert without approver role refused" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    // Approver-positioned cert that carries the agent role, not approver.
+    var wire: [512]u8 = undefined;
+    ctx.approver_cert = cth.buildCertInto(
+        &wire,
+        cth.APPROVER_PUB,
+        binding.ROLE_AGENT,
+        &[_]u8{0xc0},
+        cth.CERT_NOT_BEFORE,
+        cth.CERT_NOT_AFTER,
+    );
+    resetEffect();
+    try std.testing.expectError(error.BadApproverCert, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
+test "BE_GRANT_03 check 4 subject cert without agent role refused" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    var wire: [512]u8 = undefined;
+    ctx.subject_cert = cth.buildCertInto(
+        &wire,
+        cth.SUBJECT_PUB,
+        binding.ROLE_EXECUTOR,
+        &[_]u8{0xc0},
+        cth.CERT_NOT_BEFORE,
+        cth.CERT_NOT_AFTER,
+    );
+    resetEffect();
+    try std.testing.expectError(error.BadSubjectCert, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
+test "BE_GRANT_03 check 6 subject not the pending intent sender refused" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    ctx.intent_sender = cth.APPROVER_PUB[0..]; // not the grant's subject
+    resetEffect();
+    try std.testing.expectError(error.WrongSubject, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
+test "BE_GRANT_03 check 7 intent_id matching no pending intent refused" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    const wrong = decodeHex("ffffffffffffffffffffffffffffffff");
+    ctx.pending_intent_id = &wrong;
+    resetEffect();
+    try std.testing.expectError(error.NoMatchingIntent, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
+test "BE_GRANT_03 check 8 resource_id mismatch refused" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    ctx.pending_resource_id = "bol:other/resource";
+    resetEffect();
+    try std.testing.expectError(error.WrongResource, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
+// ---------------------------------------------------------------------------
+// Channel control verification (SPEC 6.1b, 6.1c). The channel layer runs over
+// parsed ControlGenesis/Control bodies and caller-verified certs: the cert
+// chain (BE-ID-02..04) is the caller's job (D-018 boundary), so these tests
+// build minimal Cert literals carrying only the group_ids / sig_pubkey the
+// channel checks read. genesis_exists and is_revoked are package-level hooks
+// mirroring GrantContext.already_consumed.
+
+// GENESIS: member_group=0xAA*8, admin_group=0xBB*8, name="test", one ca_key.
+const CHAN_GENESIS_HEX =
+    "01" ++ "0004" ++ "74657374" ++ // version, name_len, "test"
+    "aaaaaaaaaaaaaaaa" ++ "bbbbbbbbbbbbbbbb" ++ // member_group, admin_group
+    "01" ++ "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" ++ // ca_count=1, one 32-byte key
+    "01"; // match_rule (byte equality, BE-GEN-04)
+
+// action_type=3 (outside the {1,2} set) and action_type=2 (Revoke), empty body.
+const CHAN_CONTROL_BAD_HEX = "01" ++ "03" ++ "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" ++ "0000";
+const CHAN_REVOKE_HEX = "01" ++ "02" ++ "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" ++ "0000";
+
+const CHAN_MEMBER_GROUP = [_]u8{0xaa} ** parser.session.LEN_GROUP_ID; // 8 bytes
+const CHAN_ADMIN_GROUP = [_]u8{0xbb} ** parser.session.LEN_GROUP_ID; // 8 bytes
+const CHAN_SENDER_PUB = [_]u8{0xdd} ** parser.LEN_PUBKEY; // 32 bytes
+const WRONG_ID = [_]u8{0xff} ** 32;
+
+fn genesisExistsNo(_: []const u8) bool {
+    return false;
+}
+fn genesisExistsYes(_: []const u8) bool {
+    return true;
+}
+fn revokedNo(_: []const u8) bool {
+    return false;
+}
+fn revokedYes(_: []const u8) bool {
+    return true;
+}
+
+// A Cert literal carrying only the fields the channel layer reads. group_count,
+// group_ids, and sig_pubkey drive every membership / admin check; the cert
+// chain is verified before these run, so the remaining fields are inert dummies.
+fn channelCert(groups: []const u8, pubkey: []const u8) parser.session.Cert {
+    return .{
+        .version = 2,
+        .role_bits = 0,
+        .sig_pubkey = pubkey,
+        .kex_pubkey = "",
+        .not_before = 0,
+        .not_after = 0,
+        .name = "",
+        .group_count = @intCast(groups.len / parser.session.LEN_GROUP_ID),
+        .group_ids = groups,
+        .ca_sig_count = 0,
+        .ca_sigs = "",
+        .tbs = "",
+    };
+}
+
+// channel_id = BLAKE2s(name || ca_key_0) (SPEC 6.1b). Independent computation
+// of the derivation the verifier runs; not a copy of the code under test.
+fn deriveChannelId(name: []const u8, ca_key_0: []const u8) [32]u8 {
+    var hasher = std.crypto.hash.blake2.Blake2s256.init(.{});
+    hasher.update(name);
+    hasher.update(ca_key_0);
+    var out: [32]u8 = undefined;
+    hasher.final(&out);
+    return out;
+}
+
+fn chanCtx(genesis_yes: bool, revoked_yes: bool) verify.ChannelContext {
+    return .{
+        .genesis_exists = if (genesis_yes) &genesisExistsYes else &genesisExistsNo,
+        .is_revoked = if (revoked_yes) &revokedYes else &revokedNo,
+    };
+}
+
+test "BE_GEN_04 genesis match_rule != 1 is refused" {
+    var bytes = decodeHex(CHAN_GENESIS_HEX);
+    bytes[56] = 0x02; // match_rule: only byte equality (1) is defined
+    const genesis = try parser.channel.parseControlGenesis(&bytes);
+    const admin = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.BadMatchRule, verify.verifyControlGenesis(genesis, admin, &WRONG_ID, chanCtx(false, false)));
+}
+
+test "BE_GEN_03 genesis from a non-admin cert is refused" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const non_admin = channelCert(&CHAN_MEMBER_GROUP, &CHAN_SENDER_PUB); // carries member, not admin
+    try std.testing.expectError(error.GenesisNotAdmin, verify.verifyControlGenesis(genesis, non_admin, &WRONG_ID, chanCtx(false, false)));
+}
+
+test "BE_GEN_03 genesis with a mismatched channel_id is refused" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const admin = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.BadChannelId, verify.verifyControlGenesis(genesis, admin, &WRONG_ID, chanCtx(false, false)));
+}
+
+test "BE_GEN_01 a second genesis for a known channel_id is refused" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const admin = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB);
+    const channel_id = deriveChannelId("test", &[_]u8{0xcc} ** 32);
+    try std.testing.expectError(error.DuplicateGenesis, verify.verifyControlGenesis(genesis, admin, &channel_id, chanCtx(true, false)));
+}
+
+test "BE_CTRL_01 control action_type outside 1,2 is refused" {
+    const control = try parser.channel.parseControl(&decodeHex(CHAN_CONTROL_BAD_HEX));
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const sender = channelCert(&CHAN_MEMBER_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.BadActionType, verify.verifyControl(control, genesis, sender));
+}
+
+test "BE_CTRL_02 revoke from a non-admin cert is refused" {
+    const control = try parser.channel.parseControl(&decodeHex(CHAN_REVOKE_HEX));
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const non_admin = channelCert(&CHAN_MEMBER_GROUP, &CHAN_SENDER_PUB); // member, not admin
+    try std.testing.expectError(error.RevokeNotAdmin, verify.verifyControl(control, genesis, non_admin));
+}
+
+test "BE_CHAN_02 a revoked subject is refused before the group check" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const member = channelCert(&CHAN_MEMBER_GROUP, &CHAN_SENDER_PUB);
+    try std.testing.expectError(error.SubjectRevoked, verify.requireMember(member, genesis, chanCtx(false, true)));
+}
+
+test "BE_CHAN_01 a cert without member_group is refused" {
+    const genesis = try parser.channel.parseControlGenesis(&decodeHex(CHAN_GENESIS_HEX));
+    const non_member = channelCert(&CHAN_ADMIN_GROUP, &CHAN_SENDER_PUB); // admin, not member
+    try std.testing.expectError(error.NotMember, verify.requireMember(non_member, genesis, chanCtx(false, false)));
+}
+
+// ---------------------------------------------------------------------------
+// Lighthouse-served certificates (SPEC 5.1/5.1a, BE-MESH-01/04/05/06).
+//
+// The certs here are the real signed ones from cert_test_helpers, so
+// validateCert runs its full chain rather than a stub. Per D-027 the expected
+// overlay address is recomputed from BLAKE2s in the test rather than taken from
+// binding.deriveOverlayAddr, which is the constant under test.
+// ---------------------------------------------------------------------------
+
+var opened_sig: []const u8 = &[_]u8{};
+var opened_kex: []const u8 = &[_]u8{};
+var open_calls: usize = 0;
+
+fn recordOpen(keys: verify.SessionKeys) void {
+    opened_sig = keys.sig_pubkey;
+    opened_kex = keys.kex_pubkey;
+    open_calls += 1;
+}
+
+fn resetOpen() void {
+    opened_sig = &[_]u8{};
+    opened_kex = &[_]u8{};
+    open_calls = 0;
+}
+
+fn neverRevoked(sig_pubkey: []const u8) bool {
+    _ = sig_pubkey;
+    return false;
+}
+
+fn alwaysRevoked(sig_pubkey: []const u8) bool {
+    _ = sig_pubkey;
+    return true;
+}
+
+// Independent overlay-address derivation: 0xfd prefix over the first 15 bytes
+// of BLAKE2s-256(sig_pubkey) (SPEC 5.1). Recomputed here, not imported.
+fn expectedOverlayAddr(sig_pubkey: []const u8) [16]u8 {
+    var full: [32]u8 = undefined;
+    std.crypto.hash.blake2.Blake2s256.hash(sig_pubkey, &full, .{});
+    var addr: [16]u8 = undefined;
+    addr[0] = 0xfd;
+    @memcpy(addr[1..16], full[0..15]);
+    return addr;
+}
+
+// A time inside the helper certs' validity window (cert_test_helpers pins the
+// window to CERT_NOT_BEFORE..CERT_NOT_AFTER).
+const MESH_NOW: u64 = 1_500_000_000_000;
+
+fn meshCtx(now_ms: u64, revoked: bool) verify.MeshContext {
+    return .{
+        .trusted_ca_keys = cth.trustedSet(),
+        .now_ms = now_ms,
+        .is_revoked = if (revoked) &alwaysRevoked else &neverRevoked,
+    };
+}
+
+test "BE_MESH_04 a served cert whose derived address matches opens the session" {
+    resetOpen();
+    const served = cth.subjectCert();
+    const addr = expectedOverlayAddr(&cth.SUBJECT_PUB);
+    try verify.verifyServedCertThen(served, &addr, meshCtx(MESH_NOW, false), &recordOpen);
+    try std.testing.expectEqual(@as(usize, 1), open_calls);
+    try std.testing.expectEqualSlices(u8, &cth.SUBJECT_PUB, opened_sig);
+    try std.testing.expectEqualSlices(u8, served.kex_pubkey, opened_kex);
+}
+
+test "BE_MESH_04 an address that does not derive from the served key is refused" {
+    resetOpen();
+    const served = cth.subjectCert();
+    var addr = expectedOverlayAddr(&cth.SUBJECT_PUB);
+    addr[15] ^= 0x01; // one bit off the address that was asked for
+    try std.testing.expectError(error.AddressMismatch, verify.verifyServedCertThen(served, &addr, meshCtx(MESH_NOW, false), &recordOpen));
+    try std.testing.expectEqual(@as(usize, 0), open_calls);
+}
+
+test "BE_MESH_04 a served cert signed by an untrusted CA is refused" {
+    resetOpen();
+    const served = cth.subjectCert();
+    const addr = expectedOverlayAddr(&cth.SUBJECT_PUB);
+    const empty_trust: []const []const u8 = &[_][]const u8{};
+    const ctx: verify.MeshContext = .{
+        .trusted_ca_keys = empty_trust,
+        .now_ms = MESH_NOW,
+        .is_revoked = &neverRevoked,
+    };
+    try std.testing.expectError(error.ServedCertInvalid, verify.verifyServedCertThen(served, &addr, ctx, &recordOpen));
+    try std.testing.expectEqual(@as(usize, 0), open_calls);
+}
+
+// The BE-MESH-01 case that matters: a lighthouse cannot forge, so its best
+// attack is to answer a lookup with somebody else's genuinely valid
+// certificate. BE-ID-01 detects it because the address is derived from the key,
+// so the answer is not the identity that was asked for.
+test "BE_MESH_01 a valid cert for a different identity is refused as a substitution" {
+    resetOpen();
+    const substituted = cth.approverCert(); // valid, trusted, in window, wrong identity
+    const asked_for = expectedOverlayAddr(&cth.SUBJECT_PUB);
+    try std.testing.expectError(error.AddressMismatch, verify.verifyServedCertThen(substituted, &asked_for, meshCtx(MESH_NOW, false), &recordOpen));
+    try std.testing.expectEqual(@as(usize, 0), open_calls);
+    // The same certificate is accepted for its own address, so the refusal
+    // above is identity substitution and not a broken certificate.
+    const own = expectedOverlayAddr(&cth.APPROVER_PUB);
+    try verify.verifyServedCertThen(substituted, &own, meshCtx(MESH_NOW, false), &recordOpen);
+    try std.testing.expectEqual(@as(usize, 1), open_calls);
+}
+
+// BE-MESH-05 is a shape guarantee, so it is asserted over the type rather than
+// over one call: the continuation must not be able to carry an authority fact.
+// Adding role_bits, group_ids or name to SessionKeys fails here.
+test "BE_MESH_05 the session-open continuation carries the two keys and nothing else" {
+    const fields = @typeInfo(verify.SessionKeys).@"struct".fields;
+    try std.testing.expectEqual(@as(usize, 2), fields.len);
+    try std.testing.expectEqualStrings("sig_pubkey", fields[0].name);
+    try std.testing.expectEqualStrings("kex_pubkey", fields[1].name);
+}
+
+// BE-MESH-06: the same certificate, cached and reused. Accepted while its
+// window holds, refused once it has passed, with no re-parse and no re-fill in
+// between: the verdict cannot be carried forward because no verdict is stored.
+test "BE_MESH_06 a cached cert is refused once its validity window has passed" {
+    resetOpen();
+    const served = cth.subjectCert();
+    const addr = expectedOverlayAddr(&cth.SUBJECT_PUB);
+    try verify.verifyServedCertThen(served, &addr, meshCtx(MESH_NOW, false), &recordOpen);
+    try std.testing.expectEqual(@as(usize, 1), open_calls);
+    try std.testing.expectError(error.ServedCertInvalid, verify.verifyServedCertThen(served, &addr, meshCtx(cth.CERT_NOT_AFTER, false), &recordOpen));
+    try std.testing.expectEqual(@as(usize, 1), open_calls);
+}
+
+test "BE_MESH_06 revocation is consulted at use, not at cache fill" {
+    resetOpen();
+    const served = cth.subjectCert();
+    const addr = expectedOverlayAddr(&cth.SUBJECT_PUB);
+    try verify.verifyServedCertThen(served, &addr, meshCtx(MESH_NOW, false), &recordOpen);
+    try std.testing.expectEqual(@as(usize, 1), open_calls);
+    try std.testing.expectError(error.ServedCertRevoked, verify.verifyServedCertThen(served, &addr, meshCtx(MESH_NOW, true), &recordOpen));
+    try std.testing.expectEqual(@as(usize, 1), open_calls);
 }

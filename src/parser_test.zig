@@ -42,13 +42,13 @@ fn decodeHex(comptime hex: []const u8) [hex.len / 2]u8 {
 const ENVELOPE_BYTES = decodeHex(ENVELOPE_HEX);
 
 test "BE_WIRE_01 envelope round-trips the canonical vector, zero heap" {
-    const env = try parser.parseEnvelope(&ENVELOPE_BYTES);
+    const env = try parser.channel.parseEnvelope(&ENVELOPE_BYTES);
 
     try std.testing.expectEqual(@as(u8, 2), env.version);
     try std.testing.expectEqual(@as(u64, 1), env.seq);
     try std.testing.expectEqual(@as(u8, 0), env.parent_count);
     try std.testing.expectEqual(@as(u64, 1700000010000), env.ts);
-    try std.testing.expectEqual(parser.BODY_INTENT, env.body_type);
+    try std.testing.expectEqual(parser.channel.BODY_INTENT, env.body_type);
 
     try std.testing.expectEqual(@as(usize, 0), env.parents.len);
     try std.testing.expectEqual(@as(usize, 129), env.body.len);
@@ -63,8 +63,8 @@ test "BE_WIRE_01 envelope round-trips the canonical vector, zero heap" {
 }
 
 test "BE_BODY_01 intent body slices the opaque action without parsing it" {
-    const env = try parser.parseEnvelope(&ENVELOPE_BYTES);
-    const intent = try parser.parseIntent(env.body);
+    const env = try parser.channel.parseEnvelope(&ENVELOPE_BYTES);
+    const intent = try parser.channel.parseIntent(env.body);
 
     try std.testing.expectEqualSlices(u8, &decodeHex(INTENT_ID_HEX), intent.intent_id);
     try std.testing.expectEqualStrings("bol:c3efd641bfa0582f/logs/deploy.log", intent.resource_id);
@@ -76,14 +76,14 @@ test "BE_BODY_01 intent body slices the opaque action without parsing it" {
 test "BE_WIRE_02 truncated signature is rejected" {
     var buf: [279]u8 = undefined;
     @memcpy(buf[0..279], ENVELOPE_BYTES[0..279]);
-    try std.testing.expectError(error.Truncated, parser.parseEnvelope(&buf));
+    try std.testing.expectError(error.Truncated, parser.channel.parseEnvelope(&buf));
 }
 
 test "BE_WIRE_02 trailing byte is rejected" {
     var buf: [281]u8 = undefined;
     @memcpy(buf[0..280], &ENVELOPE_BYTES);
     buf[280] = 0x00;
-    try std.testing.expectError(error.TrailingBytes, parser.parseEnvelope(&buf));
+    try std.testing.expectError(error.TrailingBytes, parser.channel.parseEnvelope(&buf));
 }
 
 test "BE_WIRE_02 oversize body_len is rejected before any large read" {
@@ -94,26 +94,26 @@ test "BE_WIRE_02 oversize body_len is rejected before any large read" {
     buf[84] = 0xff;
     buf[85] = 0xff;
     buf[86] = 0xff;
-    try std.testing.expectError(error.Oversize, parser.parseEnvelope(&buf));
+    try std.testing.expectError(error.Oversize, parser.channel.parseEnvelope(&buf));
 }
 
 test "BE_WIRE_02 parent_count above the bound is rejected" {
     var buf: [280]u8 = ENVELOPE_BYTES;
     // parent_count lives at byte 73 (version + channel_id + sender + seq).
     buf[73] = 5;
-    try std.testing.expectError(error.Oversize, parser.parseEnvelope(&buf));
+    try std.testing.expectError(error.Oversize, parser.channel.parseEnvelope(&buf));
 }
 
 test "BE_WIRE_02 empty input is rejected" {
-    try std.testing.expectError(error.Truncated, parser.parseEnvelope(&[_]u8{}));
+    try std.testing.expectError(error.Truncated, parser.channel.parseEnvelope(&[_]u8{}));
 }
 
 test "BE_WIRE_02 intent with a trailing byte is rejected" {
-    const env = try parser.parseEnvelope(&ENVELOPE_BYTES);
+    const env = try parser.channel.parseEnvelope(&ENVELOPE_BYTES);
     var buf: [130]u8 = undefined;
     @memcpy(buf[0..129], env.body);
     buf[129] = 0x00;
-    try std.testing.expectError(error.TrailingBytes, parser.parseIntent(&buf));
+    try std.testing.expectError(error.TrailingBytes, parser.channel.parseIntent(&buf));
 }
 
 // ---------------------------------------------------------------------------
@@ -348,7 +348,7 @@ const FRAG_HEADER_HEX =
 test "BE_WIRE_01 fragment header round-trips the pinned layout, zero heap" {
     const bytes = decodeHex(FRAG_HEADER_HEX);
     try std.testing.expectEqual(@as(usize, 16), bytes.len);
-    const frag = try parser.parseFragmentHeader(&bytes);
+    const frag = try parser.session.parseFragmentHeader(&bytes);
     try std.testing.expectEqual(@as(u64, 0x0102030405060708), frag.msg_id);
     try std.testing.expectEqual(@as(u16, 2), frag.index);
     try std.testing.expectEqual(@as(u16, 5), frag.total);
@@ -362,7 +362,7 @@ test "BE_WIRE_01 fragment header with an empty payload is accepted (no spec floo
     // so the parser does not invent one.
     const bytes = decodeHex("0102030405060708" ++ "0000" ++ "0001");
     try std.testing.expectEqual(@as(usize, 12), bytes.len);
-    const frag = try parser.parseFragmentHeader(&bytes);
+    const frag = try parser.session.parseFragmentHeader(&bytes);
     try std.testing.expectEqual(@as(u16, 0), frag.index);
     try std.testing.expectEqual(@as(u16, 1), frag.total);
     try std.testing.expectEqual(@as(usize, 0), frag.payload.len);
@@ -373,7 +373,7 @@ test "BE_WIRE_02 fragment header with total == 0 is rejected as Malformed" {
     // total field at bytes 10..11; set to 0.
     bytes[10] = 0x00;
     bytes[11] = 0x00;
-    try std.testing.expectError(error.Malformed, parser.parseFragmentHeader(&bytes));
+    try std.testing.expectError(error.Malformed, parser.session.parseFragmentHeader(&bytes));
 }
 
 test "BE_WIRE_02 fragment header with index >= total is rejected as Malformed" {
@@ -381,13 +381,13 @@ test "BE_WIRE_02 fragment header with index >= total is rejected as Malformed" {
     // index 2, total 5 in the fixture; raise index to 5 so index == total.
     bytes[8] = 0x00;
     bytes[9] = 0x05;
-    try std.testing.expectError(error.Malformed, parser.parseFragmentHeader(&bytes));
+    try std.testing.expectError(error.Malformed, parser.session.parseFragmentHeader(&bytes));
 }
 
 test "BE_WIRE_02 truncated fragment header is rejected" {
     const bytes = decodeHex(FRAG_HEADER_HEX);
     // 11 bytes: one short of the 12-byte header.
-    try std.testing.expectError(error.Truncated, parser.parseFragmentHeader(bytes[0..11]));
+    try std.testing.expectError(error.Truncated, parser.session.parseFragmentHeader(bytes[0..11]));
 }
 
 // LookupRequest (SPEC 5.1a): u8 version + [16] overlay_addr = 17 bytes fixed.
@@ -399,7 +399,7 @@ const LOOKUP_REQ_HEX =
 test "BE_WIRE_01 lookup request round-trips the pinned layout, zero heap" {
     const bytes = decodeHex(LOOKUP_REQ_HEX);
     try std.testing.expectEqual(@as(usize, 17), bytes.len);
-    const req = try parser.parseLookupRequest(&bytes);
+    const req = try parser.session.parseLookupRequest(&bytes);
     try std.testing.expectEqual(@as(u8, 1), req.version);
     try std.testing.expectEqualSlices(u8, bytes[1..17], req.overlay_addr);
 }
@@ -409,13 +409,13 @@ test "BE_WIRE_02 lookup request with a trailing byte is rejected" {
     var buf: [18]u8 = undefined;
     @memcpy(buf[0..17], &bytes);
     buf[17] = 0x00;
-    try std.testing.expectError(error.TrailingBytes, parser.parseLookupRequest(&buf));
+    try std.testing.expectError(error.TrailingBytes, parser.session.parseLookupRequest(&buf));
 }
 
 test "BE_WIRE_02 truncated lookup request is rejected" {
     const bytes = decodeHex(LOOKUP_REQ_HEX);
     // 16 bytes: one short of the 17-byte fixed message.
-    try std.testing.expectError(error.Truncated, parser.parseLookupRequest(bytes[0..16]));
+    try std.testing.expectError(error.Truncated, parser.session.parseLookupRequest(bytes[0..16]));
 }
 
 // LookupResponse (SPEC 5.1a): u8 version + [16] overlay_addr + u8 endpoint_count +
@@ -436,7 +436,7 @@ const LOOKUP_RESP_HEX =
 test "BE_WIRE_01 lookup response round-trips the pinned layout, zero heap" {
     const bytes = decodeHex(LOOKUP_RESP_HEX);
     try std.testing.expectEqual(@as(usize, 62), bytes.len);
-    const resp = try parser.parseLookupResponse(&bytes);
+    const resp = try parser.session.parseLookupResponse(&bytes);
     try std.testing.expectEqual(@as(u8, 1), resp.version);
     try std.testing.expectEqualSlices(u8, bytes[1..17], resp.overlay_addr);
     try std.testing.expectEqual(@as(u8, 2), resp.endpoint_count);
@@ -452,14 +452,14 @@ test "BE_WIRE_02 lookup response with a trailing byte is rejected" {
     var buf: [63]u8 = undefined;
     @memcpy(buf[0..62], &bytes);
     buf[62] = 0x00;
-    try std.testing.expectError(error.TrailingBytes, parser.parseLookupResponse(&buf));
+    try std.testing.expectError(error.TrailingBytes, parser.session.parseLookupResponse(&buf));
 }
 
 test "BE_WIRE_02 lookup response with fewer endpoint bytes than declared is rejected" {
     const bytes = decodeHex(LOOKUP_RESP_HEX);
     // endpoint_count = 2 (38 bytes needed) but truncate after one endpoint:
     // version(1) + overlay(16) + count(1) + one endpoint(19) = 37 bytes.
-    try std.testing.expectError(error.Truncated, parser.parseLookupResponse(bytes[0..37]));
+    try std.testing.expectError(error.Truncated, parser.session.parseLookupResponse(bytes[0..37]));
 }
 
 test "BE_WIRE_02 lookup response whose cert is shorter than cert_len is rejected" {
@@ -467,7 +467,7 @@ test "BE_WIRE_02 lookup response whose cert is shorter than cert_len is rejected
     // cert_len at bytes 56..57 (= 1+16+1+19+19); claim 5 bytes, only 4 follow.
     bytes[56] = 0x00;
     bytes[57] = 0x05;
-    try std.testing.expectError(error.Truncated, parser.parseLookupResponse(&bytes));
+    try std.testing.expectError(error.Truncated, parser.session.parseLookupResponse(&bytes));
 }
 
 test "BE_WIRE_01 lookup response with no endpoints is accepted" {
@@ -476,7 +476,7 @@ test "BE_WIRE_01 lookup response with no endpoints is accepted" {
     const hex = "01" ++ OVERLAY_ADDR_FILL ++ "00" ++ "0004" ++ CERT_FILL;
     const bytes = decodeHex(hex);
     try std.testing.expectEqual(@as(usize, 24), bytes.len); // 1+16+1+0+2+4
-    const resp = try parser.parseLookupResponse(&bytes);
+    const resp = try parser.session.parseLookupResponse(&bytes);
     try std.testing.expectEqual(@as(u8, 0), resp.endpoint_count);
     try std.testing.expectEqual(@as(usize, 0), resp.endpoints.len);
     try std.testing.expectEqualSlices(u8, bytes[20..24], resp.cert);
@@ -505,7 +505,7 @@ const CERT_WIRE_HEX =
 test "BE_WIRE_01 certificate round-trips the canonical vector, zero heap" {
     const bytes = decodeHex(CERT_WIRE_HEX);
     try std.testing.expectEqual(@as(usize, 293), bytes.len);
-    const cert = try parser.parseCert(&bytes);
+    const cert = try parser.session.parseCert(&bytes);
     try std.testing.expectEqual(@as(u8, 2), cert.version);
     try std.testing.expectEqual(@as(u8, 0x03), cert.role_bits);
     // sig_pubkey is the agent Ed25519 key (same as SENDER_HEX); aliases the buffer.
@@ -531,7 +531,7 @@ test "BE_WIRE_01 certificate with version != 2 is parsed, policy deferred (SPEC 
     // parses and the caller applies version policy under BE-ID-01..04.
     var bytes = decodeHex(CERT_WIRE_HEX);
     bytes[0] = 0x03;
-    const cert = try parser.parseCert(&bytes);
+    const cert = try parser.session.parseCert(&bytes);
     try std.testing.expectEqual(@as(u8, 3), cert.version);
 }
 
@@ -544,7 +544,7 @@ test "BE_WIRE_01 certificate with a single CA signature and empty name is accept
         "0000" ++ "00" ++ "01" ++ "cc" ** 32 ++ "dd" ** 64;
     const bytes = decodeHex(hex);
     try std.testing.expectEqual(@as(usize, 182), bytes.len);
-    const cert = try parser.parseCert(&bytes);
+    const cert = try parser.session.parseCert(&bytes);
     try std.testing.expectEqual(@as(u8, 1), cert.role_bits);
     try std.testing.expectEqual(@as(usize, 0), cert.name.len);
     try std.testing.expectEqual(@as(u8, 0), cert.group_count);
@@ -558,25 +558,25 @@ test "BE_WIRE_02 certificate with name_len above 64 is rejected as Oversize" {
     // name_len at bytes 82..83; set to 65 (big-endian). field16 rejects > MAX_NAME.
     bytes[82] = 0x00;
     bytes[83] = 0x41;
-    try std.testing.expectError(error.Oversize, parser.parseCert(&bytes));
+    try std.testing.expectError(error.Oversize, parser.session.parseCert(&bytes));
 }
 
 test "BE_WIRE_02 certificate with group_count above 16 is rejected as Oversize" {
     var bytes = decodeHex(CERT_WIRE_HEX);
     bytes[91] = 17; // group_count
-    try std.testing.expectError(error.Oversize, parser.parseCert(&bytes));
+    try std.testing.expectError(error.Oversize, parser.session.parseCert(&bytes));
 }
 
 test "BE_WIRE_02 certificate with ca_sig_count == 0 is rejected as Malformed" {
     var bytes = decodeHex(CERT_WIRE_HEX);
     bytes[100] = 0x00; // ca_sig_count: a cert needs at least one countersignature
-    try std.testing.expectError(error.Malformed, parser.parseCert(&bytes));
+    try std.testing.expectError(error.Malformed, parser.session.parseCert(&bytes));
 }
 
 test "BE_WIRE_02 certificate with ca_sig_count above 4 is rejected as Oversize" {
     var bytes = decodeHex(CERT_WIRE_HEX);
     bytes[100] = 0x05; // ca_sig_count > MAX_CA_SIGS; checked before the read loop
-    try std.testing.expectError(error.Oversize, parser.parseCert(&bytes));
+    try std.testing.expectError(error.Oversize, parser.session.parseCert(&bytes));
 }
 
 test "BE_WIRE_02 certificate with non-ascending (equal) CA keys is rejected as Malformed" {
@@ -584,7 +584,7 @@ test "BE_WIRE_02 certificate with non-ascending (equal) CA keys is rejected as M
     // Copy ca_key[0] (bytes 101..133) over ca_key[1] (bytes 197..229): equal keys
     // violate the strict-ascending / pairwise-distinct rule (SPEC 3.1).
     @memcpy(bytes[197..229], bytes[101..133]);
-    try std.testing.expectError(error.Malformed, parser.parseCert(&bytes));
+    try std.testing.expectError(error.Malformed, parser.session.parseCert(&bytes));
 }
 
 test "BE_WIRE_02 certificate with a trailing byte is rejected" {
@@ -592,11 +592,98 @@ test "BE_WIRE_02 certificate with a trailing byte is rejected" {
     var buf: [294]u8 = undefined;
     @memcpy(buf[0..293], &bytes);
     buf[293] = 0x00;
-    try std.testing.expectError(error.TrailingBytes, parser.parseCert(&buf));
+    try std.testing.expectError(error.TrailingBytes, parser.session.parseCert(&buf));
 }
 
 test "BE_WIRE_02 truncated certificate is rejected" {
     const bytes = decodeHex(CERT_WIRE_HEX);
     // 200 bytes: cuts into the first CA signature region.
-    try std.testing.expectError(error.Truncated, parser.parseCert(bytes[0..200]));
+    try std.testing.expectError(error.Truncated, parser.session.parseCert(bytes[0..200]));
+}
+
+// ---------------------------------------------------------------------------
+// Channel control structures (SPEC 6.1b, 6.1c). Hand-built flat bodies, not a
+// cross-implementation vector: ControlGenesis and Control are unsigned inner
+// bodies authenticated by the enclosing envelope signature, so the parser is
+// tested against the SPEC layout directly. GENESIS: version | name |
+// member_group | admin_group | ca_count,ca_keys | match_rule. CONTROL:
+// version | action_type | subject | body.
+
+const GENESIS_HEX =
+    "01" ++ // version
+    "0004" ++ "74657374" ++ // name_len, "test"
+    "aaaaaaaaaaaaaaaa" ++ // member_group (8 bytes)
+    "bbbbbbbbbbbbbbbb" ++ // admin_group (8 bytes)
+    "01" ++ "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" ++ // ca_count=1, one 32-byte key
+    "01"; // match_rule (byte equality, BE-GEN-04)
+
+const CONTROL_HEX =
+    "01" ++ // version (parsed, not enforced)
+    "01" ++ // action_type (1 = Genesis)
+    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" ++ // subject (32 bytes)
+    "0003" ++ "666f6f"; // body_len, "foo"
+
+test "BE_WIRE_01 control genesis round-trips the SPEC layout, zero heap" {
+    const bytes = decodeHex(GENESIS_HEX);
+    const g = try parser.channel.parseControlGenesis(&bytes);
+
+    try std.testing.expectEqual(@as(u8, 1), g.version);
+    try std.testing.expectEqualSlices(u8, "test", g.name);
+    try std.testing.expectEqual(@as(usize, 8), g.member_group.len);
+    try std.testing.expectEqual(@as(usize, 8), g.admin_group.len);
+    try std.testing.expectEqual(@as(u8, 1), g.ca_count);
+    try std.testing.expectEqual(@as(usize, 32), g.ca_keys.len);
+    try std.testing.expectEqual(@as(u8, 1), g.match_rule);
+
+    // Slices alias the input buffer.
+    try std.testing.expectEqualSlices(u8, bytes[7..15], g.member_group);
+    try std.testing.expectEqualSlices(u8, bytes[15..23], g.admin_group);
+    try std.testing.expectEqualSlices(u8, bytes[24..56], g.ca_keys);
+}
+
+test "BE_WIRE_02 control genesis ca_count == 0 is rejected as Malformed" {
+    var bytes = decodeHex(GENESIS_HEX);
+    bytes[23] = 0x00; // grammar floor 1: a trust set needs at least one key
+    try std.testing.expectError(error.Malformed, parser.channel.parseControlGenesis(&bytes));
+}
+
+test "BE_WIRE_02 control genesis ca_count above 16 is rejected as Oversize" {
+    var bytes = decodeHex(GENESIS_HEX);
+    bytes[23] = 17; // BE-TR-05: ca_count bounded before it drives the slice
+    try std.testing.expectError(error.Oversize, parser.channel.parseControlGenesis(&bytes));
+}
+
+test "BE_WIRE_02 control genesis with a trailing byte is rejected" {
+    const bytes = decodeHex(GENESIS_HEX);
+    var buf: [58]u8 = undefined;
+    @memcpy(buf[0..57], &bytes);
+    buf[57] = 0x00;
+    try std.testing.expectError(error.TrailingBytes, parser.channel.parseControlGenesis(&buf));
+}
+
+test "BE_WIRE_02 truncated control genesis is rejected" {
+    const bytes = decodeHex(GENESIS_HEX);
+    // 40 bytes: cuts into the ca_keys slice read at offset 24.
+    try std.testing.expectError(error.Truncated, parser.channel.parseControlGenesis(bytes[0..40]));
+}
+
+test "BE_WIRE_01 control message round-trips the SPEC layout, zero heap" {
+    const bytes = decodeHex(CONTROL_HEX);
+    const c = try parser.channel.parseControl(&bytes);
+
+    try std.testing.expectEqual(@as(u8, 1), c.action_type);
+    try std.testing.expectEqual(@as(usize, 32), c.subject.len);
+    try std.testing.expectEqualSlices(u8, "foo", c.body);
+
+    // Slices alias the input buffer; the version byte is consumed and discarded.
+    try std.testing.expectEqualSlices(u8, bytes[2..34], c.subject);
+    try std.testing.expectEqualSlices(u8, bytes[36..39], c.body);
+}
+
+test "BE_WIRE_02 control message with a trailing byte is rejected" {
+    const bytes = decodeHex(CONTROL_HEX);
+    var buf: [40]u8 = undefined;
+    @memcpy(buf[0..39], &bytes);
+    buf[39] = 0x00;
+    try std.testing.expectError(error.TrailingBytes, parser.channel.parseControl(&buf));
 }

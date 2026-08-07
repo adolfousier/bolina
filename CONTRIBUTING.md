@@ -66,12 +66,12 @@ source.
 - M5 reads the parser module's line count from the source tree.
 - M8 derives the pointer-minting builtin set `{@ptrCast, @ptrFromInt}` from the Zig language
   reference; round 4 deleted the capability value, so the count it gates is zero.
-- M9 counts exit-point call sites from `src/parser.zig` and matches them against the `Branch`
+- M9 counts exit-point call sites from the parser module (`src/parser.zig` and `src/parser/`) and matches them against the `Branch`
   enum one for one.
 
 A literal number in a gate is a smell. If one is unavoidable, it must cite the external source
-it mirrors: M10's count of 1 mirrors the single reach path in `src/verify.zig`; M5's 1500 mirrors
-BE-SURF-03's "1500 lines". M8's count is zero because round 4 deleted the capability value; a zero
+it mirrors: M10's count of 1 mirrors the single reach path in `src/verify.zig`; M5 and M11 carry
+no literal at all, parsing the cap from BE-SURF-03's text. M8's count is zero because round 4 deleted the capability value; a zero
 count needs no external mirror, since it is the absence, not a literal. A literal that names no
 source is a denominator the gate invented, and inventing a denominator is the same failure as
 counting what the gate controls.

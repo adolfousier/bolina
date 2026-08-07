@@ -188,8 +188,8 @@ test "BE_EVID_05 superseded volatile span drops claim stable span unaffected" {
         var arena = std.heap.ArenaAllocator.init(a);
         defer arena.deinit();
         const al = arena.allocator();
-        const span = try parser.parseSpan(try H.spanWire(al, sid, H.idOf(0x31), H.SUBJECT, 1, 1, o, kp));
-        const spans: []const parser.Span = &.{span};
+        const span = try parser.channel.parseSpan(try H.spanWire(al, sid, H.idOf(0x31), H.SUBJECT, 1, 1, o, kp));
+        const spans: []const parser.channel.Span = &.{span};
         const claim = try H.buildClaim(al, "deploy ok", H.SUBJECT, 242, &.{sid});
         try H.expectState(
             evidence.resolveClaim(claim, spans, H.ctx(&H.roleExecutor, &H.originEffect, &dagHook), &claim_env),
@@ -203,8 +203,8 @@ test "BE_EVID_05 superseded volatile span drops claim stable span unaffected" {
         var arena = std.heap.ArenaAllocator.init(a);
         defer arena.deinit();
         const al = arena.allocator();
-        const span = try parser.parseSpan(try H.spanWire(al, sid, H.idOf(0x31), H.SUBJECT, 1, 2, o, kp));
-        const spans: []const parser.Span = &.{span};
+        const span = try parser.channel.parseSpan(try H.spanWire(al, sid, H.idOf(0x31), H.SUBJECT, 1, 2, o, kp));
+        const spans: []const parser.channel.Span = &.{span};
         const claim = try H.buildClaim(al, "deploy ok", H.SUBJECT, 242, &.{sid});
         try H.expectSupported(
             evidence.resolveClaim(claim, spans, H.ctx(&H.roleExecutor, &H.originEffect, &dagHook), &claim_env),
@@ -222,8 +222,8 @@ test "BE_EVID_05 superseded volatile span drops claim stable span unaffected" {
         var arena = std.heap.ArenaAllocator.init(a);
         defer arena.deinit();
         const al = arena.allocator();
-        const span = try parser.parseSpan(try H.spanWire(al, sid, H.idOf(0x31), H.SUBJECT, 1, 1, o, kp));
-        const spans: []const parser.Span = &.{span};
+        const span = try parser.channel.parseSpan(try H.spanWire(al, sid, H.idOf(0x31), H.SUBJECT, 1, 1, o, kp));
+        const spans: []const parser.channel.Span = &.{span};
         const claim = try H.buildClaim(al, "deploy ok", H.SUBJECT, 242, &.{sid});
         try H.expectSupported(
             evidence.resolveClaim(claim, spans, H.ctx(&H.roleExecutor, &H.originEffect, &dagHook), &claim_env),
