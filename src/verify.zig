@@ -442,7 +442,7 @@ pub const AdmissionContext = struct {
 
 // BE-ENV-03: body_type -> role map enforcement. Intent -> agent,
 // Grant/Refusal -> approver, Effect+Span -> executor.
-fn bodyTypeAllowed(body_type: u8, role_bits: u16) bool {
+pub fn bodyTypeAllowed(body_type: u8, role_bits: u16) bool {
     const is_agent = (role_bits & binding.ROLE_AGENT) != 0;
     const is_approver = (role_bits & binding.ROLE_APPROVER) != 0;
     const is_executor = (role_bits & binding.ROLE_EXECUTOR) != 0;
@@ -450,7 +450,7 @@ fn bodyTypeAllowed(body_type: u8, role_bits: u16) bool {
     return switch (body_type) {
         parser.channel.BODY_INTENT => is_agent,
         parser.channel.BODY_GRANT, parser.channel.BODY_REFUSAL => is_approver,
-        parser.channel.BODY_EFFECT, parser.channel.BODY_SPAN => is_executor,
+        parser.channel.BODY_EFFECT => is_executor,
         parser.channel.BODY_CONTROL => true, // Control role-gated at verification
         else => false,
     };

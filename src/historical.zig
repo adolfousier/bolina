@@ -57,7 +57,7 @@ pub fn historicalValidity(
 ) HistoricalError!void {
     // BE-HIST-03: check that the envelope is a causal descendant of its anchor.
     const anchor_hash = ctx.ledger.getAnchor(sender) orelse return error.AnchorNotFound;
-    if (!ctx.dag.supersedes(anchor_hash, env_hash, env_hash)) {
+    if (!ctx.dag.isAncestor(anchor_hash, env_hash)) {
         return error.NotDescendantOfAnchor;
     }
 
