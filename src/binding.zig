@@ -43,6 +43,7 @@ pub const DOMAIN_BINDING: u8 = 0x05; // BE-SIG-01: handshake binding over Noise 
 pub const ROLE_AGENT: u8 = 1 << 1;
 pub const ROLE_EXECUTOR: u8 = 1 << 2;
 pub const ROLE_APPROVER: u8 = 1 << 3;
+pub const MAX_PRIVILEGED_LIFETIME_MS: u64 = 2_592_000_000; // BE-REV-01: 30-day cap
 
 pub const APPROVER_QUORUM: u8 = 2; // BE-ID-04: approver cert needs >= 2 CA sigs
 const OVERLAY_PREFIX: u8 = 0xfd; // BE-ID-01: fd00::/8 ULA prefix
@@ -57,6 +58,7 @@ pub const BindingError = error{
     BadCASignature, // BE-ID-02: a ca_sig does not verify over cert.tbs
     UntrustedCA, // BE-ID-02: a ca_key is not in the local trust set
     CertExpired, // BE-ID-02: local clock outside not_before..not_after
+    CertTooLongLived, // BE-REV-01
     RoleAgentApprover, // BE-ID-03 / BE-ROLE-01: agent + approver
     RoleAgentExecutor, // BE-ID-03 / BE-ROLE-02: agent + executor
     RoleApproverExecutor, // BE-ID-03 / BE-ROLE-04: approver + executor
@@ -146,6 +148,8 @@ pub fn validateCert(cert: Cert, trusted_ca_keys: []const []const u8, now_ms: u64
     // Validity window: inclusive at not_before, exclusive at not_after (X.509
     // convention; a cert is expired the instant its not_after is reached).
     if (now_ms < cert.not_before or now_ms >= cert.not_after) return error.CertExpired;
+    if ((cert.role_bits & (ROLE_APPROVER | ROLE_EXECUTOR)) != 0 and
+        cert.not_after - cert.not_before > MAX_PRIVILEGED_LIFETIME_MS) return error.CertTooLongLived;
 
     const pair_len = parser.session.LEN_CA_KEY + parser.session.LEN_CA_SIG;
     var i: usize = 0;

@@ -59,9 +59,11 @@ pub const RESOURCE_ID = "bol:c3efd641bfa0582f/logs/deploy.log";
 // Validity window wide enough to contain every grant clock the verify tests
 // swing (now_ms ranges across the expiry boundary tests from ~1.699e12 to
 // ~1.7001e12). Far apart so the window is never the failure under test unless a
-// cert test deliberately sets it.
+// cert test deliberately sets it. Used for agent certificates (no lifetime cap).
 pub const CERT_NOT_BEFORE: u64 = 1_000_000_000_000;
 pub const CERT_NOT_AFTER: u64 = 2_000_000_000_000;
+pub const PRIVILEGED_CERT_NOT_BEFORE: u64 = 1_699_000_000_000; // BE-REV-01: 30-day cap
+pub const PRIVILEGED_CERT_NOT_AFTER: u64 = 1_701_592_000_000;
 
 // Trusted CA seed prefixes (their pubkeys populate the local trust set).
 pub const TRUSTED_CA_PREFIXES = [_]u8{ 0xc0, 0xc1, 0xc2 };
@@ -183,8 +185,8 @@ fn ensureInited() void {
         APPROVER_PUB,
         binding.ROLE_APPROVER,
         &[_]u8{ 0xc0, 0xc1 },
-        CERT_NOT_BEFORE,
-        CERT_NOT_AFTER,
+        PRIVILEGED_CERT_NOT_BEFORE,
+        PRIVILEGED_CERT_NOT_AFTER,
     );
     subject_cert = buildCertInto(
         &subject_wire,

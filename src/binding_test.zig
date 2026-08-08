@@ -184,10 +184,10 @@ test "BE_ID_04 approver cert with two CA sigs accepted (quorum met)" {
         cth.pubkeyOf(0xa1),
         binding.ROLE_APPROVER,
         &[_]u8{ 0xc0, 0xc1 },
-        cth.CERT_NOT_BEFORE,
-        cth.CERT_NOT_AFTER,
+        cth.PRIVILEGED_CERT_NOT_BEFORE,
+        cth.PRIVILEGED_CERT_NOT_AFTER,
     );
-    try binding.validateCert(cert, cth.trustedSet(), cth.CERT_NOT_BEFORE + 1);
+    try binding.validateCert(cert, cth.trustedSet(), cth.PRIVILEGED_CERT_NOT_BEFORE + 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -288,4 +288,44 @@ test "BE_TR_01 invalid cert refused before the binding signature is checked" {
     const h = cth.seedFrom(0x68);
     const sig = bindingSig(id, h);
     try std.testing.expectError(error.CertExpired, binding.bindSession(cert, &sig, &h, cth.trustedSet(), 3000));
+}
+
+// ---------------------------------------------------------------------------
+// BE-REV-01: privileged certificate lifetime cap. Approver and executor
+// certificates are limited to a 30-day window (2,592,000,000 ms).
+// ---------------------------------------------------------------------------
+
+test "BE_REV_01 approver cert with 30-day window accepted" {
+    const id = cth.keypair(0xa1);
+    const id_pub = Ed.PublicKey.toBytes(id.public_key);
+    var wire: [512]u8 = undefined;
+    // Exactly at the cap: not_after - not_before = 2,592,000,000 ms.
+    const cert = cth.buildCertInto(&wire, id_pub, binding.ROLE_APPROVER, &[_]u8{ 0xc0, 0xc1 }, 1_699_000_000_000, 1_701_592_000_000);
+    try binding.validateCert(cert, cth.trustedSet(), 1_700_000_000_000);
+}
+
+test "BE_REV_01 approver cert exceeding 30-day window refused" {
+    const id = cth.keypair(0xa1);
+    const id_pub = Ed.PublicKey.toBytes(id.public_key);
+    var wire: [512]u8 = undefined;
+    // 1 ms over the cap.
+    const cert = cth.buildCertInto(&wire, id_pub, binding.ROLE_APPROVER, &[_]u8{ 0xc0, 0xc1 }, 1_699_000_000_000, 1_701_592_000_001);
+    try std.testing.expectError(error.CertTooLongLived, binding.validateCert(cert, cth.trustedSet(), 1_700_000_000_000));
+}
+
+test "BE_REV_01 executor cert with 30-day window accepted" {
+    const id = cth.keypair(0xa1);
+    const id_pub = Ed.PublicKey.toBytes(id.public_key);
+    var wire: [512]u8 = undefined;
+    const cert = cth.buildCertInto(&wire, id_pub, binding.ROLE_EXECUTOR, &[_]u8{0xc0}, 1_699_000_000_000, 1_701_592_000_000);
+    try binding.validateCert(cert, cth.trustedSet(), 1_700_000_000_000);
+}
+
+test "BE_REV_01 agent cert with 31.7-year window accepted (no cap)" {
+    const id = cth.keypair(0xa1);
+    const id_pub = Ed.PublicKey.toBytes(id.public_key);
+    var wire: [512]u8 = undefined;
+    // Wide window: 1e12..2e12 ms (31.7 years). No cap for agents.
+    const cert = cth.buildCertInto(&wire, id_pub, binding.ROLE_AGENT, &[_]u8{0xc0}, 1_000_000_000_000, 2_000_000_000_000);
+    try binding.validateCert(cert, cth.trustedSet(), 1_500_000_000_000);
 }

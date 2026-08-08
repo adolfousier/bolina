@@ -729,7 +729,7 @@ fn expectedOverlayAddr(sig_pubkey: []const u8) [16]u8 {
 
 // A time inside the helper certs' validity window (cert_test_helpers pins the
 // window to CERT_NOT_BEFORE..CERT_NOT_AFTER).
-const MESH_NOW: u64 = 1_500_000_000_000;
+const MESH_NOW: u64 = 1_700_000_000_000;
 
 fn meshCtx(now_ms: u64, revoked: bool) verify.MeshContext {
     return .{

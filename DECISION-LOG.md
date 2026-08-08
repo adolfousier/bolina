@@ -897,3 +897,21 @@ Alternatives considered:
 Pre-close checks: (1) read against other sections — BE-SURF-03's own MUST names the failure mode ("a file the spec does not place fails the build until the spec places it"); D-018's no-unmeasured-place clause is satisfied because non-surface is itself a measured list with no cap to game. (2) Who picked the denominator — SPEC's lists; this entry writes into them the placement D-045 already decided. (3) Does the thing need to exist — the files already exist and are tested; the list edit is what makes them legal.
 
 Reversible: the two names leave the list and M5 goes red again. What would reopen it: Daniel ruling attacker-influenced verification state IS budget surface (ledger.zig moves to the post-authentication list, slimming surgery gets its own estimate first, per D-045's reversal clause).
+
+## D-048 — 2026-08-08 — BE-REV-01 measured at five lines; fits the seven, lands in this slice
+
+Section 6 of LEDGER-ESTIMATE.md deferred this question to execution: BE-REV-01's 30-day duration cap for approver/executor certificates belongs in binding.zig, a budgeted file, and lands only if the measured addition fits the seven lines of post-authentication headroom. Measured, line by line against `wc -l` (the unit M11 counts): one constant line (`MAX_PRIVILEGED_LIFETIME_MS = 2_592_000_000`, the SPEC literal), one error arm (`CertTooLongLived`), and a three-line check in validateCert (one comment, two-line conditional) placed after the validity-window check. Total: 5 lines. binding.zig 189 to 194, post-authentication unit 1493 to 1498 of 1500. It fits; the micro-fix lands in this slice rather than deferring to the sync surgery.
+
+Two readings settled while costing. First, the subtraction `not_after - not_before` cannot underflow at the check site: reaching it requires passing the window check, which implies `not_after > now_ms >= not_before`; a malformed inverted window dies at CertExpired first (ReleaseSafe panics the impossible residue anyway). Second, the cap is enforced on the admission path only this slice: historical.zig's validateCertNoClock is the BE-HIST-01 stub, and the duration cap travels with the audit-path refactor that stubs for, not before it. The participant-only 90-day SHOULD is deliberately not implemented: SHOULDs are not M1-bindable and the estimate scoped REV-01 to its MUST.
+
+What would reverse it: the sync surgery discovering the post-auth unit needs those five lines for a MUST that outranks a duration cap (in which case REV-01 defers, this entry amends), or a reviewer showing the cap belongs at issuance rather than receipt (the slice has no issuance function, so receipt is the only enforcement point that exists).
+
+## D-049 — 2026-08-08 — BE-REV-01 shipped with fixture tightening (7 lines total)
+
+BE-REV-01 adds a 30-day cap to approver/executor certificates (SPEC.md section 7.1, enforced in binding.zig validateCert). The original D-048 estimate (5 lines) did not account for fixture collision: cert_test_helpers.zig used a wide window (1e12..2e12 ms ≈ 31.7 years) for both agent and privileged certificates, violating the new cap.
+
+Collision resolution (Option A, proceed): added narrow-window constants PRIVILEGED_CERT_NOT_BEFORE/AFTER (1.699e12..1.701592e12 ms, exactly 30 days), updated approverCert() to use them, adjusted test now_ms values to fit inside the narrow window (MESH_NOW=1.7e12), and added BE_REV_01 tests (approver/executor acceptance/refusal, agent exemption). Agent certificates retain the wide window (no cap).
+
+Line cost: binding.zig +5 (constant, error, 3-line check), cert_test_helpers.zig +2 (two narrow-window constants with inline comments), verify_test.zig 0 net (MESH_NOW now fits narrow window). Total: 7 lines, fits within the 7-line headroom (post-auth 1493→1497/1500). M1 ratchet 78→79.
+
+All gauntlet green: fmt clean, em-dash 0, prumo 0 failing, 270/270 tests, vectors 77/77.
