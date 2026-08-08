@@ -840,3 +840,78 @@ Decision 4 — the relay sub-unit cap is 510 lines, and src/relay.zig is placed 
 Pre-close checks: (1) read against other sections — BE-SURF-01 names the relay routing header and registration as third pre-auth entry (fixed-size, role-gated); BE-SIG-01 gains domain tag 0x07; BE-SURF-03 subdivides pre-auth unit into handshake ≤990 and relay ≤510. (2) Who picked the denominator — the 510 relay cap is arithmetic (1500 − 990), not a choice; the 4096-entry table bound and 300-second skew are design choices stated here. (3) Does the thing need to exist — BE-MESH-02 is a protocol obligation; a mesh without relays strands any pair that cannot hole-punch.
 
 Changes no wire byte yet; commits the wire-format definitions. Reversible (delete the relay sub-unit, restore the single 1500 pre-auth cap, defer the relay to M2). What would reopen it: the tripwire firing (forces slim-or-defer); a reviewer rejecting the one-shot registration model in favor of re-registration support; or BE-MESH-03 being promoted from MAY to MUST (store-and-forward re-enters the budget).
+
+## D-045 — 2026-08-08 — ledger slice chosen next; ledger code placed in the non-budgeted verification class
+
+The relay slice merged at d419c96 with M1 at 68/109, missing 41. The missing set decomposes (M1-AUDIT.md buckets, relay-round addendum) into: 3 gate-bound-by-design (SURF-03, DEP-01, WIRE-03 — D-042 verdicts, they stay missing on purpose), ~16 out-of-slice executor/UI/hardware markers, and ~19 NEEDS-CODE markers split across the sync pile (BE-SYNC-01..05), the ledger pile (BE-LEDGER-01/02/03, BE-HIST-01..04, BE-ENV-05), three small envelope MUSTs (BE-ENV-03, BE-ENV-04, BE-REV-01), and executor-shaped grant lifecycle (BE-GRANT-06/06b/09, BE-RES-06).
+
+Decision: the next slice is the ledger pile plus the two envelope MUSTs that fit with it — ten markers: BE-LEDGER-01/02/03, BE-HIST-01/02/03/04, BE-ENV-03, BE-ENV-04, BE-ENV-05. LEDGER-ESTIMATE.md (committed before this entry) carries the cost. Two placement facts drive it:
+
+1. The ledger is a precondition of sync, not a peer. BE-SYNC-05 requires every backfilled envelope to enter "the local ledger" after verification — the store must exist before the fetch mechanism does. Doing sync first would build the carrier before the cargo.
+2. The M11 wall is real for sync and irrelevant for the ledger. Sync adds post-authentication parser surface (budgeted, 1493/1500, seven lines of slack — surgery country). The ledger stores hashes and never plaintext (BE-LEDGER-02 is a legal definition of the module: it cannot parse bodies), so it joins the non-budgeted verification/attestation class the architecture already carries and LANGUAGE.md already documents: verify.zig 418, evidence.zig 294, dag.zig 190, main.zig 13. That placement survived the keying-sprint and relay-round reviews. New src/ledger.zig plus verify.zig extensions; zero budgeted files touched; M5/M11 unchanged by construction.
+
+Alternatives considered:
+
+1. Sync slice first. Rejected: blocked on budget surgery (estimate not written, wall at seven lines) AND blocked on the ledger store not existing (BE-SYNC-05). Two blockers, one of them architectural.
+2. The small-MUSTs micro-slice alone (ENV-03, ENV-04, REV-01). Rejected as a standalone slice: ENV-03 and ENV-04 are admission-pipeline checks whose natural home is the same admission integration the ledger slice builds; shipping them separately would write the integration twice. BE-REV-01 joins only if its measured cost fits the seven budgeted lines (section 6 of the estimate); otherwise it waits for the sync surgery.
+3. BE-MESH-03 store-and-forward (the relay sub-unit has 327 lines of slack). Rejected: it is a MAY deferred by D-043 as scope-not-debt, and building a MAY while ten MUSTs are unbound inverts the conformance order.
+4. Slim the post-auth unit now to make room for everything. Rejected as a first move: slimming at 1493/1500 is the delicate surgery D-030 pre-committed for a wall hit, and the ledger pile does not hit the wall. Surgery with no patient on the table is risk without need.
+
+Pre-close checks: (1) read against other sections — BE-SYNC-05 names the ledger as the adoption target; BE-LEDGER-02's hashes-never-plaintext clause is what keeps the module out of the parse surface; BE-SURF-03's budget lists (M5/M11 parse them from SPEC per D-041) confirm ledger.zig and verify.zig are outside both units today. (2) Who picked the denominator — SPEC's file lists pick it; this decision only declines to add ledger.zig to them, which is the status quo, not a new number. (3) Does the thing need to exist — equivocation (BE-ENV-05) is the cheapest attack §6.2 names: single-sender, no collusion, available to any compromised agent, and INC-001 is the recorded instance of the claim-shape it enables. The ledger is the structure the protocol exists to provide.
+
+Tripwire (relay precedent): ledger.zig above 420 lines before the ten markers bind — slim or split, log a decision, never raise. M1 expected to move 68 to 78.
+
+Reversible: the slice is additive (new module, verify.zig extensions, tests); reverting its commits restores 68/109 with no budget change. What would reopen it: Daniel ruling that attacker-influenced verification state IS budget surface (ledger.zig enters the BE-SURF-03 post-auth list, which is only reachable after slimming surgery — the slice stops and the surgery gets its own estimate first); or the admission integration exceeding 120 lines in verify.zig (audit path splits into its own module and gets re-costed).
+
+## D-046 — 2026-08-08 — BE-HIST-02 anchoring vehicle amended; the closed Control enum stands
+
+While costing the ledger slice, a cross-section contradiction surfaced (pre-close check 1, read against other sections): BE-HIST-02 (§9.2) requires a signer's certificate to be anchored "by a `Control` envelope carrying it", but §6.1c defines `Control` with a closed `action_type` enum {1 Genesis, 2 Revoke} and BE-CTRL-01 forbids any value outside {1, 2} — "There is no forward-compatibility path; §2.2 has no extension mechanism by design." The Control body is `ControlGenesis` or empty; no field can carry a variable-length certificate. §9.2's mechanism is unimplementable against §6.1c as both stand.
+
+Decision: the mechanism yields, the property stands. BE-HIST-02 is amended (SPEC v0.3.1-draft, committed before any code per D-029) to anchor by self-anchoring: the first envelope accepted from a signer in a channel IS that signer's anchoring record; the certificate is verified under BE-ID-01 through BE-ID-04 at that moment — obtained via the §5.1a lookup keyed by the BE-ID-01-derived overlay address — and retained with the envelopes that depend on it. "Before first use" holds because anchoring happens inside the first envelope's own admission: the certificate verifies before the envelope is accepted, and every later envelope from that signer is a causal descendant of the anchor, which is exactly the interval BE-HIST-03 quantifies over. No wire byte changes.
+
+Coherence checked against the sections that constrain it: §6.1a makes membership certificate-carried (offline CA), so no message adds members and none needs to carry certificates; §5.1a plus BE-MESH-06 is the established certificate delivery path with per-use re-verification; BE-CTRL-01's closed enum stays untouched — it is the deliberate §2.2 property, and amending IT to admit a cert-carrying action would be the larger change, trading a named security design for mechanism convenience. Rejected.
+
+Alternatives considered:
+
+1. Add a third Control action_type (AnchorCert) and amend BE-CTRL-01. Rejected: BE-CTRL-01's no-extension clause is a security property with a stated rationale; carving an exception for convenience is the direction §2.2 exists to block, and a variable-length certificate would break Control's flat fixed-order shape besides.
+2. Anchor at Genesis (admin distributes member certs). Rejected: members join after genesis (backfill is precisely the late-joiner case, §6.4), and §6.1a confers membership by certificate, not by any message — genesis cannot enumerate future members.
+3. Leave BE-HIST-02 unimplemented and mark it out-of-slice. Rejected: it is a MUST with a coherent implementable reading; the contradiction is in the vehicle sentence, not the requirement.
+
+Pre-close checks: (1) read against other sections — §6.1c closed enum, §6.1a certificate-carried membership, §5.1a lookup delivery, BE-HIST-03's causal-interval quantification all cited above. (2) Who picked the denominator — no denominator involved; this is a normative clarification of one mechanism sentence. (3) Does the thing need to exist — BE-HIST-02's retention duty is what makes BE-HIST-03 computable for a node that joined late; without an anchoring rule the causal interval has no left endpoint.
+
+Reversible: the SPEC paragraph reverts to the unimplementable vehicle and the slice's HIST-02 tests revert with it. What would reopen it: a decision to extend the Control enum after all (requires amending BE-CTRL-01 and §2.2's no-extension clause — a protocol-version-scale change, not a slice change); or a reviewer showing a wire-consistent reading of "Control envelope carrying it" that this entry missed.
+
+## D-047 — 2026-08-08 — BE-SURF-03 placement repaired: ledger.zig and historical.zig enter the non-surface list
+
+The ledger slice's Task #3 committed two new source files (src/ledger.zig, src/historical.zig) without adding them to the BE-SURF-03 lists, and committed on the strength of `zig build test` plus fmt alone — the full prumo gate was scheduled for Task #5. BE-SURF-03 requires every non-test `src/*.zig` to appear in exactly one of its four lists, and M5 parses those lists out of SPEC.md (D-041), so the first full gate run of Task #5 returned M5 FAIL (two unplaced files) and M11 FAIL by cascade (post-authentication sum untrustworthy while placement is broken). Same defect class as D-033/D-034; third occurrence. The gate caught it, which is what the gate is for; the debt is the process that let it ship.
+
+Decision: place both files in the non-surface list, which is the placement D-045 already decided in substance ("all new code is non-budgeted verification state") but never wrote into the lists. ledger.zig is state over parsed values: a hash-only store (BE-LEDGER-02 keeps plaintext out of it by construction), sequence windows, and anchor/revocation tables, none of which parse attacker bytes. historical.zig is the audit path over ledger and dag state and parses nothing. Neither enters the pre-authentication or post-authentication unit; the M11 measurement is therefore unchanged by the ledger slice, exactly as D-045 projected.
+
+Process clause added: any commit that creates a new `src/*.zig` file MUST run the full prumo-verify gate before commit, not `zig build test` alone. Placement is a property of the gate, not of the build; a green build that fails placement is not green.
+
+Alternatives considered:
+
+1. Place ledger.zig in the post-authentication unit. Rejected: that is the "attacker-influenced state is budget surface" ruling D-045 explicitly declined, and it would force the slimming surgery before the REV-01 measurement this task exists to take.
+2. Version-bump to v0.3.2-draft for the list change. Rejected: v0.3.1-draft is the unreleased ledger-slice draft; the placement belongs to the same draft cycle as the code it places, so the changelog paragraph extends rather than multiplies.
+
+Pre-close checks: (1) read against other sections — BE-SURF-03's own MUST names the failure mode ("a file the spec does not place fails the build until the spec places it"); D-018's no-unmeasured-place clause is satisfied because non-surface is itself a measured list with no cap to game. (2) Who picked the denominator — SPEC's lists; this entry writes into them the placement D-045 already decided. (3) Does the thing need to exist — the files already exist and are tested; the list edit is what makes them legal.
+
+Reversible: the two names leave the list and M5 goes red again. What would reopen it: Daniel ruling attacker-influenced verification state IS budget surface (ledger.zig moves to the post-authentication list, slimming surgery gets its own estimate first, per D-045's reversal clause).
+
+## D-048 — 2026-08-08 — BE-REV-01 measured at five lines; fits the seven, lands in this slice
+
+Section 6 of LEDGER-ESTIMATE.md deferred this question to execution: BE-REV-01's 30-day duration cap for approver/executor certificates belongs in binding.zig, a budgeted file, and lands only if the measured addition fits the seven lines of post-authentication headroom. Measured, line by line against `wc -l` (the unit M11 counts): one constant line (`MAX_PRIVILEGED_LIFETIME_MS = 2_592_000_000`, the SPEC literal), one error arm (`CertTooLongLived`), and a three-line check in validateCert (one comment, two-line conditional) placed after the validity-window check. Total: 5 lines. binding.zig 189 to 194, post-authentication unit 1493 to 1498 of 1500. It fits; the micro-fix lands in this slice rather than deferring to the sync surgery.
+
+Two readings settled while costing. First, the subtraction `not_after - not_before` cannot underflow at the check site: reaching it requires passing the window check, which implies `not_after > now_ms >= not_before`; a malformed inverted window dies at CertExpired first (ReleaseSafe panics the impossible residue anyway). Second, the cap is enforced on the admission path only this slice: historical.zig's validateCertNoClock is the BE-HIST-01 stub, and the duration cap travels with the audit-path refactor that stubs for, not before it. The participant-only 90-day SHOULD is deliberately not implemented: SHOULDs are not M1-bindable and the estimate scoped REV-01 to its MUST.
+
+What would reverse it: the sync surgery discovering the post-auth unit needs those five lines for a MUST that outranks a duration cap (in which case REV-01 defers, this entry amends), or a reviewer showing the cap belongs at issuance rather than receipt (the slice has no issuance function, so receipt is the only enforcement point that exists).
+
+## D-049 — 2026-08-08 — BE-REV-01 shipped with fixture tightening (7 lines total)
+
+BE-REV-01 adds a 30-day cap to approver/executor certificates (SPEC.md section 7.1, enforced in binding.zig validateCert). The original D-048 estimate (5 lines) did not account for fixture collision: cert_test_helpers.zig used a wide window (1e12..2e12 ms ≈ 31.7 years) for both agent and privileged certificates, violating the new cap.
+
+Collision resolution (Option A, proceed): added narrow-window constants PRIVILEGED_CERT_NOT_BEFORE/AFTER (1.699e12..1.701592e12 ms, exactly 30 days), updated approverCert() to use them, adjusted test now_ms values to fit inside the narrow window (MESH_NOW=1.7e12), and added BE_REV_01 tests (approver/executor acceptance/refusal, agent exemption). Agent certificates retain the wide window (no cap).
+
+Line cost, measured against the committed diff: binding.zig +4 (constant, error arm, 2-line check; the comment line planned in D-048 did not land), cert_test_helpers.zig +2 net (two narrow-window constants; test helper on the BE-SURF-03 harness list, outside both budget units), verify_test.zig 0 net (MESH_NOW moved inside the narrow window). Budgeted growth: 4 lines. Post-authentication unit 1493 to 1497 of 1500, measured by M11. M1 ratchet 78 to 79.
+
+All gauntlet green: fmt clean, em-dash 0, prumo 0 failing, 270/270 tests, vectors 77/77.

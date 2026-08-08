@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.3.0-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-07
+**Version:** 0.3.1-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-08
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -23,6 +23,8 @@ header being visible to relays is resolved as a consequence and no longer appear
 fan-out the whole envelope travels inside a Noise session.
 
 **Changes from v0.2.0-draft:** Relay surface added (§5.2a) with two new wire formats (type 5 route header, type 6 registration); BE-SURF-01 names the relay routing header and registration as third pre-auth entry (fixed-size, role-gated to relay role); BE-SURF-03 subdivides pre-auth unit into handshake-unit ≤990 lines and relay-unit ≤510 lines; BE-SIG-01 gains domain tag 0x07 for relay registration.
+
+**Changes from v0.3.0-draft:** BE-HIST-02 anchoring vehicle corrected. The v0.3.0 text anchored a signer's certificate "by a `Control` envelope carrying it", which contradicts BE-CTRL-01's closed `action_type` enum {1 Genesis, 2 Revoke} — no cert-carrying action exists and no extension path may. The anchoring obligation is unchanged; the vehicle is now self-anchoring: the first envelope accepted from a signer in a channel is that signer's anchoring record, with the certificate verified under BE-ID-01 through BE-ID-04 during that envelope's own admission (§9.2, D-046). No wire byte changes. This draft also places `src/ledger.zig` and `src/historical.zig` in the BE-SURF-03 non-surface list, making the D-045 placement normative (D-047).
 
 ---
 
@@ -251,8 +253,8 @@ both caps MUST be enforced independently and the sum MUST NOT exceed 1500 lines.
 - **Post-authentication unit:** `src/parser/channel.zig`, `src/parser/session.zig`, `src/session.zig`,
   `src/binding.zig`, `src/replay.zig`, `src/reassembly.zig` — everything an auditor must read to
   verify what a hostile authenticated peer's bytes can reach.
-- **Non-surface:** `src/dag.zig`, `src/evidence.zig`, `src/verify.zig` — state over parsed values
-  (D-018), not reached by attacker bytes directly.
+- **Non-surface:** `src/dag.zig`, `src/evidence.zig`, `src/verify.zig`, `src/ledger.zig`,
+  `src/historical.zig` — state over parsed values (D-018), not reached by attacker bytes directly.
 - **Harness and entry:** `src/main.zig`, `src/tests.zig`, `src/fuzz.zig`, `src/coverage.zig`,
   `src/evidence_test_helpers.zig`, `src/cert_test_helpers.zig`, and every `*_test.zig`.
 
@@ -1575,9 +1577,14 @@ opening a session, accepting a live envelope, executing a grant. It MUST NOT be 
 authorize anything new and remains able to prove what it signed while it was valid.
 
 **BE-HIST-02 (certificates are ledger state)** — A signer's certificate MUST be anchored in the
-channel before its first use, by a `Control` envelope carrying it, and members MUST retain anchored
-certificates for as long as they retain the envelopes that depend on them. Retention is of the
-certificate itself, not of a reference to somewhere it might still exist.
+channel before its first use. The anchoring record is the first envelope accepted from that signer
+in the channel: the certificate MUST be verified under BE-ID-01 through BE-ID-04 during that
+envelope's own admission, obtained via a §5.1a lookup keyed by the signer's BE-ID-01-derived
+overlay address, and members MUST retain anchored certificates for as long as they retain the
+envelopes that depend on them. Retention is of the certificate itself, not of a reference to
+somewhere it might still exist. *(v0.3.0 anchored "by a `Control` envelope carrying it"; that
+vehicle contradicts BE-CTRL-01's closed `action_type` enum, which admits no cert-carrying action
+and no extension path. The obligation stands; the vehicle is amended — D-046.)*
 
 **BE-HIST-03 (validity is a causal interval)** — An envelope is historically valid if it is a causal
 descendant of its signer's anchoring envelope and **not** a causal descendant of that signer's

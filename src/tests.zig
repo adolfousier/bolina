@@ -18,4 +18,5 @@ comptime {
     _ = @import("session_test.zig");
     _ = @import("binding_test.zig");
     _ = @import("relay_test.zig");
+    _ = @import("ledger_test.zig");
 }

@@ -142,25 +142,25 @@ move for them).
 | BE-SYNC-04 | Rate-limit both requests served and issued | No sync code. |
 | BE-SYNC-05 | Every backfilled envelope passes the same verification as a live one | No sync code. |
 
-### C3. Ledger, DAG, history (ledger slice)
+### C3. Ledger, DAG, history (LANDED in the ledger slice)
 
 | Marker | Requirement | Status |
 |--------|-------------|--------|
-| BE-LEDGER-01 | Member MUST reject an envelope whose `parents` reference unknown hashes within a bounded fetch, and surface a divergence | `dag.zig:insert` just interns unknown parents (creates them); there is no fetch boundary and no divergence event. Needs the ledger store. |
-| BE-LEDGER-02 | Ledger stores hashes, never plaintext; a head hash MAY be published externally | No persistent ledger; `dag.zig` is an in-memory causal graph. |
-| BE-LEDGER-03 | Every Grant and Effect MUST appear in the ledger | No persistent ledger. |
-| BE-HIST-01 | The BE-ID-02 clock check governs admission, not audit; an expired cert cannot authorise new things but can prove what it signed | No separate audit path. |
-| BE-HIST-02 | A signer's cert MUST be anchored in the channel before first use, by a Control envelope | No channel state storage. |
-| BE-HIST-03 | An envelope is historically valid iff it is a causal descendant of the anchoring envelope and NOT a descendant of a revocation | `dag.zig` has `isAncestor`/`supersedes` BFS but no revocation integration. |
-| BE-HIST-04 | Revocation takes effect for admission immediately, for audit at its causal position | No revocation + causal integration. |
+| BE-LEDGER-01 | Member MUST reject an envelope whose `parents` reference unknown hashes within a bounded fetch, and surface a divergence | **BOUND** (`BE_LEDGER_01`, ledger slice) — `src/ledger.zig` checkParents rejects unknown parents within a bounded fetch budget and surfaces a divergence; two literal tests. |
+| BE-LEDGER-02 | Ledger stores hashes, never plaintext; a head hash MAY be published externally | **BOUND** (`BE_LEDGER_02`) — hash-only store: envelopes are stored by hash, plaintext never retained; the construction that keeps the module off the parse surface (D-045). |
+| BE-LEDGER-03 | Every Grant and Effect MUST appear in the ledger | **BOUND** (`BE_LEDGER_03`) — Grant and Effect envelopes recorded in the hash store on acceptance; two tests. |
+| BE-HIST-01 | The BE-ID-02 clock check governs admission, not audit; an expired cert cannot authorise new things but can prove what it signed | **BOUND** (`BE_HIST_01`) — `src/historical.zig` validateCertNoClock: the audit path does not recheck the clock on certs. Stub shape, deliberately unkeyed in the mutation denominator (v11 note); the M1 test binds by name. |
+| BE-HIST-02 | A signer's cert MUST be anchored in the channel before first use, by a Control envelope | **BOUND** (`BE_HIST_02`) — self-anchoring per D-046 (the Control enum stays closed): the first envelope accepted from a signer IS its anchoring record; four tests including idempotence and divergence. |
+| BE-HIST-03 | An envelope is historically valid iff it is a causal descendant of the anchoring envelope and NOT a descendant of a revocation | **BOUND** (`BE_HIST_03`) — audit checks causal descent from the anchor and refuses descent from a revocation; three tests. |
+| BE-HIST-04 | Revocation takes effect for admission immediately, for audit at its causal position | **BOUND** (`BE_HIST_04`) — revocation recorded immediately when a Revoke is accepted, read at its causal position on audit; four tests. |
 
-### C4. Envelope equivocation + replay (needs the divergence surface)
+### C4. Envelope equivocation + replay (LANDED in the ledger slice)
 
 | Marker | Requirement | Status |
 |--------|-------------|--------|
-| BE-ENV-05 | A second envelope with a different hash at the same `(sender, channel, seq)` MUST raise a divergence event, never be dropped as a routine duplicate | Depends on the same divergence surface as BE-LEDGER-01 (SPEC cross-references it). A same-hash duplicate is dropped silently; a different-hash one never is. Needs the divergence event + hash-compare dedup. Ledger slice. |
-| BE-ENV-04 | Per-`(sender, channel)` sliding acceptance window over `seq`, same shape as BE-TR-03 | `replay.zig` implements the transport window (`BE_TR_03`). **Confirm during keying** whether the same window is applied at the envelope layer; if yes, reclassify KEY-NOW; if not, NEEDS-CODE. |
-| BE-ENV-03 | Receiver MUST reject an envelope whose sender cert lacks the role for its `body_type` | Role checks happen at cert validation (`binding.zig`) but a `body_type` -> role map may not be enforced. **Confirm during keying**; reclassify KEY-NOW if present, else NEEDS-CODE. |
+| BE-ENV-05 | A second envelope with a different hash at the same `(sender, channel, seq)` MUST raise a divergence event, never be dropped as a routine duplicate | **BOUND** (`BE_ENV_05`, ledger slice) — hash-compare dedup in `src/ledger.zig`: a different hash at the same triple raises Divergence; a same-hash duplicate stays idempotent. Two tests. |
+| BE-ENV-04 | Per-`(sender, channel)` sliding acceptance window over `seq`, same shape as BE-TR-03 | **BOUND** (`BE_ENV_04`, ledger slice) — per-(sender, channel) sliding window over seq at the envelope admission layer (`verifyEnvelopeAdmission` in `verify.zig`, windows in `ledger.zig`); five tests including the reordered-seq witness that forbids the strict maximum. |
+| BE-ENV-03 | Receiver MUST reject an envelope whose sender cert lacks the role for its `body_type` | **BOUND** (`BE_ENV_03`, ledger slice) — body_type to role map enforced at admission: Intent/agent, Grant/approver, Effect/executor; four tests. |
 
 ### C5. Grant lifecycle that needs a pending table or refusal handler
 
@@ -169,7 +169,7 @@ move for them).
 | BE-GRANT-06 | Executor MUST refuse a second Intent whose `resource_id` is already PENDING or EXECUTING | Needs a pending-intent / resource-lock table; verify exposes it as a hook only. |
 | BE-GRANT-06b | Executor MUST refuse an Intent whose `intent_id` equals one already PENDING | Needs the pending-intent table. |
 | BE-GRANT-09 | Refusal semantics: `body_type=6`, `Refusal.sig` verifies, sender has approver role, `intent_id` names a pending intent | Refusal is parsed but not verified in this slice. Needs a refusal verifier. |
-| BE-REV-01 (duration half) | Approver/executor certs MUST have `not_after - not_before <= 30 days` | `binding.zig:148` checks the validity window but not the 30-day duration cap separately. Small code addition; could be a keying-pass micro-fix or a NEEDS-CODE marker. Decision in task #2. |
+| BE-REV-01 (duration half) | Approver/executor certs MUST have `not_after - not_before <= 30 days` | **BOUND** (`BE_REV_01`, ad3a3e7) — `binding.zig` validateCert caps approver/executor certs at 2,592,000,000 ms (D-048/D-049); four literal tests: cap boundary accepted, 1 ms over refused, executor accepted, agent exempt. Fixtures split onto a PRIVILEGED_* 30-day window for the approver cert; agent fixtures keep the wide window. |
 | BE-RES-06 | `executor_fp = BLAKE2s-256(sig_pubkey)[0..8]`, 16 hex chars | No `executor_fp` / `fingerprint` code exists in `src/*.zig` (grep empty). `BE_ID_01` tests overlay-address derivation (`fd` prefix over BLAKE2s of `sig_pubkey`), which is similar but not the 8-byte fingerprint. NEEDS-CODE. |
 
 ---
@@ -248,17 +248,20 @@ BE-EVID-11) is settled in task #2 and then executed in task #3.
 
 ### Confirm-then-key resolution (M1 keying pass)
 
-All five confirm-then-key markers were read against the code and resolve to
-**NEEDS-CODE** -- the property's code path does not exist in this slice, so no
-honest runtime test can bind it (D-027 forbids a vacuous structural test that
-passes only because the feature is absent).
+All five confirm-then-key markers were read against the code. At the keying
+pass all five resolved to **NEEDS-CODE**; the ledger slice then landed code
+for three of them (ENV-03, ENV-04, REV-01), which are now **BOUND** by
+literal tests. Two (TR-06, EVID-11) remain **NEEDS-CODE** -- the property's
+code path still does not exist, so no honest runtime test can bind it (D-027
+forbids a vacuous structural test that passes only because the feature is
+absent).
 
 | Marker | Requirement | What the code has | Verdict |
 |--------|-------------|-------------------|---------|
 | BE-TR-06 | Single delivery site requires a bound session | `bound` flag + sole authoriser exist; no dispatch path checks it | NEEDS-CODE (see Bucket B resolution; `main.zig` is a stub) |
-| BE-ENV-03 | Receiver rejects an envelope whose sender cert lacks the role for its body_type | Only `body_type != BODY_GRANT` (`verify.zig:188`); no body_type -> role map | NEEDS-CODE |
-| BE-ENV-04 | Per-(sender,channel) sliding window over `seq` at the envelope layer | `ReplayWindow` is transport-only (`session.zig:94`); `env.seq` parsed but unchecked | NEEDS-CODE |
-| BE-REV-01 | Approver/executor cert duration `not_after - not_before <= 30 days` | `validateCert` checks the validity window only (`binding.zig:148`); no duration cap | NEEDS-CODE |
+| BE-ENV-03 | Receiver rejects an envelope whose sender cert lacks the role for its body_type | `verifyEnvelopeAdmission` enforces the body_type -> role map (Intent/agent, Grant/approver, Effect/executor) | **BOUND** (ledger slice, `BE_ENV_03`) |
+| BE-ENV-04 | Per-(sender,channel) sliding window over `seq` at the envelope layer | `verifyEnvelopeAdmission` runs a per-(sender, channel) sliding window over seq (`ledger.zig` windows) | **BOUND** (ledger slice, `BE_ENV_04`) |
+| BE-REV-01 | Approver/executor cert duration `not_after - not_before <= 30 days` | `validateCert` caps approver/executor certs at 2,592,000,000 ms (ad3a3e7) | **BOUND** (ledger slice, `BE_REV_01`) |
 | BE-EVID-11 | `method_id` is a compile-time constant of the executor; no executor interface accepts it | SPEC's own text: "verified by reading the executor's source once, statically". No executor module exists; `classOf(method_id)` is receiver code (BE-EVID-13/15, already bound), not an executor interface | NEEDS-CODE |
 
 **Numbers do not sum to 62 yet** because five markers straddle a bucket line
@@ -342,3 +345,42 @@ seeds.
 
 BE-MESH-03 stays in this bucket: store-and-forward is a SPEC MAY, deferred
 by D-043. That is scope, not debt.
+
+---
+
+## Ledger round addendum (branch ledger-slice, measured 2026-08-08)
+
+Buckets C3 and C4 empty out. `src/ledger.zig` (290 lines) and
+`src/historical.zig` (109 lines) landed under the D-045 placement,
+non-budgeted and off the parse surface, with the BE-SURF-03 list repair
+logged as D-047. BE-LEDGER-01/02/03 and BE-HIST-01..04 move to BOUND in
+C3, BE-ENV-03/04/05 move to BOUND in C4, and BE-REV-01's duration half
+lands in C5 at `ad3a3e7`. BE-HIST-01 is bound by name but deliberately
+unkeyed in the mutation denominator: `validateCertNoClock` is a stub shape
+until the `binding.zig` refactor (v11 note). The REV-01 fixture collision
+resolved per D-049: approver and executor fixtures moved to a
+PRIVILEGED_CERT 30-day window, agent fixtures kept the wide window. M1
+ratchet reads 79/109 bound, high water 79 (DECL 109 still excludes
+BE-GRANT-03c per its SUPERSEDED BY REMOVAL clause, D-041).
+
+Full gauntlet at `da9356e` plus two documentation commits: `zig fmt --check`
+clean; `zig build test` green, 266 test declarations; em-dash scan clean
+over `src/` and `tools/`; `verify-vectors` PASSED 77 FAILED 0; prumo-verify
+0 failing (M5 pre-authentication 1173/1500 with the handshake sub-unit
+ratcheted at 990/990 and relay 183/510, M11 post-authentication 1497/1500
+with `binding.zig` 193 after REV-01's four lines, M9 denominator 64 exit
+points); mutation harness v11 81/81 killed, 0 survived across eight domains
+(grant 17, evidence 11, session 11, channel 8, mesh 6, transport 4, relay
+11, ledger 13), single writer per run (D-035).
+
+The round's one mutation incident, caught by the full re-run, not by a
+chunk: the first re-run read 80/81 because BE-REV-01's new cap rejected the
+check-4 role-swapped subject fixture before the role check ran, making the
+grant role mutant unfalsifiable on that witness. The fixture moved to the
+PRIVILEGED_CERT window (`98cf577`) and the clean re-run killed all 81
+(`mutation_final.log`, same tree).
+
+The remaining NEEDS-CODE rows stand: C5's pending-intent table and refusal
+verifier (BE-GRANT-06/06b/09), BE-RES-06's executor fingerprint, and the
+confirm-then-key pair BE-TR-06 and BE-EVID-11. The ledger slice closed the
+divergence surface that BE-ENV-05 and BE-LEDGER-01 both named.

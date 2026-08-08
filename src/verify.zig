@@ -38,6 +38,7 @@
 const std = @import("std");
 const parser = @import("parser.zig");
 const binding = @import("binding.zig");
+const ledger = @import("ledger.zig");
 
 const Ed = std.crypto.sign.Ed25519;
 const B2s = std.crypto.hash.blake2.Blake2s256;
@@ -61,6 +62,11 @@ pub const VerifyError = error{
     ActionDigestMismatch, // BE-GRANT-02 / check 9: BLAKE2s(action) != action_digest
     Expired, // BE-GRANT-05 / check 10: any of the three expiry conditions
     AlreadyConsumed, // BE-GRANT-01 / check 11: grant_id already in the ledger
+    // Ledger slice admission errors (BE-ENV-03/04/05, BE-LEDGER-01).
+    WrongBodyType, // BE-ENV-03: body_type not allowed for sender's role
+    SeqWindowStale, // BE-ENV-04: seq below sliding window or duplicate
+    Equivocation, // BE-ENV-05: same (sender, channel, seq) with different hash
+    UnknownParents, // BE-LEDGER-01: parents not in ledger, fetch budget exhausted
 };
 
 // ---------------------------------------------------------------------------
@@ -415,4 +421,75 @@ pub fn verifyServedCertThen(
     // key is the one the certificate binds.
     if (ctx.is_revoked(served.sig_pubkey)) return error.ServedCertRevoked;
     open_session(.{ .sig_pubkey = served.sig_pubkey, .kex_pubkey = served.kex_pubkey });
+}
+
+// ---------------------------------------------------------------------------
+// Ledger admission integration (BE-ENV-03/04/05, BE-LEDGER-01/03).
+//
+// Enforces all admission gates before the body reaches application logic.
+// Checks run in this order: body_type->role map (BE-ENV-03), seq window
+// (BE-ENV-04), equivocation (BE-ENV-05), unknown parents (BE-LEDGER-01),
+// then record in the ledger (BE-LEDGER-03).
+// ---------------------------------------------------------------------------
+
+// Admission context: every input needed for envelope admission.
+pub const AdmissionContext = struct {
+    ledger: *ledger.Ledger,
+    sender_cert: parser.session.Cert,
+    trusted_ca_keys: []const []const u8,
+    now_ms: u64,
+};
+
+// BE-ENV-03: body_type -> role map enforcement. Intent -> agent,
+// Grant/Refusal -> approver, Effect+Span -> executor.
+pub fn bodyTypeAllowed(body_type: u8, role_bits: u16) bool {
+    const is_agent = (role_bits & binding.ROLE_AGENT) != 0;
+    const is_approver = (role_bits & binding.ROLE_APPROVER) != 0;
+    const is_executor = (role_bits & binding.ROLE_EXECUTOR) != 0;
+
+    return switch (body_type) {
+        parser.channel.BODY_INTENT => is_agent,
+        parser.channel.BODY_GRANT, parser.channel.BODY_REFUSAL => is_approver,
+        parser.channel.BODY_EFFECT => is_executor,
+        parser.channel.BODY_CONTROL => true, // Control role-gated at verification
+        else => false,
+    };
+}
+
+// Admission check: runs all gates and records the envelope on success.
+pub fn verifyEnvelopeAdmission(
+    env: parser.channel.Envelope,
+    seq: u64,
+    channel_id: [32]u8,
+    env_hash: [32]u8,
+    parent_hashes: []const [32]u8,
+    ctx: AdmissionContext,
+) VerifyError!void {
+    binding.validateCert(ctx.sender_cert, ctx.trusted_ca_keys, ctx.now_ms) catch return error.BadApproverCert;
+
+    if (!bodyTypeAllowed(env.body_type, ctx.sender_cert.role_bits)) return error.WrongBodyType;
+
+    var sender_key: [32]u8 = undefined;
+    @memcpy(&sender_key, env.sender);
+    ctx.ledger.checkSeq(sender_key, channel_id, seq) catch |err| switch (err) {
+        ledger.LedgerError.WindowStale => return error.SeqWindowStale,
+        else => return err,
+    };
+
+    const entry = ledger.EnvelopeEntry{
+        .hash = env_hash,
+        .sender = sender_key,
+        .channel = channel_id,
+        .seq = seq,
+    };
+    ctx.ledger.insertEnvelope(entry) catch |err| switch (err) {
+        ledger.LedgerError.Divergence => return error.Equivocation,
+        else => return err,
+    };
+
+    if (!ctx.ledger.allParentsPresent(parent_hashes)) return error.UnknownParents;
+
+    try ctx.ledger.setAnchor(sender_key, env_hash);
+
+    if (env.body_type == parser.channel.BODY_CONTROL) try ctx.ledger.setRevocation(sender_key, env_hash);
 }

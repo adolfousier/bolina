@@ -434,8 +434,8 @@ test "BE_GRANT_03 check 4 subject cert without agent role refused" {
         cth.SUBJECT_PUB,
         binding.ROLE_EXECUTOR,
         &[_]u8{0xc0},
-        cth.CERT_NOT_BEFORE,
-        cth.CERT_NOT_AFTER,
+        cth.PRIVILEGED_CERT_NOT_BEFORE,
+        cth.PRIVILEGED_CERT_NOT_AFTER,
     );
     resetEffect();
     try std.testing.expectError(error.BadSubjectCert, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
@@ -727,9 +727,10 @@ fn expectedOverlayAddr(sig_pubkey: []const u8) [16]u8 {
     return addr;
 }
 
-// A time inside the helper certs' validity window (cert_test_helpers pins the
-// window to CERT_NOT_BEFORE..CERT_NOT_AFTER).
-const MESH_NOW: u64 = 1_500_000_000_000;
+// A time inside both helper certs' validity windows: the subject cert's wide
+// CERT_NOT_BEFORE..CERT_NOT_AFTER span and the approver cert's 30-day
+// PRIVILEGED_CERT_NOT_BEFORE..PRIVILEGED_CERT_NOT_AFTER span (BE-REV-01).
+const MESH_NOW: u64 = 1_700_000_000_000;
 
 fn meshCtx(now_ms: u64, revoked: bool) verify.MeshContext {
     return .{
