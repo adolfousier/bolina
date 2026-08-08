@@ -434,8 +434,8 @@ test "BE_GRANT_03 check 4 subject cert without agent role refused" {
         cth.SUBJECT_PUB,
         binding.ROLE_EXECUTOR,
         &[_]u8{0xc0},
-        cth.CERT_NOT_BEFORE,
-        cth.CERT_NOT_AFTER,
+        cth.PRIVILEGED_CERT_NOT_BEFORE,
+        cth.PRIVILEGED_CERT_NOT_AFTER,
     );
     resetEffect();
     try std.testing.expectError(error.BadSubjectCert, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
