@@ -90,7 +90,7 @@ test "BE_LEDGER_01 unknown parents rejected, no fetch budget exceeded" {
     try l.insertEnvelope(entry);
 
     // Parents not in the ledger: unknownParents error.
-    const parents = [_][32]u8{[_]u8{0x33} ** 32, [_]u8{0x44} ** 32};
+    const parents = [_][32]u8{ [_]u8{0x33} ** 32, [_]u8{0x44} ** 32 };
     try std.testing.expect(!l.allParentsPresent(&parents));
 }
 
@@ -151,6 +151,25 @@ test "BE_HIST_02 anchor mismatched on second call causes divergence" {
     try std.testing.expectError(ledger.LedgerError.Divergence, l.setAnchor(sender, h2));
 }
 
+test "BE_HIST_02 anchor for a second signer is retrievable past index zero" {
+    var l = ledger.Ledger.init();
+    const s1 = [_]u8{0x44} ** 32;
+    const s2 = [_]u8{0x55} ** 32;
+    const h1 = hashOf("anchor7a");
+    const h2 = hashOf("anchor7b");
+
+    try l.setAnchor(s1, h1);
+    try l.setAnchor(s2, h2);
+
+    // Both anchors must resolve, including the one stored at index 1.
+    const r1 = l.getAnchor(s1);
+    try std.testing.expect(r1 != null);
+    try std.testing.expectEqualSlices(u8, &h1, &r1.?);
+    const r2 = l.getAnchor(s2);
+    try std.testing.expect(r2 != null);
+    try std.testing.expectEqualSlices(u8, &h2, &r2.?);
+}
+
 // ---------------------------------------------------------------------------
 // BE-HIST-04: revocation immediate for admission (BE-HIST-04).
 // ---------------------------------------------------------------------------
@@ -184,6 +203,22 @@ test "BE_HIST_04 revocation mismatched on second call causes divergence" {
     try l.setRevocation(sender, h1);
     // Second call with different hash: divergence.
     try std.testing.expectError(ledger.LedgerError.Divergence, l.setRevocation(sender, h2));
+}
+
+test "BE_HIST_04 revocation for a second pubkey is found past index zero" {
+    var l = ledger.Ledger.init();
+    const p1 = [_]u8{0x61} ** 32;
+    const p2 = [_]u8{0x62} ** 32;
+    const h1 = hashOf("revoke5a");
+    const h2 = hashOf("revoke5b");
+
+    try l.setRevocation(p1, h1);
+    try l.setRevocation(p2, h2);
+
+    // Both pubkeys must read as revoked, including the one at index 1.
+    try std.testing.expect(l.isRevoked(p1));
+    try std.testing.expect(l.isRevoked(p2));
+    try std.testing.expect(!l.isRevoked([_]u8{0x63} ** 32));
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +303,23 @@ test "BE_ENV_04 reordered seq within window is accepted" {
 
     try l.checkSeq(sender, channel, 100);
     try l.checkSeq(sender, channel, 99); // behind, within window
+}
+
+test "BE_ENV_04 second sender's window is found past index zero" {
+    var l = ledger.Ledger.init();
+    const sender_a = [_]u8{0x11} ** 32;
+    const sender_b = [_]u8{0x22} ** 32;
+    const channel = [_]u8{0x33} ** 32;
+
+    // Sender A seeds the first window (index 0), sender B the second (1).
+    try l.checkSeq(sender_a, channel, 10);
+    try l.checkSeq(sender_b, channel, 20);
+
+    // Sender B's duplicate must be rejected by its EXISTING window, not
+    // absorbed by a fresh one created on a missed lookup.
+    try std.testing.expectError(ledger.LedgerError.WindowStale, l.checkSeq(sender_b, channel, 20));
+    // Sender A's duplicate too, from index zero.
+    try std.testing.expectError(ledger.LedgerError.WindowStale, l.checkSeq(sender_a, channel, 10));
 }
 
 // ---------------------------------------------------------------------------

@@ -194,7 +194,6 @@ pub const Ledger = struct {
                 if (!accepted) return error.WindowStale; // replay or below window
                 return;
             }
-            i += 1;
         }
 
         // No existing window; create one.
@@ -229,7 +228,6 @@ pub const Ledger = struct {
                 }
                 return; // idempotent
             }
-            i += 1;
         }
 
         // New anchor.
@@ -248,7 +246,6 @@ pub const Ledger = struct {
             if (std.mem.eql(u8, &self.anchors[i].pubkey, &pubkey)) {
                 return self.anchors[i].anchor_hash;
             }
-            i += 1;
         }
         return null;
     }
@@ -269,7 +266,6 @@ pub const Ledger = struct {
                 }
                 return;
             }
-            i += 1;
         }
 
         // New revocation.
@@ -288,7 +284,6 @@ pub const Ledger = struct {
             if (std.mem.eql(u8, &self.revocations[i].pubkey, &pubkey)) {
                 return true;
             }
-            i += 1;
         }
         return false;
     }
