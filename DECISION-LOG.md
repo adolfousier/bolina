@@ -880,3 +880,20 @@ Alternatives considered:
 Pre-close checks: (1) read against other sections — §6.1c closed enum, §6.1a certificate-carried membership, §5.1a lookup delivery, BE-HIST-03's causal-interval quantification all cited above. (2) Who picked the denominator — no denominator involved; this is a normative clarification of one mechanism sentence. (3) Does the thing need to exist — BE-HIST-02's retention duty is what makes BE-HIST-03 computable for a node that joined late; without an anchoring rule the causal interval has no left endpoint.
 
 Reversible: the SPEC paragraph reverts to the unimplementable vehicle and the slice's HIST-02 tests revert with it. What would reopen it: a decision to extend the Control enum after all (requires amending BE-CTRL-01 and §2.2's no-extension clause — a protocol-version-scale change, not a slice change); or a reviewer showing a wire-consistent reading of "Control envelope carrying it" that this entry missed.
+
+## D-047 — 2026-08-08 — BE-SURF-03 placement repaired: ledger.zig and historical.zig enter the non-surface list
+
+The ledger slice's Task #3 committed two new source files (src/ledger.zig, src/historical.zig) without adding them to the BE-SURF-03 lists, and committed on the strength of `zig build test` plus fmt alone — the full prumo gate was scheduled for Task #5. BE-SURF-03 requires every non-test `src/*.zig` to appear in exactly one of its four lists, and M5 parses those lists out of SPEC.md (D-041), so the first full gate run of Task #5 returned M5 FAIL (two unplaced files) and M11 FAIL by cascade (post-authentication sum untrustworthy while placement is broken). Same defect class as D-033/D-034; third occurrence. The gate caught it, which is what the gate is for; the debt is the process that let it ship.
+
+Decision: place both files in the non-surface list, which is the placement D-045 already decided in substance ("all new code is non-budgeted verification state") but never wrote into the lists. ledger.zig is state over parsed values: a hash-only store (BE-LEDGER-02 keeps plaintext out of it by construction), sequence windows, and anchor/revocation tables, none of which parse attacker bytes. historical.zig is the audit path over ledger and dag state and parses nothing. Neither enters the pre-authentication or post-authentication unit; the M11 measurement is therefore unchanged by the ledger slice, exactly as D-045 projected.
+
+Process clause added: any commit that creates a new `src/*.zig` file MUST run the full prumo-verify gate before commit, not `zig build test` alone. Placement is a property of the gate, not of the build; a green build that fails placement is not green.
+
+Alternatives considered:
+
+1. Place ledger.zig in the post-authentication unit. Rejected: that is the "attacker-influenced state is budget surface" ruling D-045 explicitly declined, and it would force the slimming surgery before the REV-01 measurement this task exists to take.
+2. Version-bump to v0.3.2-draft for the list change. Rejected: v0.3.1-draft is the unreleased ledger-slice draft; the placement belongs to the same draft cycle as the code it places, so the changelog paragraph extends rather than multiplies.
+
+Pre-close checks: (1) read against other sections — BE-SURF-03's own MUST names the failure mode ("a file the spec does not place fails the build until the spec places it"); D-018's no-unmeasured-place clause is satisfied because non-surface is itself a measured list with no cap to game. (2) Who picked the denominator — SPEC's lists; this entry writes into them the placement D-045 already decided. (3) Does the thing need to exist — the files already exist and are tested; the list edit is what makes them legal.
+
+Reversible: the two names leave the list and M5 goes red again. What would reopen it: Daniel ruling attacker-influenced verification state IS budget surface (ledger.zig moves to the post-authentication list, slimming surgery gets its own estimate first, per D-045's reversal clause).
