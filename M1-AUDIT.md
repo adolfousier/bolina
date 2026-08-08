@@ -125,11 +125,11 @@ which belongs to a later milestone, not the keying sprint. These are mapped
 for the milestone that owns them and left UNBOUND in M1 (high water does not
 move for them).
 
-### C1. Mesh relay (M2 mesh slice)
+### C1. Mesh relay (BE-MESH-02 landed in the relay slice; store-and-forward remains M2)
 
 | Marker | Requirement | Status |
 |--------|-------------|--------|
-| BE-MESH-02 | Relay forwards Noise transport packets, holds no key material, cannot decrypt | No relay code. M2. |
+| BE-MESH-02 | Relay forwards Noise transport packets, holds no key material, cannot decrypt | **BOUND** (`BE_MESH_02`) - implemented in `src/relay.zig` (relay sub-unit 183/510, D-043): opaque type-5 forwarding through a bounded 4096-entry table, one-shot signed registration (domain tag 0x07), no key material in the relay unit. 17 tests bind the marker by name; 11 relay mutants killed (harness v10). M1 high water moved 67 to 68. |
 | BE-MESH-03 | Relay MAY store forwarded ciphertext for an offline recipient under quota + TTL | No relay code. M2. |
 
 ### C2. Sync / backfill (sync slice)
@@ -317,3 +317,28 @@ Full gauntlet after the pass: `zig fmt --check` clean; `zig build test`
 PASSED 77 FAILED 0; mutation 57/57 killed, 0 survived (chunked, one writer
 per domain; D-035/D-040). The mechanism decisions behind these verdicts are
 D-041 (denominator law) and D-042 (keying-pass verdicts).
+
+---
+
+## Relay round addendum (branch relay-slice, measured 2026-08-08)
+
+BE-MESH-02 moves out of bucket C1. `src/relay.zig` landed under the D-043
+tripwire at 183/510 relay sub-unit lines; the handshake sub-unit is
+ratcheted at 990/990 with zero growth. M1 ratchet reads 68/109 bound, high
+water 68 (DECL 109 excludes BE-GRANT-03c per its SUPERSEDED BY REMOVAL
+clause, D-041).
+
+Full gauntlet at `fc4317c` plus two documentation commits: `zig fmt --check`
+clean; `zig build test` green, 234 test declarations; em-dash scan clean
+over `src/` and `tools/`; `verify-vectors` PASSED 77 FAILED 0; prumo-verify
+0 failing (M5 pre-authentication 1173/1500, M11 1493/1500, M9 denominator
+64 exit points); mutation harness v10 68/68 killed, 0 survived across seven
+domains (grant 17, evidence 11, session 11, channel 8, mesh 6, transport 4,
+relay 11), single writer per run (D-035). Fuzz coverage re-measured the same
+day: 17/64 exit points reached over 4,000,000 inputs (24,000,000 parser
+calls), 0 panics; the eight relay exits join the unreached set until
+`src/fuzz.zig` grows relay entry points and `test/vectors.json` grows relay
+seeds.
+
+BE-MESH-03 stays in this bucket: store-and-forward is a SPEC MAY, deferred
+by D-043. That is scope, not debt.
