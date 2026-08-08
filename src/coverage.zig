@@ -97,6 +97,17 @@ pub const Branch = enum {
     cert_ca_order, // parseCert: CA keys not strictly ascending / not distinct (SPEC 3.1)
     cert_trailing, // parseCert: bytes after the last CA signature
     cert_accepted, // parseCert: returned a valid Cert
+    // Relay parsers (SPEC §5.2a, BE-MESH-02, D-044). Type 5 route header and
+    // type 6 registration, both fixed-size and role-gated. Malformed covers
+    // wrong type byte and non-zero reserved; each has its own trailing check.
+    relay_route_type, // parseRelayRoute: message_type != 5
+    relay_route_reserved, // parseRelayRoute: reserved bytes non-zero
+    relay_route_trailing, // parseRelayRoute: bytes after the 20-byte message
+    relay_route_accepted, // parseRelayRoute: returned a valid route header
+    relay_reg_type, // parseRelayRegistration: message_type != 6
+    relay_reg_reserved, // parseRelayRegistration: reserved bytes non-zero
+    relay_reg_trailing, // parseRelayRegistration: bytes after the 124-byte message
+    relay_reg_accepted, // parseRelayRegistration: returned a valid registration
     // Binding message parser (SPEC 4.1 BE-TR-01). The binding message is the
     // first AEAD plaintext after the handshake: a length-prefixed certificate
     // followed by a 64-byte Ed25519 signature over the Noise handshake hash h.
@@ -136,9 +147,9 @@ pub inline fn reject(comptime tag: Branch) parser.ParseError {
     return switch (tag) {
         .cursor_truncated, .data_payload_short => error.Truncated,
         .env_parent_oversize, .env_body_oversize, .field16_oversize, .field32_oversize, .data_payload_oversize, .cert_group_oversize, .cert_ca_count_oversize, .genesis_ca_count_oversize => error.Oversize,
-        .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing, .hs_init_trailing, .hs_resp_trailing, .cookie_trailing, .lookup_req_trailing, .lookup_resp_trailing, .cert_trailing, .bind_trailing, .genesis_trailing, .control_trailing => error.TrailingBytes,
-        .hs_init_type, .hs_init_reserved, .hs_resp_type, .hs_resp_reserved, .cookie_type, .cookie_reserved, .data_type, .data_reserved, .frag_total_zero, .frag_index_range, .cert_ca_count_zero, .cert_ca_order, .bind_cert_len_zero, .genesis_ca_count_zero => error.Malformed,
-        .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted, .hs_init_accepted, .hs_resp_accepted, .cookie_accepted, .data_accepted, .frag_accepted, .lookup_req_accepted, .lookup_resp_accepted, .cert_accepted, .bind_accepted, .genesis_accepted, .control_accepted => @compileError("accepted exit points do not reject; use accept()"),
+        .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing, .hs_init_trailing, .hs_resp_trailing, .cookie_trailing, .lookup_req_trailing, .lookup_resp_trailing, .cert_trailing, .relay_route_trailing, .relay_reg_trailing, .bind_trailing, .genesis_trailing, .control_trailing => error.TrailingBytes,
+        .hs_init_type, .hs_init_reserved, .hs_resp_type, .hs_resp_reserved, .cookie_type, .cookie_reserved, .data_type, .data_reserved, .frag_total_zero, .frag_index_range, .cert_ca_count_zero, .cert_ca_order, .relay_route_type, .relay_route_reserved, .relay_reg_type, .relay_reg_reserved, .bind_cert_len_zero, .genesis_ca_count_zero => error.Malformed,
+        .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted, .hs_init_accepted, .hs_resp_accepted, .cookie_accepted, .data_accepted, .frag_accepted, .lookup_req_accepted, .lookup_resp_accepted, .cert_accepted, .relay_route_accepted, .relay_reg_accepted, .bind_accepted, .genesis_accepted, .control_accepted => @compileError("accepted exit points do not reject; use accept()"),
     };
 }
 

@@ -48,7 +48,7 @@
 #   M7: build.zig hardcodes ReleaseSafe and exposes no optimize option
 #        (LANGUAGE.md O1). Compiler version and flags are recorded above.
 #   M9: coverage denominator law: every error exit of the parser module
-#        (src/parser.zig and src/parser/; the module straddles the
+#        (src/parser.zig, src/relay.zig, and src/parser/; the module straddles the
 #        authentication line and is not one of the M5/M11 unit lists)
 #        routes through coverage.reject(), every accepted return through
 #        coverage.accept() (both wrappers in src/coverage.zig); zero raw
@@ -173,8 +173,9 @@ fi
 # ---- M5/M11: BE-SURF-03 surface units, denominators parsed from SPEC.md ----
 # Both gates read the four normative file lists and the line cap from the
 # BE-SURF-03 text at run time (denominator law): nothing about the units is
-# stored in this script. M5 gates the pre-authentication unit and enforces
-# the exhaustiveness clause (every non-test src file in exactly one list, no
+# stored in this script. M5 gates the pre-authentication unit (subdivided into
+# handshake ≤990 and relay ≤510 sub-units, sum ≤1500) and enforces the
+# exhaustiveness clause (every non-test src file in exactly one list, no
 # file in two); M11 gates the post-authentication unit. Absent listed files
 # count as 0 lines: the lists are normative placement, ahead of the code.
 SURF_SECTION="$(sed -n '/\*\*BE-SURF-03/,/no unmeasured place/p' SPEC.md)"
@@ -183,10 +184,20 @@ SURF_JOINED="$(printf '%s\n' "$SURF_SECTION" | awk '
     /^  / && b != "" { line = $0; sub(/^ +/, " ", line); b = b line; next }
     { if (b != "") { print b; b = "" } }
     END { if (b != "") print b }')"
-surf_bullet_files() { # label -> one file path per line
+surf_bullet_files() { # label -> one file path per line (from joined bullets)
     printf '%s\n' "$SURF_JOINED" | grep -F "$1" | grep -o 'src/[a-z0-9_/]*\.zig' | sort
 }
+surf_sub_bullet_files() { # label -> files from the raw line containing that label (sub-bullets)
+    printf '%s\n' "$SURF_SECTION" | grep -F "$1" | grep -o 'src/[a-z0-9_/]*\.zig' | sort
+}
+surf_sub_bullet_cap() { # label -> cap number from "cap N lines" on the raw line
+    printf '%s\n' "$SURF_SECTION" | grep -F "$1" | grep -o 'cap [0-9][0-9]* lines' | grep -o '[0-9][0-9]*'
+}
 PRE_AUTH_FILES="$(surf_bullet_files '**Pre-authentication unit:**')"
+HANDSHAKE_FILES="$(surf_sub_bullet_files '**Handshake sub-unit:**')"
+RELAY_FILES="$(surf_sub_bullet_files '**Relay sub-unit:**')"
+HANDSHAKE_CAP="$(surf_sub_bullet_cap '**Handshake sub-unit:**')"
+RELAY_CAP="$(surf_sub_bullet_cap '**Relay sub-unit:**')"
 POST_AUTH_FILES="$(surf_bullet_files '**Post-authentication unit:**')"
 NON_SURFACE_FILES="$(surf_bullet_files '**Non-surface:**')"
 HARNESS_FILES="$(surf_bullet_files '**Harness and entry:**')"
@@ -199,6 +210,9 @@ SURF_PROBLEMS=""
 [ -z "$PRE_AUTH_FILES" ] && SURF_PROBLEMS="$SURF_PROBLEMS pre-authentication list not parsed from SPEC.md BE-SURF-03;"
 [ -z "$POST_AUTH_FILES" ] && SURF_PROBLEMS="$SURF_PROBLEMS post-authentication list not parsed from SPEC.md BE-SURF-03;"
 [ "$HARNESS_TEST_GLOB" -eq 0 ] && SURF_PROBLEMS="$SURF_PROBLEMS harness *_test.zig glob not found in SPEC.md BE-SURF-03;"
+[ -z "$HANDSHAKE_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS handshake sub-unit cap not parsed from SPEC.md BE-SURF-03;"
+[ -z "$RELAY_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS relay sub-unit cap not parsed from SPEC.md BE-SURF-03;"
+[ -n "$HANDSHAKE_CAP" ] && [ -n "$RELAY_CAP" ] && [ "$((HANDSHAKE_CAP + RELAY_CAP))" -gt "$SURF_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS handshake cap ($HANDSHAKE_CAP) + relay cap ($RELAY_CAP) exceeds unit cap ($SURF_CAP);"
 SURF_DUPES="$(printf '%s\n%s\n%s\n%s\n' "$PRE_AUTH_FILES" "$POST_AUTH_FILES" "$NON_SURFACE_FILES" "$HARNESS_FILES" | grep -v '^$' | sort | uniq -d)"
 [ -n "$SURF_DUPES" ] && SURF_PROBLEMS="$SURF_PROBLEMS placed in more than one BE-SURF-03 list: $(printf '%s\n' "$SURF_DUPES" | tr '\n' ' ');"
 SURF_PLACED="$(printf '%s\n%s\n%s\n%s\n' "$PRE_AUTH_FILES" "$POST_AUTH_FILES" "$NON_SURFACE_FILES" "$HARNESS_FILES" | grep -v '^$' | sort)"
@@ -228,15 +242,21 @@ surf_unit_detail() { # newline-separated file list -> "name N," per file
     echo "$out"
 }
 PRE_AUTH_LINES="$(surf_unit_lines "$PRE_AUTH_FILES")"
+HANDSHAKE_LINES="$(surf_unit_lines "$HANDSHAKE_FILES")"
+RELAY_LINES="$(surf_unit_lines "$RELAY_FILES")"
 POST_AUTH_LINES="$(surf_unit_lines "$POST_AUTH_FILES")"
 
 if [ -n "$SURF_PROBLEMS" ]; then
     row M5 FAIL "${SURF_PROBLEMS# } (BE-SURF-03)"
     FAILS=$((FAILS + 1))
-elif [ "$PRE_AUTH_LINES" -le "$SURF_CAP" ]; then
-    row M5 PASS "pre-authentication unit $PRE_AUTH_LINES/$SURF_CAP lines:$(surf_unit_detail "$PRE_AUTH_FILES") lists and cap parsed from SPEC.md BE-SURF-03"
+elif [ "$HANDSHAKE_LINES" -le "$HANDSHAKE_CAP" ] && [ "$RELAY_LINES" -le "$RELAY_CAP" ] && [ "$PRE_AUTH_LINES" -le "$SURF_CAP" ]; then
+    row M5 PASS "pre-authentication unit $PRE_AUTH_LINES/$SURF_CAP lines (handshake $HANDSHAKE_LINES/$HANDSHAKE_CAP, relay $RELAY_LINES/$RELAY_CAP):$(surf_unit_detail "$PRE_AUTH_FILES") lists and caps parsed from SPEC.md BE-SURF-03"
 else
-    row M5 FAIL "pre-authentication unit $PRE_AUTH_LINES/$SURF_CAP lines, over budget:$(surf_unit_detail "$PRE_AUTH_FILES") (BE-SURF-03)"
+    DETAIL=""
+    [ "$HANDSHAKE_LINES" -gt "$HANDSHAKE_CAP" ] && DETAIL="$DETAIL handshake sub-unit $HANDSHAKE_LINES/$HANDSHAKE_CAP over budget;"
+    [ "$RELAY_LINES" -gt "$RELAY_CAP" ] && DETAIL="$DETAIL relay sub-unit $RELAY_LINES/$RELAY_CAP over budget;"
+    [ "$PRE_AUTH_LINES" -gt "$SURF_CAP" ] && DETAIL="$DETAIL total $PRE_AUTH_LINES/$SURF_CAP over budget;"
+    row M5 FAIL "pre-authentication unit ${DETAIL# }:$(surf_unit_detail "$PRE_AUTH_FILES") (BE-SURF-03)"
     FAILS=$((FAILS + 1))
 fi
 if [ -n "$SURF_PROBLEMS" ]; then
@@ -339,7 +359,7 @@ fi
 # Every parser error exit routes through coverage.reject() and every accepted
 # return through coverage.accept(); both wrappers live in src/coverage.zig.
 # The denominator is counted HERE from the parser module's wrapper call sites
-# at run time (src/parser.zig plus src/parser/; the module straddles the
+# at run time (src/parser.zig, src/relay.zig, plus src/parser/; the module straddles the
 # authentication line and is not one of the M5/M11 unit lists), never taken
 # from the enum alone: the Branch enum must match the
 # source one for one (one counter per exit site), a new exit point fails
@@ -348,7 +368,7 @@ fi
 # exceptions: one exception is the start of a list, and a list is where M8
 # once hid a gap.
 M9_STRIP='s|//.*||'
-PARSER_MODULE_FILES="src/parser.zig $(find src/parser -name '*.zig' -type f 2>/dev/null | sort | tr '\n' ' ')"
+PARSER_MODULE_FILES="src/parser.zig src/relay.zig $(find src/parser -name '*.zig' -type f 2>/dev/null | sort | tr '\n' ' ')"
 RAW_RET="$(cat $PARSER_MODULE_FILES | sed "$M9_STRIP" | grep -c 'return error\.' || true)"
 REJECT_TAGS="$(cat $PARSER_MODULE_FILES | sed "$M9_STRIP" | grep -o 'coverage\.reject(\.[a-z_0-9]*' | sed 's/.*\.//' | sort)"
 ACCEPT_TAGS="$(cat $PARSER_MODULE_FILES | sed "$M9_STRIP" | grep -o 'coverage\.accept(\.[a-z_0-9]*' | sed 's/.*\.//' | sort)"
