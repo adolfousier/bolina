@@ -1,13 +1,29 @@
 #!/usr/bin/env python3
 # mutation-test.py
 #
-# Mutation harness v10 for the Grant verifier, the attestation layer, the
+# Mutation harness v11 for the Grant verifier, the attestation layer, the
 # transport DoS gate, the session phase, the channel layer, the mesh identity
-# boundary AND the relay surface (LANGUAGE.md section 4 metric; SPEC.md
-# section 11.2).
+# boundary, the relay surface AND the ledger/history surface (LANGUAGE.md
+# section 4 metric; SPEC.md section 11.2).
 # cargo-mutants does not exist for Zig, so this applies one mutant at a time to
 # a source file, rebuilds, runs the full test suite, and records whether the
 # suite kills it.
+#
+# v11 (ledger slice): the ledger domain. BE-LEDGER-01/02/03, BE-HIST-02/03/04
+# and BE-ENV-03/04/05 shipped as src/ledger.zig plus src/historical.zig and
+# the verify.zig admission path (D-045/D-046), so the §9 obligations get their
+# own denominator, detected from SPEC markers like every other domain:
+#   ledger <- §9.1 BE-LEDGER markers, §9.2 BE-HIST markers, §3 BE-ENV-03/04/05
+# Nine keys: unknown-parent rejection, the hash-only store, Grant/Effect
+# recording, the body_type/role map, the sliding seq window, equivocation
+# surfacing, anchor-before-first-use, the causal-interval validity check, and
+# revocation's causal position. Deliberately not keyed, for a stated reason
+# rather than convenience: BE-HIST-01's audit clock exemption. Its vehicle
+# validateCertNoClock is a documented stub pending the binding.zig refactor,
+# so no test exercises it and no mutant of it could be killed; the key enters
+# this denominator when the stub lands. The f8ee78e regression (five scan
+# loops stepped by two, skipping odd-index entries) is covered by the
+# second-signer/second-pubkey witnesses the fix added.
 #
 # v10 (relay slice): the relay domain. BE-MESH-02 shipped as src/relay.zig
 # (D-043/D-044), so the mesh obligations the v9 note excluded for lack of a
@@ -126,6 +142,8 @@ TARGETS = {
     "session.zig": SRC / "session.zig",
     "binding.zig": SRC / "binding.zig",
     "relay.zig": SRC / "relay.zig",
+    "ledger.zig": SRC / "ledger.zig",
+    "historical.zig": SRC / "historical.zig",
 }
 ORIGINALS = {name: path.read_text() for name, path in TARGETS.items()}
 
@@ -389,6 +407,53 @@ def relay_properties_from_spec():
     text = SPEC.read_text()
     props = set()
     for key, _what, pattern in RELAY_MARKERS:
+        if re.search(pattern, text):
+            props.add(key)
+    return props
+
+
+# --- ledger denominator, derived from SPEC.md §9.1/§9.2 and BE-ENV-03/04/05 -
+# BE-HIST-01 is deliberately absent: validateCertNoClock is a documented stub
+# pending the binding.zig refactor, no test exercises it, and a mutant of it
+# could not be killed. Its key enters here when the stub lands (v11 note).
+LEDGER_MARKERS = [
+    # (denominator key, what SPEC says, marker text that must be present)
+    ("ledger-unknown-parents",
+     "an envelope naming unknown parent hashes is rejected within a bounded fetch",
+     r"reject an envelope whose `parents` reference unknown hashes"),
+    ("ledger-hash-only",
+     "the ledger stores hashes, never plaintext",
+     r"The ledger stores hashes, never plaintext"),
+    ("ledger-grant-effect",
+     "every Grant and every Effect appears in the ledger",
+     r"Every `Grant` and every `Effect` MUST appear in the ledger"),
+    ("env-role-map",
+     "an envelope is rejected when its sender certificate lacks the body_type role",
+     r"reject an envelope whose sender certificate lacks the role"),
+    ("env-seq-window",
+     "a per-(sender, channel) sliding acceptance window over seq",
+     r"sliding acceptance window over"),
+    ("env-equivocation",
+     "a second envelope at one (sender, channel, seq) raises a divergence, never dropped",
+     r"raise a divergence event with both hashes"),
+    ("hist-anchor-first-use",
+     "a signer's certificate is anchored in the channel before its first use",
+     r"A signer's certificate MUST be anchored in the"),
+    ("hist-causal-interval",
+     "historical validity is causal descent from the anchor, outside any revocation",
+     r"An envelope is historically valid if it is a causal"),
+    ("hist-revocation-causal",
+     "revocation is immediate for admission and causal-positioned for audit",
+     r"A revocation takes effect for admission immediately on"),
+]
+
+
+def ledger_properties_from_spec():
+    """The set of ledger/history properties the slice must prove, each detected
+    from its marker in SPEC §9.1/§9.2 or the BE-ENV-03/04/05 rows."""
+    text = SPEC.read_text()
+    props = set()
+    for key, _what, pattern in LEDGER_MARKERS:
         if re.search(pattern, text):
             props.add(key)
     return props
@@ -849,6 +914,102 @@ MUTANTS = [
      "forwarded packet mutated (leading byte stripped)",
      "            return packet;\n        }\n    }\n    return ForwardError.UnknownRecipient;",
      "            return packet[1..]; // MUTANT: forwarded packet mutated\n        }\n    }\n    return ForwardError.UnknownRecipient;"),
+    # --- ledger domain: the ledger/history surface (src/ledger.zig,
+    # src/historical.zig, src/verify.zig admission; SPEC §9, BE-ENV-03/04/05)
+    # ledger-unknown-parents: the parent-resolution refusal dropped. The
+    # unknown-parents test expects allParentsPresent false for hashes never
+    # inserted; with the refusal gone every parent set resolves.
+    ("ledger", "ledger.zig", "CHECK-ABSENCE", "ledger-unknown-parents",
+     "unknown parents never rejected (resolution always succeeds)",
+     "            if (!found) return false;",
+     "            _ = found; // MUTANT: unknown parents never rejected"),
+    # ledger-hash-only: the stored commitment zeroed. The store keeps a hash
+    # that commits to nothing; the known-parents test inserts a parent and
+    # resolves it by its LITERAL BLAKE2s hash, which no longer matches.
+    ("ledger", "ledger.zig", "WRONG-VALUE", "ledger-hash-only",
+     "stored commitment zeroed (the hash kept is not the envelope's)",
+     "        if (self.envelope_count >= MAX_ENVELOPES) return error.StoreFull;\n        self.envelopes[self.envelope_count] = entry;",
+     "        if (self.envelope_count >= MAX_ENVELOPES) return error.StoreFull;\n        var blank = entry;\n        blank.hash = [_]u8{0} ** HASH_BYTES; // MUTANT: stored commitment zeroed\n        self.envelopes[self.envelope_count] = blank;"),
+    # ledger-grant-effect: the record is written but the count never advances.
+    # Every Grant/Effect acceptance reads as an empty ledger; the recording
+    # tests expect envelope_count 1 after one insert and die at 0.
+    ("ledger", "ledger.zig", "WRONG-LOGIC", "ledger-grant-effect",
+     "record written but the count never advances (ledger reads empty)",
+     "        self.envelopes[self.envelope_count] = entry;\n        self.envelope_count += 1;",
+     "        self.envelopes[self.envelope_count] = entry;\n        // MUTANT: record written but the count never advances"),
+    # env-equivocation (absorb half): the second copy at one triple is
+    # absorbed as a routine duplicate, exactly the behaviour BE-ENV-05
+    # forbids. The divergence test expects error.Divergence and dies at void.
+    ("ledger", "ledger.zig", "CHECK-ABSENCE", "env-equivocation",
+     "equivocation absorbed as a routine duplicate (divergence never raised)",
+     "                if (std.mem.eql(u8, &e.hash, &entry.hash)) {\n                    return; // idempotent: same hash already stored\n                } else {\n                    return error.Divergence; // different hash: equivocation\n                }",
+     "                return; // MUTANT: second copy absorbed, divergence never raised"),
+    # env-equivocation (inversion half): the hash comparison flipped, so an
+    # identical duplicate raises Divergence and a different one is absorbed.
+    # The idempotency test re-inserts the SAME entry and dies at Divergence.
+    ("ledger", "ledger.zig", "WRONG-LOGIC", "env-equivocation",
+     "hash comparison inverted (identical copy treated as equivocation)",
+     "                if (std.mem.eql(u8, &e.hash, &entry.hash)) {",
+     "                if (!std.mem.eql(u8, &e.hash, &entry.hash)) { // MUTANT: identical hash treated as equivocation"),
+    # env-seq-window (accept-all half): the window verdict discarded. Every
+     # seq is accepted: the duplicate and below-window tests expect
+    # WindowStale and die at void.
+    ("ledger", "ledger.zig", "CHECK-ABSENCE", "env-seq-window",
+     "window verdict discarded (stale and duplicate seq never rejected)",
+     "                const accepted = self.seq_windows[i].window.check(seq);\n                if (!accepted) return error.WindowStale; // replay or below window",
+     "                _ = self.seq_windows[i].window.check(seq); // MUTANT: stale and duplicate seq never rejected"),
+    # env-seq-window (strict-maximum half): the sliding window replaced by the
+    # strict "greater than the highest accepted" rule BE-ENV-04 forbids. The
+    # reordered-seq test accepts LITERAL 99 after 100 and dies at WindowStale.
+    ("ledger", "ledger.zig", "WRONG-LOGIC", "env-seq-window",
+     "sliding window replaced by the forbidden strict maximum",
+     "                const accepted = self.seq_windows[i].window.check(seq);",
+     "                const accepted = seq > self.seq_windows[i].window.largest; // MUTANT: strict maximum, forbidden by BE-ENV-04"),
+    # hist-anchor-first-use (reposition half): a second setAnchor with a
+    # different hash moves the anchor instead of diverging. BE-HIST-02 pins
+    # ONE anchor per signer; the mismatch test expects Divergence, dies at
+    # void.
+    ("ledger", "ledger.zig", "WRONG-LOGIC", "hist-anchor-first-use",
+     "anchor repositioned after first use (second hash silently adopted)",
+     "                if (!std.mem.eql(u8, &self.anchors[i].anchor_hash, &anchor_hash)) {\n                    // BE-HIST-02 requires ONE anchor per pubkey; mismatch is fatal.\n                    return error.Divergence;\n                }\n                return; // idempotent",
+     "                // MUTANT: the anchor follows the latest envelope, not the first.\n                self.anchors[i].anchor_hash = anchor_hash;\n                return;"),
+    # hist-anchor-first-use (lookup half): getAnchor returns the first stored
+    # anchor regardless of signer. The second-signer regression test stores
+    # two anchors and expects each lookup to return its OWN hash; it gets the
+    # index-0 hash for both and dies on the slice comparison.
+    ("ledger", "ledger.zig", "WRONG-LOGIC", "hist-anchor-first-use",
+     "anchor lookup ignores the signer (any anchor satisfies any pubkey)",
+     "    pub fn getAnchor(self: *const Ledger, pubkey: [LEN_SIG_PUBKEY]u8) ?[HASH_BYTES]u8 {\n        var i: usize = 0;\n        while (i < self.anchor_count) : (i += 1) {\n            if (std.mem.eql(u8, &self.anchors[i].pubkey, &pubkey)) {\n                return self.anchors[i].anchor_hash;\n            }\n        }\n        return null;\n    }",
+     "    pub fn getAnchor(self: *const Ledger, pubkey: [LEN_SIG_PUBKEY]u8) ?[HASH_BYTES]u8 {\n        _ = pubkey; // MUTANT: any anchored signer satisfies any lookup\n        if (self.anchor_count > 0) return self.anchors[0].anchor_hash;\n        return null;\n    }"),
+    # hist-revocation-causal (reposition half): a second setRevocation with a
+    # different hash moves the revocation instead of diverging. The mismatch
+    # test expects Divergence and dies at void.
+    ("ledger", "ledger.zig", "WRONG-LOGIC", "hist-revocation-causal",
+     "revocation repositioned after the fact (second hash silently adopted)",
+     "                if (!std.mem.eql(u8, &self.revocations[i].revoke_hash, &revoke_hash)) {\n                    // Inconsistent revocation: divergence.\n                    return error.Divergence;\n                }\n                return;",
+     "                // MUTANT: the revocation follows the latest envelope, not the first.\n                self.revocations[i].revoke_hash = revoke_hash;\n                return;"),
+    # hist-revocation-causal (reads-live half): isRevoked returns false for a
+    # revoked pubkey. The revocation test dies directly; the BE-HIST-03
+    # descendant-of-revocation audit test dies too, because historicalValidity
+    # never reaches its DescendantOfRevocation branch.
+    ("ledger", "ledger.zig", "WRONG-LOGIC", "hist-revocation-causal",
+     "revoked pubkey reads live (isRevoked false on a match)",
+     "            if (std.mem.eql(u8, &self.revocations[i].pubkey, &pubkey)) {\n                return true;\n            }",
+     "            if (std.mem.eql(u8, &self.revocations[i].pubkey, &pubkey)) {\n                return false; // MUTANT: revoked pubkey reads live\n            }"),
+    # hist-causal-interval: the descent-from-anchor check dropped in the audit
+    # path. The not-descendant test stores an anchor with NO dag edge and
+    # expects NotDescendantOfAnchor; without the check the audit passes it.
+    ("ledger", "historical.zig", "CHECK-ABSENCE", "hist-causal-interval",
+     "causal descent from the anchor never checked on audit",
+     "    const anchor_hash = ctx.ledger.getAnchor(sender) orelse return error.AnchorNotFound;\n    if (!ctx.dag.isAncestor(anchor_hash, env_hash)) {\n        return error.NotDescendantOfAnchor;\n    }",
+     "    if (ctx.ledger.getAnchor(sender) == null) return error.AnchorNotFound;\n    // MUTANT: causal descent from the anchor never checked"),
+    # env-role-map: Grant and Refusal gated on the agent role instead of
+    # approver. The Grant test calls bodyTypeAllowed with the LITERAL approver
+    # role bits and dies at false.
+    ("ledger", "verify.zig", "WRONG-LOGIC", "env-role-map",
+     "Grant and Refusal gated on agent instead of approver",
+     "        parser.channel.BODY_GRANT, parser.channel.BODY_REFUSAL => is_approver,",
+     "        parser.channel.BODY_GRANT, parser.channel.BODY_REFUSAL => is_agent, // MUTANT: Grant and Refusal need agent"),
 ]
 
 
@@ -887,6 +1048,9 @@ def main():
     relay_props = relay_properties_from_spec()
     if not relay_props:
         sys.exit("FATAL: no relay properties detected in SPEC §5.2a/BE-SIG-01")
+    ledger_props = ledger_properties_from_spec()
+    if not ledger_props:
+        sys.exit("FATAL: no ledger properties detected in SPEC §9/BE-ENV-03/04/05")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -898,6 +1062,7 @@ def main():
     print(f"  section-6 channel properties:    {sorted(channel_props)} ({len(channel_props)})")
     print(f"  section-5 mesh properties:       {sorted(mesh_props)} ({len(mesh_props)})")
     print(f"  relay properties (§5.2a):        {sorted(relay_props)} ({len(relay_props)})")
+    print(f"  ledger properties (§9):          {sorted(ledger_props)} ({len(ledger_props)})")
     print()
 
     # 2. scope check: no mutant may attack a key its domain's SPEC does not list
@@ -930,6 +1095,10 @@ def main():
             if key not in relay_props:
                 sys.exit(f"FATAL: relay mutant '{name}' attacks '{key}', which "
                          "SPEC §5.2a/BE-SIG-01 does not declare (scope lie)")
+        elif domain == "ledger":
+            if key not in ledger_props:
+                sys.exit(f"FATAL: ledger mutant '{name}' attacks '{key}', which "
+                         "SPEC §9/BE-ENV-03/04/05 does not declare (scope lie)")
         else:
             sys.exit(f"FATAL: mutant '{name}' in unknown domain '{domain}'")
 
@@ -1029,10 +1198,15 @@ def main():
         r_cov = {r["key"] for r in r_run if r["killed"]}
         print(f"relay:    {len(r_cov)}/{len(relay_props)} §5.2a "
               f"properties covered by killed mutants")
+    l_run, l_surv, l_uncov, _ = gate_domain("ledger", ledger_props)
+    if in_scope("ledger"):
+        l_cov = {r["key"] for r in l_run if r["killed"]}
+        print(f"ledger:   {len(l_cov)}/{len(ledger_props)} §9/BE-ENV "
+              f"properties covered by killed mutants")
     total_run = [r for r in results if not r["skipped"]]
     total_killed = sum(1 for r in total_run if r["killed"])
     print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
-          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv)}"
+          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv)}"
           f" survived")
     if g_surv:
         print(f"  grant SURVIVORS: {g_surv}")
@@ -1048,6 +1222,8 @@ def main():
         print(f"  mesh SURVIVORS: {m_surv}")
     if r_surv:
         print(f"  relay SURVIVORS: {r_surv}")
+    if l_surv:
+        print(f"  ledger SURVIVORS: {l_surv}")
     if g_uncov:
         print(f"  UNCOVERED grant checks: {g_uncov}")
     if e_uncov:
@@ -1062,14 +1238,16 @@ def main():
         print(f"  UNCOVERED mesh properties: {m_uncov}")
     if r_uncov:
         print(f"  UNCOVERED relay properties: {r_uncov}")
+    if l_uncov:
+        print(f"  UNCOVERED ledger properties: {l_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
     ok = ((not g_surv) and (not e_surv) and (not t_surv) and (not s_surv)
-          and (not c_surv) and (not m_surv) and (not r_surv)
+          and (not c_surv) and (not m_surv) and (not r_surv) and (not l_surv)
           and (not g_uncov) and (not e_uncov) and (not t_uncov)
           and (not s_uncov) and (not c_uncov) and (not m_uncov)
-          and (not r_uncov) and g_cb)
+          and (not r_uncov) and (not l_uncov) and g_cb)
     return 0 if ok else 1
 
 
