@@ -912,6 +912,6 @@ BE-REV-01 adds a 30-day cap to approver/executor certificates (SPEC.md section 7
 
 Collision resolution (Option A, proceed): added narrow-window constants PRIVILEGED_CERT_NOT_BEFORE/AFTER (1.699e12..1.701592e12 ms, exactly 30 days), updated approverCert() to use them, adjusted test now_ms values to fit inside the narrow window (MESH_NOW=1.7e12), and added BE_REV_01 tests (approver/executor acceptance/refusal, agent exemption). Agent certificates retain the wide window (no cap).
 
-Line cost: binding.zig +5 (constant, error, 3-line check), cert_test_helpers.zig +2 (two narrow-window constants with inline comments), verify_test.zig 0 net (MESH_NOW now fits narrow window). Total: 7 lines, fits within the 7-line headroom (post-auth 1493→1497/1500). M1 ratchet 78→79.
+Line cost, measured against the committed diff: binding.zig +4 (constant, error arm, 2-line check; the comment line planned in D-048 did not land), cert_test_helpers.zig +2 net (two narrow-window constants; test helper on the BE-SURF-03 harness list, outside both budget units), verify_test.zig 0 net (MESH_NOW moved inside the narrow window). Budgeted growth: 4 lines. Post-authentication unit 1493 to 1497 of 1500, measured by M11. M1 ratchet 78 to 79.
 
 All gauntlet green: fmt clean, em-dash 0, prumo 0 failing, 270/270 tests, vectors 77/77.
