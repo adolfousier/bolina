@@ -92,7 +92,7 @@ All eight KEYABLE markers are BOUND. Ratchet 79 to 87, exactly as projected.
 | BE-DEP-01 | `test "BE_DEP_01 build manifests name no third-party dependency"` (parser_test.zig) | `bfb4318` |
 | BE-EVID-11 | `test "BE_EVID_11 no interface accepts method, class, or confidence"` (evidence_test.zig) | `d6b8226` |
 | BE-EVID-14 | `test "BE_EVID_14 digest is fixed 32 bytes and truncation is refused"` (evidence_test.zig) | `d6b8226` |
-| BE-GRANT-08 | `test "BE_GRANT_08 grant signed by the subject key is refused"` (verify_test.zig) | `ca2c63c` |
+| BE-GRANT-08 | `test "BE_GRANT_08 grant signed by the subject instead of the approver is refused"` (verify_test.zig) | `ca2c63c` |
 | BE-WIRE-03 | `test "BE_WIRE_03 verification runs over the transmitted bytes themselves"` (verify_test.zig) | `ca2c63c` |
 | BE-TR-06 | `test "BE_TR_06 transport failure surfaces as error only"` (session_test.zig) | `a009bca` |
 | BE-ROLE-03 | `test "BE_ROLE_03 cert and binding surfaces carry no secret material"` (binding_test.zig) | `6635567` |
