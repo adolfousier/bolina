@@ -9,6 +9,9 @@
 
 const std = @import("std");
 const parser = @import("parser.zig");
+const relay = @import("relay.zig");
+const sess_mod = @import("session.zig");
+const noise = @import("noise.zig");
 
 // The canonical genesis envelope carrying an Intent body (parent_count = 0),
 // signed by the agent. 280 bytes: TBS(216) + sig(64).
@@ -888,4 +891,79 @@ test "BE_DEP_02 no recursive parser; the one arbitrary field is opaque bytes" {
     try std.testing.expect(!@hasDecl(parser, "parseAction"));
     try std.testing.expect(!@hasDecl(parser.channel, "parseAction"));
     try std.testing.expect(!@hasDecl(parser.session, "parseAction"));
+}
+
+// ---------------------------------------------------------------------------
+// BE-SURF-03 (surface budget, split along the authentication line). The two
+// units the budget measures are divided at BE-SURF-01's authentication line,
+// and the line is visible in the signatures themselves: every pre-auth entry
+// point consumes raw bytes only. No certificate, no session, no key material
+// appears as a parameter, so the unauthenticated unit can never be handed
+// state it has not yet earned. CI measures the line counts of the two units
+// (tools/prumo-verify); this test pins the split itself.
+// ---------------------------------------------------------------------------
+
+fn carriesAuthenticatedState(comptime T: type) bool {
+    return T == parser.session.Cert or
+        T == sess_mod.Session or
+        T == *sess_mod.Session or
+        T == *const sess_mod.Session or
+        T == noise.HandshakeResult or
+        T == *const noise.HandshakeResult;
+}
+
+fn preAuthFnClean(comptime f: anytype) bool {
+    const info = @typeInfo(@TypeOf(f)).@"fn";
+    inline for (info.params) |p| {
+        if (p.type) |pt| {
+            if (carriesAuthenticatedState(pt)) return false;
+        }
+    }
+    return true;
+}
+
+test "BE_SURF_03 pre-auth entry points take no authenticated state" {
+    // The six pre-auth parsers: the four handshake/data entry points
+    // (SPEC 2.2) and the two relay control parsers (SPEC 5).
+    try std.testing.expect(comptime preAuthFnClean(parser.parseHandshakeInitiation));
+    try std.testing.expect(comptime preAuthFnClean(parser.parseHandshakeResponse));
+    try std.testing.expect(comptime preAuthFnClean(parser.parseCookieReply));
+    try std.testing.expect(comptime preAuthFnClean(parser.parseDataPacketHeader));
+    try std.testing.expect(comptime preAuthFnClean(relay.parseRelayRoute));
+    try std.testing.expect(comptime preAuthFnClean(relay.parseRelayRegistration));
+
+    // Positive control: the check recognizes authenticated state where it
+    // legitimately lives. Session admission consumes the Noise handshake
+    // result, which carries key material.
+    try std.testing.expect(!(comptime preAuthFnClean(sess_mod.SessionTable.admit)));
+}
+
+// ---------------------------------------------------------------------------
+// BE-DEP-01 (stdlib only). No library outside the implementation language's
+// standard library may be required to build a conformant node. In Zig a
+// third-party dependency enters through exactly two shapes: a `.dependencies`
+// entry in build.zig.zon (fetched by URL) and `b.dependency` in build.zig.
+// Both manifests are read at test time and scanned as text: stdlib-only is a
+// property of the build description, and this test pins it.
+// ---------------------------------------------------------------------------
+
+test "BE_DEP_01 build manifests name no third-party dependency" {
+    const a = std.testing.allocator;
+    var threaded = std.Io.Threaded.init_single_threaded;
+    const io = threaded.io();
+    const cwd = std.Io.Dir.cwd();
+
+    const zon = try cwd.readFileAlloc(io, "build.zig.zon", a, .unlimited);
+    defer a.free(zon);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, zon, ".fetch("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, zon, "http://"));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, zon, "https://"));
+    try std.testing.expect(std.mem.indexOf(u8, zon, ".dependencies = .{}") != null);
+
+    const bz = try cwd.readFileAlloc(io, "build.zig", a, .unlimited);
+    defer a.free(bz);
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, bz, "b.dependency("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, bz, ".fetch("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, bz, "http://"));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, bz, "https://"));
 }
