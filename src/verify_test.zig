@@ -89,6 +89,20 @@ fn ledgerCounting(grant_id: []const u8) bool {
     return false;
 }
 
+// BE-GRANT-01a model: a durable ledger that COMMITS the grant_id on its first
+// consultation, exactly as a durable write outlives a restart. The first read
+// is fresh (returns false) and flips to consumed; every later read reports
+// consumed. This is the single-shot ledger of BE-GRANT-01 with the crash
+// durability of BE-GRANT-01a made load-bearing for the interrupted-effect test.
+var one_shot_consumed: bool = false;
+
+fn ledgerDurableCommit(grant_id: []const u8) bool {
+    _ = grant_id;
+    if (one_shot_consumed) return true;
+    one_shot_consumed = true;
+    return false;
+}
+
 // Effect callback the routine invokes on success. Named `recordEffect`, not
 // `execute`, deliberately: M10 keys its call-graph grep on the invocation
 // `execute(` in src/verify.zig, and a same-named callback here would add a
@@ -373,6 +387,48 @@ test "BE_GRANT_01 ledger hook runs last, after expiry" {
     const ok_ctx = baseContext(ACTION, &ledgerCounting);
     try verify.verifyGrantThen(env, &grant, ok_ctx, &recordEffect);
     try std.testing.expectEqual(@as(usize, 1), ledger_calls);
+    try std.testing.expectEqual(@as(usize, 1), effect_calls);
+}
+
+// ---------------------------------------------------------------------------
+// BE-GRANT-01a (crash during execution). The durable commit of BE-GRANT-01 is
+// check 11, the last check, and it runs BEFORE execute. So a grant whose
+// effect is interrupted by a crash (process death after the commit, before the
+// Effect is published) is left spent: the durable commit survived the restart,
+// and on replay the ledger reports the grant_id consumed. The verify routine
+// refuses it with AlreadyConsumed and the effect callback never fires a second
+// time. An interrupted grant is never silently retried (SPEC 8.4, 01a).
+//
+// ledgerDurableCommit models the durable ledger: the first consultation is
+// fresh and flips to consumed, exactly as a durable write outlives a restart.
+// The first call is normal processing; the crash is the gap between the two
+// calls; the second call is the post-restart replay.
+// (Publishing an ok=false, cause=interrupted Effect and releasing the resource
+// lock on that restart are executor/recovery-layer concerns driven by the
+// durable grant ledger, documented at the intent.zig header boundary. This
+// binds the verify-layer invariant: commit-before-execute => not retried.)
+// ---------------------------------------------------------------------------
+
+test "BE_GRANT_01a interrupted effect leaves grant_id spent, never retried" {
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    const ctx = baseContext(ACTION, &ledgerDurableCommit);
+
+    // Normal processing: the grant verifies, the durable ledger commits it
+    // (hook flips fresh -> consumed), and the effect is attempted once.
+    one_shot_consumed = false;
+    resetEffect();
+    try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
+    try std.testing.expectEqual(@as(usize, 1), effect_calls);
+    try std.testing.expect(one_shot_consumed);
+
+    // Crash gap: the process died after the durable commit, before the Effect
+    // was published. The commit survived the restart (one_shot_consumed still
+    // true). Post-restart replay: the grant_id is now consumed, so
+    // AlreadyConsumed is returned and the effect is NOT retried: still one
+    // callback invocation, not two.
+    try std.testing.expectError(error.AlreadyConsumed, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
     try std.testing.expectEqual(@as(usize, 1), effect_calls);
 }
 
