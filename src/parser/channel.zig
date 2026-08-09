@@ -28,6 +28,7 @@ pub const MAX_PARENTS: u8 = 4; // parent_count bound (SPEC 6.2)
 pub const MAX_RESOURCE: usize = 256; // Intent.resource_id (SPEC 6.3)
 pub const MAX_ACTION: u32 = 256 * 1024; // Intent.action, opaque (SPEC 6.3)
 pub const MAX_RATIONALE: usize = 4 * 1024; // Intent.rationale (SPEC 6.3)
+pub const MAX_NOTE: usize = 1024; // Refusal.note (SPEC 8.5)
 
 // Fixed field widths, traceable to the SPEC grammar.
 pub const LEN_CHANNEL_ID: usize = 32;
@@ -177,6 +178,36 @@ pub fn parseGrant(buf: []const u8) ParseError!Grant {
     if (c.pos != buf.len) return coverage.reject(.grant_trailing);
     coverage.accept(.grant_accepted);
     return .{ .version = version, .grant_id = grant_id, .intent_id = intent_id, .approver = approver, .subject = subject, .executor = executor, .resource_id = resource_id, .action_digest = action_digest, .not_after = not_after, .tbs = tbs, .sig = sig, .wire = buf };
+}
+
+// Refusal (SPEC 8.5)
+//
+//   [16] intent_id | u16 note_len, note(<=1KiB) | [64] sig
+//
+// No version field (SPEC 8.5): the binding content is the intent_id alone. tbs
+// is every byte before sig; sig is Ed25519 over (DOMAIN_REFUSAL || tbs), domain
+// tag 0x06 (BE-SIG-01). The note is approver-authored, informative only
+// (BE-GRANT-09): it carries no capability. A Refusal releases the pending
+// resource lock in one message instead of after T_pending (BE-GRANT-10).
+
+pub const Refusal = struct {
+    intent_id: []const u8,
+    note: []const u8,
+    tbs: []const u8,
+    sig: []const u8,
+    wire: []const u8,
+};
+
+pub fn parseRefusal(buf: []const u8) ParseError!Refusal {
+    var c = Cursor{ .buf = buf };
+    const intent_id = try c.take(LEN_INTENT_ID);
+    const note = try c.field16(MAX_NOTE);
+    const tbs = buf[0..c.pos];
+    const sig = try c.take(LEN_SIG);
+    // BE-WIRE-02 totality: exactly one refusal, nothing after it.
+    if (c.pos != buf.len) return coverage.reject(.refusal_trailing);
+    coverage.accept(.refusal_accepted);
+    return .{ .intent_id = intent_id, .note = note, .tbs = tbs, .sig = sig, .wire = buf };
 }
 
 // Span (SPEC 7.1)
