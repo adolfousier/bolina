@@ -104,14 +104,7 @@ pub fn PeerReassembler(comptime max_contexts: u8, comptime max_fragments_per_msg
         // Ingest one authenticated fragment. Updates state and returns the
         // outcome. A breach returns message_dropped and tears down the message's
         // context; the session is unaffected.
-        pub fn ingest(
-            self: *Self,
-            now_ms: u64,
-            msg_id: u64,
-            index: u16,
-            total: u16,
-            frag_bytes: usize,
-        ) PeerEvent {
+        pub fn ingest(self: *Self, now_ms: u64, msg_id: u64, index: u16, total: u16, frag_bytes: usize) PeerEvent {
             // A total of zero or an index outside it is malformed wire for this
             // message; a total beyond the fragment ceiling cannot be tracked.
             if (total == 0 or index >= total or total > max_fragments_per_msg) return .message_dropped;

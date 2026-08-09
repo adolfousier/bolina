@@ -24,7 +24,7 @@ fan-out the whole envelope travels inside a Noise session.
 
 **Changes from v0.2.0-draft:** Relay surface added (§5.2a) with two new wire formats (type 5 route header, type 6 registration); BE-SURF-01 names the relay routing header and registration as third pre-auth entry (fixed-size, role-gated to relay role); BE-SURF-03 subdivides pre-auth unit into handshake-unit ≤990 lines and relay-unit ≤510 lines; BE-SIG-01 gains domain tag 0x07 for relay registration.
 
-**Changes from v0.3.0-draft:** BE-HIST-02 anchoring vehicle corrected. The v0.3.0 text anchored a signer's certificate "by a `Control` envelope carrying it", which contradicts BE-CTRL-01's closed `action_type` enum {1 Genesis, 2 Revoke} — no cert-carrying action exists and no extension path may. The anchoring obligation is unchanged; the vehicle is now self-anchoring: the first envelope accepted from a signer in a channel is that signer's anchoring record, with the certificate verified under BE-ID-01 through BE-ID-04 during that envelope's own admission (§9.2, D-046). No wire byte changes. This draft also places `src/ledger.zig` and `src/historical.zig` in the BE-SURF-03 non-surface list, making the D-045 placement normative (D-047). This draft also subdivides the post-authentication unit into a wire-parser sub-unit (cap 723 lines) and a session-state sub-unit (cap 777 lines), caps summing exactly 1500, and places `src/intent.zig`, `src/resolver.zig`, `src/render.zig` in the non-surface list ahead of their creation (D-052).
+**Changes from v0.3.0-draft:** BE-HIST-02 anchoring vehicle corrected. The v0.3.0 text anchored a signer's certificate "by a `Control` envelope carrying it", which contradicts BE-CTRL-01's closed `action_type` enum {1 Genesis, 2 Revoke} — no cert-carrying action exists and no extension path may. The anchoring obligation is unchanged; the vehicle is now self-anchoring: the first envelope accepted from a signer in a channel is that signer's anchoring record, with the certificate verified under BE-ID-01 through BE-ID-04 during that envelope's own admission (§9.2, D-046). No wire byte changes. This draft also places `src/ledger.zig` and `src/historical.zig` in the BE-SURF-03 non-surface list, making the D-045 placement normative (D-047). This draft also subdivides the post-authentication unit into a wire-parser sub-unit and a session-state sub-unit, caps not exceeding 1500; the D-052 compaction commit ratcheted the session-state sub-unit to its fresh measured floor of 748 lines (wire-parser unchanged at 723, its measured floor 621), and places `src/intent.zig`, `src/resolver.zig`, `src/render.zig` in the non-surface list ahead of their creation (D-052).
 
 ---
 
@@ -247,7 +247,7 @@ one number per audit unit, and the unit is what an attacker can reach.* (D-030.)
 unit is subdivided into a handshake sub-unit (cap 990 lines) and a relay sub-unit (cap 510 lines);
 both caps MUST be enforced independently and the sum MUST NOT exceed 1500 lines. The
 post-authentication unit is subdivided into a wire-parser sub-unit (cap 723 lines) and a
-session-state sub-unit (cap 777 lines); both caps MUST be enforced independently and the sum MUST
+session-state sub-unit (cap 748 lines); both caps MUST be enforced independently and the sum MUST
 NOT exceed 1500 lines. (D-052.)
 
 - **Pre-authentication unit:** subdivided into two sub-units:
@@ -256,7 +256,7 @@ NOT exceed 1500 lines. (D-052.)
 - **Post-authentication unit:** subdivided into two sub-units, together everything an auditor must
   read to verify what a hostile authenticated peer's bytes can reach:
   - **Wire-parser sub-unit:** `src/parser/channel.zig`, `src/parser/session.zig` — cap 723 lines.
-  - **Session-state sub-unit:** `src/session.zig`, `src/binding.zig`, `src/replay.zig`, `src/reassembly.zig` — cap 777 lines.
+  - **Session-state sub-unit:** `src/session.zig`, `src/binding.zig`, `src/replay.zig`, `src/reassembly.zig` — cap 748 lines.
 - **Non-surface:** `src/dag.zig`, `src/evidence.zig`, `src/verify.zig`, `src/ledger.zig`,
   `src/historical.zig`, `src/intent.zig`, `src/resolver.zig`, `src/render.zig` — state over parsed
   values (D-018), not reached by attacker bytes directly. The last three are placed ahead of their

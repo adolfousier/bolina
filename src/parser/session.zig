@@ -27,10 +27,8 @@ const Cursor = parser.Cursor;
 const ParseError = parser.ParseError;
 const LEN_PUBKEY = parser.LEN_PUBKEY;
 
-// ---------------------------------------------------------------------------
 // Declared widths (SPEC BE-TR-05, sections 3.1, 4.5, 5.1a) for the session
 // surface. Every one is bounded before it drives a slice.
-// ---------------------------------------------------------------------------
 
 pub const LEN_FRAGMENT_HEADER: usize = 12; // msg_id u64 + index u16 + total u16 (SPEC 4.5)
 pub const LEN_OVERLAY_ADDR: usize = 16; // overlay address, the mesh node id (SPEC 5.1)
@@ -47,7 +45,6 @@ pub const LEN_CA_SIG: usize = 64; // CA Ed25519 signature (SPEC 3.1)
 // Domain-separation tag for Ed25519 certificate signing (SPEC BE-SIG-01).
 pub const DOMAIN_CERT: u8 = 0x01;
 
-// ---------------------------------------------------------------------------
 // Fragment header (SPEC section 4.5).
 //
 // Fragments are session-AEAD plaintext bodies: a fragment header prefixes
@@ -65,7 +62,6 @@ pub const DOMAIN_CERT: u8 = 0x01;
 // derived-max clamp. MAX_FRAGMENTS is not a row in the BE-TR-05 table, so no
 // tighter limit is declared here; inventing one would add an undeclared bound.
 // Fragment indices are zero-based: a valid index is in [0, total). (SPEC 4.5)
-// ---------------------------------------------------------------------------
 
 pub const FragmentHeader = struct {
     msg_id: u64,
@@ -89,15 +85,9 @@ pub fn parseFragmentHeader(buf: []const u8) ParseError!FragmentHeader {
     if (index >= total) return coverage.reject(.frag_index_range);
     const payload = buf[c.pos..];
     coverage.accept(.frag_accepted);
-    return .{
-        .msg_id = msg_id,
-        .index = index,
-        .total = total,
-        .payload = payload,
-    };
+    return .{ .msg_id = msg_id, .index = index, .total = total, .payload = payload };
 }
 
-// ---------------------------------------------------------------------------
 // Lighthouse lookups (SPEC section 5.1a).
 //
 // BE-MESH-07: LookupRequest and LookupResponse MUST travel inside an
@@ -107,7 +97,6 @@ pub fn parseFragmentHeader(buf: []const u8) ParseError!FragmentHeader {
 // certificate is returned as an opaque byte slice here and verified under
 // BE-ID-01..04 by the caller (BE-MESH-04); its internal structure is walked
 // by parseCert below. (SPEC 5.1a)
-// ---------------------------------------------------------------------------
 
 pub const LookupRequest = struct {
     version: u8,
@@ -131,10 +120,7 @@ pub fn parseLookupRequest(buf: []const u8) ParseError!LookupRequest {
     const overlay_addr = try c.take(LEN_OVERLAY_ADDR);
     if (c.pos != buf.len) return coverage.reject(.lookup_req_trailing);
     coverage.accept(.lookup_req_accepted);
-    return .{
-        .version = version,
-        .overlay_addr = overlay_addr,
-    };
+    return .{ .version = version, .overlay_addr = overlay_addr };
 }
 
 // parseLookupResponse reads the lighthouse response (SPEC 5.1a): version, the
@@ -155,16 +141,9 @@ pub fn parseLookupResponse(buf: []const u8) ParseError!LookupResponse {
     const cert = try c.take(@as(usize, cert_len));
     if (c.pos != buf.len) return coverage.reject(.lookup_resp_trailing);
     coverage.accept(.lookup_resp_accepted);
-    return .{
-        .version = version,
-        .overlay_addr = overlay_addr,
-        .endpoint_count = endpoint_count,
-        .endpoints = endpoints,
-        .cert = cert,
-    };
+    return .{ .version = version, .overlay_addr = overlay_addr, .endpoint_count = endpoint_count, .endpoints = endpoints, .cert = cert };
 }
 
-// ---------------------------------------------------------------------------
 // Certificate (SPEC section 3.1)
 //
 //   u8 version(=2) | u8 role_bits | [32] sig_pubkey | [32] kex_pubkey
@@ -184,7 +163,6 @@ pub fn parseLookupResponse(buf: []const u8) ParseError!LookupResponse {
 // The CA-key ordering check is the one structural invariant section 3.1 makes
 // "a parse failure rather than a policy check": keys must be strictly ascending
 // and pairwise distinct, so duplicate-key quorum forgery cannot encode.
-// ---------------------------------------------------------------------------
 
 pub const Cert = struct {
     version: u8,
@@ -237,23 +215,9 @@ pub fn parseCert(buf: []const u8) ParseError!Cert {
     const ca_sigs = buf[ca_start..c.pos];
     if (c.pos != buf.len) return coverage.reject(.cert_trailing);
     coverage.accept(.cert_accepted);
-    return .{
-        .version = version,
-        .role_bits = role_bits,
-        .sig_pubkey = sig_pubkey,
-        .kex_pubkey = kex_pubkey,
-        .not_before = not_before,
-        .not_after = not_after,
-        .name = name,
-        .group_count = group_count,
-        .group_ids = group_ids,
-        .ca_sig_count = ca_sig_count,
-        .ca_sigs = ca_sigs,
-        .tbs = tbs,
-    };
+    return .{ .version = version, .role_bits = role_bits, .sig_pubkey = sig_pubkey, .kex_pubkey = kex_pubkey, .not_before = not_before, .not_after = not_after, .name = name, .group_count = group_count, .group_ids = group_ids, .ca_sig_count = ca_sig_count, .ca_sigs = ca_sigs, .tbs = tbs };
 }
 
-// ---------------------------------------------------------------------------
 // Binding message (SPEC section 4.1, BE-TR-01).
 //
 // The binding message is the first AEAD plaintext exchanged after the Noise
@@ -264,7 +228,6 @@ pub fn parseCert(buf: []const u8) ParseError!Cert {
 // certificate is returned as an opaque slice here; the caller runs parseCert
 // and the BE-ID-01..04 checks (binding.zig), the same opaque-cert convention
 // as the lighthouse LookupResponse (BE-MESH-04).
-// ---------------------------------------------------------------------------
 
 pub const LEN_BINDING_SIG: usize = 64; // Ed25519 over (0x05 || Noise h), BE-TR-01
 

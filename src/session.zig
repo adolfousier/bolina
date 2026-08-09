@@ -168,10 +168,7 @@ pub const SessionTable = struct {
     count: usize,
 
     pub fn init() SessionTable {
-        return .{
-            .slots = std.mem.zeroes([MAX_SESSIONS]Session),
-            .count = 0,
-        };
+        return .{ .slots = std.mem.zeroes([MAX_SESSIONS]Session), .count = 0 };
     }
 
     // The receiving path: resolve a packet's receiver_index to a live session.
@@ -186,12 +183,7 @@ pub const SessionTable = struct {
     // split as seen from this side. Returns this node's local_index, which is
     // the slot position by construction. Refuses at the ceiling (BE-TR-05):
     // a new session is refused, existing sessions are untouched.
-    pub fn admit(
-        t: *SessionTable,
-        peer_index: u32,
-        result: noise.HandshakeResult,
-        now_ms: u64,
-    ) Error!u32 {
+    pub fn admit(t: *SessionTable, peer_index: u32, result: noise.HandshakeResult, now_ms: u64) Error!u32 {
         if (t.count >= MAX_SESSIONS) return Error.NodeCapacity;
         for (&t.slots, 0..) |*slot, i| {
             if (slot.in_use) continue;

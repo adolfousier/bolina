@@ -18,11 +18,9 @@ const ParseError = parser.ParseError;
 const LEN_PUBKEY = parser.LEN_PUBKEY;
 const MAX_MESSAGE = parser.MAX_MESSAGE;
 
-// ---------------------------------------------------------------------------
 // Declared limits (SPEC BE-TR-05): every attacker-influenced size on the
 // channel wire, bounded before it drives a slice. MAX_MESSAGE (the reassembly
 // ceiling) lives in the parent module; MAX_BODY derives from it here.
-// ---------------------------------------------------------------------------
 
 pub const MAX_HEADER: usize = 512; // envelope overhead (version..sig, slack)
 pub const MAX_BODY: u32 = @intCast(MAX_MESSAGE - MAX_HEADER); // body_len bound
@@ -63,7 +61,6 @@ pub const BODY_EFFECT: u8 = 4;
 pub const BODY_CONTROL: u8 = 5;
 pub const BODY_REFUSAL: u8 = 6;
 
-// ---------------------------------------------------------------------------
 // Envelope (SPEC 6.2)
 //
 //   u8 version(=2) | [32] channel_id | [32] sender | u64 seq
@@ -71,7 +68,6 @@ pub const BODY_REFUSAL: u8 = 6;
 //   u32 body_len | body | [64] sig
 //
 // tbs is every byte before sig; sig is Ed25519 over (DOMAIN_ENVELOPE || tbs).
-// ---------------------------------------------------------------------------
 
 pub const Envelope = struct {
     version: u8,
@@ -106,22 +102,9 @@ pub fn parseEnvelope(buf: []const u8) ParseError!Envelope {
     // BE-WIRE-02 totality: the buffer holds exactly one envelope, nothing more.
     if (c.pos != buf.len) return coverage.reject(.env_trailing);
     coverage.accept(.env_accepted);
-    return .{
-        .version = version,
-        .channel_id = channel_id,
-        .sender = sender,
-        .seq = seq,
-        .parent_count = parent_count,
-        .parents = parents,
-        .ts = ts,
-        .body_type = body_type,
-        .body = body,
-        .tbs = tbs,
-        .sig = sig,
-    };
+    return .{ .version = version, .channel_id = channel_id, .sender = sender, .seq = seq, .parent_count = parent_count, .parents = parents, .ts = ts, .body_type = body_type, .body = body, .tbs = tbs, .sig = sig };
 }
 
-// ---------------------------------------------------------------------------
 // Intent body (SPEC 6.3)
 //
 //   [16] intent_id | u16 resource_len, resource_id(<=256)
@@ -129,7 +112,6 @@ pub fn parseEnvelope(buf: []const u8) ParseError!Envelope {
 //
 // The daemon treats action as opaque bytes (BE-BODY-01); it never parses them.
 // This parser only slices action out so a verifier can hash it for BE-GRANT-02.
-// ---------------------------------------------------------------------------
 
 pub const Intent = struct {
     intent_id: []const u8,
@@ -149,7 +131,6 @@ pub fn parseIntent(buf: []const u8) ParseError!Intent {
     return .{ .intent_id = intent_id, .resource_id = resource_id, .action = action, .rationale = rationale };
 }
 
-// ---------------------------------------------------------------------------
 // Grant (SPEC 8.1)
 //
 //   u8 version(=2) | [16] grant_id | [16] intent_id | [32] approver
@@ -163,7 +144,6 @@ pub fn parseIntent(buf: []const u8) ParseError!Intent {
 // by content (BE-GRANT-03c): a keyed digest over wire frozen at verification
 // and recomputed over the live bytes at every access, so a caller write between
 // verification and consumption is detected, not honored.
-// ---------------------------------------------------------------------------
 
 pub const Grant = struct {
     version: u8,
@@ -196,23 +176,9 @@ pub fn parseGrant(buf: []const u8) ParseError!Grant {
     // BE-WIRE-02 totality: exactly one grant, nothing after it.
     if (c.pos != buf.len) return coverage.reject(.grant_trailing);
     coverage.accept(.grant_accepted);
-    return .{
-        .version = version,
-        .grant_id = grant_id,
-        .intent_id = intent_id,
-        .approver = approver,
-        .subject = subject,
-        .executor = executor,
-        .resource_id = resource_id,
-        .action_digest = action_digest,
-        .not_after = not_after,
-        .tbs = tbs,
-        .sig = sig,
-        .wire = buf,
-    };
+    return .{ .version = version, .grant_id = grant_id, .intent_id = intent_id, .approver = approver, .subject = subject, .executor = executor, .resource_id = resource_id, .action_digest = action_digest, .not_after = not_after, .tbs = tbs, .sig = sig, .wire = buf };
 }
 
-// ---------------------------------------------------------------------------
 // Span (SPEC 7.1)
 //
 //   u8 version(=2) | [16] span_id | [16] trace_id | u16 resource_len, resource_id(<=256)
@@ -226,7 +192,6 @@ pub fn parseGrant(buf: []const u8) ParseError!Grant {
 // check: the byte ending one span is the first of the next (inline spans in an
 // Effect). readSpan adds no exit point of its own; every exit routes through
 // the shared Cursor rejection (M9).
-// ---------------------------------------------------------------------------
 
 pub const Span = struct {
     version: u8,
@@ -257,20 +222,7 @@ fn readSpan(c: *Cursor) ParseError!Span {
     const executor = try c.take(LEN_PUBKEY);
     const tbs = c.buf[start..c.pos];
     const sig = try c.take(LEN_SIG);
-    return .{
-        .version = version,
-        .span_id = span_id,
-        .trace_id = trace_id,
-        .resource_id = resource_id,
-        .method_id = method_id,
-        .volatility = volatility,
-        .origin = origin,
-        .observed_at = observed_at,
-        .digest = digest,
-        .executor = executor,
-        .tbs = tbs,
-        .sig = sig,
-    };
+    return .{ .version = version, .span_id = span_id, .trace_id = trace_id, .resource_id = resource_id, .method_id = method_id, .volatility = volatility, .origin = origin, .observed_at = observed_at, .digest = digest, .executor = executor, .tbs = tbs, .sig = sig };
 }
 
 pub fn parseSpan(buf: []const u8) ParseError!Span {
@@ -282,7 +234,6 @@ pub fn parseSpan(buf: []const u8) ParseError!Span {
     return s;
 }
 
-// ---------------------------------------------------------------------------
 // Effect body (SPEC 6.3)
 //
 //   [16] intent_id | [16] grant_id | u8 ok | i32 exit_code
@@ -297,7 +248,6 @@ pub fn parseSpan(buf: []const u8) ParseError!Span {
 // exit_code and span_count are parsed not policy-checked (BE-EFF-01, BE-EVID-10
 // are verifier concerns). No per-Effect span cap in BE-TR-05; body_len bounds
 // the whole input and a span_count past the buffer truncates via readSpan.
-// ---------------------------------------------------------------------------
 
 pub const Effect = struct {
     intent_id: []const u8,
@@ -325,18 +275,9 @@ pub fn parseEffect(buf: []const u8) ParseError!Effect {
     const output_digest = try c.take(LEN_DIGEST);
     if (c.pos != buf.len) return coverage.reject(.effect_trailing);
     coverage.accept(.effect_accepted);
-    return .{
-        .intent_id = intent_id,
-        .grant_id = grant_id,
-        .ok = ok,
-        .exit_code = exit_code,
-        .span_count = span_count,
-        .spans = spans,
-        .output_digest = output_digest,
-    };
+    return .{ .intent_id = intent_id, .grant_id = grant_id, .ok = ok, .exit_code = exit_code, .span_count = span_count, .spans = spans, .output_digest = output_digest };
 }
 
-// ---------------------------------------------------------------------------
 // Claim body (SPEC 7.2)
 //
 //   u16 text_len, text(<=1KiB) | u16 subject_len, subject(<=256)
@@ -349,7 +290,6 @@ pub fn parseEffect(buf: []const u8) ParseError!Effect {
 // (BE-EVID-02); the receiver recomputes, so the byte is recorded not enforced.
 // span_count is bounded by the enclosing body_len, not a per-claim cap (the
 // 64-span bound is on the Utterance, BE-EVID-10).
-// ---------------------------------------------------------------------------
 
 pub const Claim = struct {
     text: []const u8,
@@ -371,13 +311,11 @@ pub fn parseClaim(buf: []const u8) ParseError!Claim {
     return .{ .text = text, .subject = subject, .confidence_q8 = confidence_q8, .span_count = span_count, .span_ids = span_ids };
 }
 
-// ---------------------------------------------------------------------------
 // Channel control structures (SPEC 6.1b, 6.1c). ControlGenesis is the
 // immutable body of the genesis envelope (parent_count 0, body_type 5);
 // Control is every later control envelope's body. Both flat. version and
 // match_rule are parsed not rejected (SPEC 2.2); ca_keys ascending order is a
 // verify-time concern (BE-GEN-03 derives channel_id from ca_key_0).
-// ---------------------------------------------------------------------------
 
 pub const LEN_MEMBER_GROUP: usize = 8; // SPEC 6.1b member_group / admin_group
 pub const LEN_ADMIN_GROUP: usize = 8;

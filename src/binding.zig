@@ -27,9 +27,7 @@ const B2s = std.crypto.hash.blake2.Blake2s256;
 
 const Cert = parser.session.Cert;
 
-// ---------------------------------------------------------------------------
 // Declared widths, domain tags, and role bits (SPEC 3.1, 3.2, BE-SIG-01).
-// ---------------------------------------------------------------------------
 
 pub const LEN_PUBKEY: usize = parser.LEN_PUBKEY; // 32, Ed25519 sig_pubkey
 pub const LEN_SIG: usize = parser.session.LEN_CA_SIG; // 64, an Ed25519 signature
@@ -48,10 +46,8 @@ pub const MAX_PRIVILEGED_LIFETIME_MS: u64 = 2_592_000_000; // BE-REV-01: 30-day 
 pub const APPROVER_QUORUM: u8 = 2; // BE-ID-04: approver cert needs >= 2 CA sigs
 const OVERLAY_PREFIX: u8 = 0xfd; // BE-ID-01: fd00::/8 ULA prefix
 
-// ---------------------------------------------------------------------------
 // Errors. One distinct class per failed BE-ID / BE-TR check so a caller can
 // report the reason a certificate or binding was rejected.
-// ---------------------------------------------------------------------------
 
 pub const BindingError = error{
     MalformedKey, // a pubkey is not a valid curve point
@@ -66,14 +62,12 @@ pub const BindingError = error{
     BadBindingSig, // BE-TR-01: binding sig does not verify over h
 };
 
-// ---------------------------------------------------------------------------
 // BE-SIG-01 domain-separated Ed25519 verification (internal).
 //
 // Verifies `sig` over (tag || tbs) against `pubkey`, feeding the one-byte tag
 // and the tbs region as two chunks so no tagged-message buffer is allocated.
 // MalformedKey is an unparseable key; SignatureRejected is a verification
 // failure the caller maps to its check-specific error.
-// ---------------------------------------------------------------------------
 
 const SigError = error{ MalformedKey, SignatureRejected };
 
@@ -91,7 +85,6 @@ fn verifySig(tag: u8, tbs: []const u8, sig: []const u8, pubkey: []const u8) SigE
     v.verify() catch return error.SignatureRejected;
 }
 
-// ---------------------------------------------------------------------------
 // BE-ID-01: derive a peer's overlay address from its sig_pubkey.
 //
 // overlay_addr = 0xfd || BLAKE2s-256(sig_pubkey)[0..15], a 16-byte fd00::/8
@@ -99,7 +92,6 @@ fn verifySig(tag: u8, tbs: []const u8, sig: []const u8, pubkey: []const u8) SigE
 // section 11.3 test vector). The address is a commitment to the key: there is
 // no resolution step to poison, and a node MUST NOT accept an address asserted
 // by any other party (BE-ID-01).
-// ---------------------------------------------------------------------------
 
 pub fn deriveOverlayAddr(sig_pubkey: []const u8) [LEN_OVERLAY_ADDR]u8 {
     var full: [32]u8 = undefined;
@@ -110,12 +102,10 @@ pub fn deriveOverlayAddr(sig_pubkey: []const u8) [LEN_OVERLAY_ADDR]u8 {
     return addr;
 }
 
-// ---------------------------------------------------------------------------
 // BE-ID-03: reject a certificate whose role_bits carry a forbidden pairing.
 // BE-ROLE-01 forbids agent+approver, BE-ROLE-02 agent+executor, BE-ROLE-04
 // approver+executor. Checked at receipt as well as issuance: a buggy or
 // compromised CA MUST NOT mint a self-approving identity a peer accepts.
-// ---------------------------------------------------------------------------
 
 pub fn checkRoleConstraints(role_bits: u8) BindingError!void {
     const agent = (role_bits & ROLE_AGENT) != 0;
@@ -126,7 +116,6 @@ pub fn checkRoleConstraints(role_bits: u8) BindingError!void {
     if (approver and executor) return error.RoleApproverExecutor;
 }
 
-// ---------------------------------------------------------------------------
 // BE-ID-02 / BE-ID-03 / BE-ID-04: validate a parsed certificate against the
 // local trust set and clock. Rejection is unconditional; there is no
 // warn-and-continue path (SPEC BE-ID-02).
@@ -137,7 +126,6 @@ pub fn checkRoleConstraints(role_bits: u8) BindingError!void {
 // set. The strictly-ascending pairwise-distinct CA-key ordering is a parse
 // failure enforced by parseCert (SPEC 3.1), so it holds for every Cert this
 // function receives and is not re-checked here.
-// ---------------------------------------------------------------------------
 
 pub fn validateCert(cert: Cert, trusted_ca_keys: []const []const u8, now_ms: u64) BindingError!void {
     try checkRoleConstraints(cert.role_bits);
@@ -172,7 +160,6 @@ fn inTrustSet(ca_key: []const u8, trusted: []const []const u8) bool {
     return false;
 }
 
-// ---------------------------------------------------------------------------
 // BE-TR-01: bind an authenticated Noise static key to an Ed25519 identity.
 //
 // Immediately after the handshake, each side sends, inside the encrypted
@@ -182,7 +169,6 @@ fn inTrustSet(ca_key: []const u8, trusted: []const []const u8) bool {
 // signature verifies against h. This function performs the certificate and
 // signature checks; the caller flips session.bound on success (session.zig
 // gates upward delivery on that flag).
-// ---------------------------------------------------------------------------
 
 pub fn bindSession(cert: Cert, binding_sig: []const u8, handshake_hash: []const u8, trusted_ca_keys: []const []const u8, now_ms: u64) BindingError!void {
     try validateCert(cert, trusted_ca_keys, now_ms);
