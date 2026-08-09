@@ -227,3 +227,56 @@ test "session ceiling agrees with the reassembly declaration" {
     // two modules declaring them must never drift.
     try testing.expectEqual(@as(u16, session.MAX_SESSIONS), reassembly.SESSIONS_PER_NODE);
 }
+
+// ---------------------------------------------------------------------------
+// BE-TR-06 (transport failure is never reported upward as success). The open
+// path returns an error union: a decrypt failure surfaces as an error, never
+// as a length, so no caller can mistake it for delivered bytes. And a fresh
+// session is unbound, so the single delivery path that requires a bound
+// session (BE-TR-01) cannot fire for it.
+// ---------------------------------------------------------------------------
+
+test "BE_TR_06 transport failure surfaces as error only" {
+    // Reflection: both open entry points return session.Error!usize. The
+    // payload carries a plaintext length on success only; every failure is an
+    // error value, so failure cannot be reported upward as any form of
+    // success. Accessing the error_union branch is itself the structural
+    // proof: any other return shape fails to compile.
+    const sess_eu = comptime @typeInfo(@typeInfo(@TypeOf(session.Session.open)).@"fn".return_type.?).error_union;
+    try testing.expect(comptime sess_eu.payload == usize);
+    try testing.expect(comptime sess_eu.error_set == session.Error);
+    const recv_eu = comptime @typeInfo(@typeInfo(@TypeOf(session.RecvState.open)).@"fn".return_type.?).error_union;
+    try testing.expect(comptime recv_eu.payload == usize);
+    try testing.expect(comptime recv_eu.error_set == session.Error);
+
+    var ta = session.SessionTable.init();
+    var tb = session.SessionTable.init();
+    const r = try pairTables(&ta, &tb, 0);
+    const a = ta.lookup(r[0]).?;
+    const b = tb.lookup(r[1]).?;
+    const prs = @import("parser.zig");
+
+    // A fresh session is not bound: the delivery gate that requires a bound
+    // session (BE-TR-01) cannot mark anything delivered for it.
+    try testing.expect(!ta.slots[r[0]].bound);
+    try testing.expect(!tb.slots[r[1]].bound);
+
+    var pkt: [session.HEADER_SIZE + 2 + noise.TAGLEN]u8 = undefined;
+    const n = try a.seal(&pkt, &[2]u8{ 7, 8 });
+
+    // Tampered ciphertext: one flipped byte inside the encrypted payload, and
+    // open returns DecryptFailed rather than any plaintext.
+    var tampered = pkt;
+    tampered[session.HEADER_SIZE] ^= 0x01;
+    const h1 = try prs.parseDataPacketHeader(tampered[0..n]);
+    var out: [64]u8 = undefined;
+    try testing.expectError(session.Error.DecryptFailed, b.open(tampered[0..n], h1, &out));
+
+    // Wrong key: a session holding a different recv key cannot open the
+    // packet; the tag check fails before anything else is consulted.
+    var tc = session.SessionTable.init();
+    const ic = try tc.admit(11, result(0x33, 0x44, 0xBB), 0);
+    const c = tc.lookup(ic).?;
+    const h2 = try prs.parseDataPacketHeader(pkt[0..n]);
+    try testing.expectError(session.Error.DecryptFailed, c.open(pkt[0..n], h2, &out));
+}
