@@ -81,3 +81,48 @@ needs-code slices above, and Daniel's MESH-03 call. In that order.
 - Mutation harness v11: denominator unchanged, 81 mutants. The full re-run in
   task 3 confirms the new tests un-kill nothing.
 - The untracked mutation logs and `ralph_loop.toml`: stay untracked.
+
+## Results (2026-08-09, branch `m1-keying`)
+
+All eight KEYABLE markers are BOUND. Ratchet 79 to 87, exactly as projected.
+
+| Marker | Binding test | Commit |
+|---|---|---|
+| BE-SURF-03 | `test "BE_SURF_03 pre-auth entry points take no authenticated state"` (parser_test.zig) | `bfb4318` |
+| BE-DEP-01 | `test "BE_DEP_01 build manifests name no third-party dependency"` (parser_test.zig) | `bfb4318` |
+| BE-EVID-11 | `test "BE_EVID_11 no interface accepts method, class, or confidence"` (evidence_test.zig) | `d6b8226` |
+| BE-EVID-14 | `test "BE_EVID_14 digest is fixed 32 bytes and truncation is refused"` (evidence_test.zig) | `d6b8226` |
+| BE-GRANT-08 | `test "BE_GRANT_08 grant signed by the subject key is refused"` (verify_test.zig) | `ca2c63c` |
+| BE-WIRE-03 | `test "BE_WIRE_03 verification runs over the transmitted bytes themselves"` (verify_test.zig) | `ca2c63c` |
+| BE-TR-06 | `test "BE_TR_06 transport failure surfaces as error only"` (session_test.zig) | `a009bca` |
+| BE-ROLE-03 | `test "BE_ROLE_03 cert and binding surfaces carry no secret material"` (binding_test.zig) | `6635567` |
+
+High water raised 79 to 87 with the tests (`8f29b7c`), as `tools/prumo-verify`
+directed.
+
+### Gauntlet on the committed tree (8f29b7c)
+
+| Gate | Result |
+|---|---|
+| `zig fmt --check .` | clean |
+| `zig build test` | green, 274 test declarations (266 + 8) |
+| `tools/prumo-verify` | 0 failing: M1 87/109 (high water 87), M5 1173/1500 (handshake 990/990, relay 183/510), M8/M9/M10, M11 1497/1500 |
+| `tools/verify-vectors.py` | 77 passed, 0 failed |
+| em-dash scan (src + tools) | 0 |
+| mutation (full re-run, D-035) | 81/81 killed, 0 survivors, log `mutation_keying.log`; zero MUTANT tags left in tree |
+
+### Zig 0.16 notes from the round
+
+Three toolchain facts the round hit, recorded so the next round does not
+re-discover them:
+
+- `std.fs.cwd()` is gone; file reads go through `std.Io`
+  (`std.Io.Threaded.init_single_threaded` then `std.Io.Dir.cwd().readFileAlloc(io, path, a, .unlimited)`).
+- `@Type` was removed: type reflection is read-only. Return-type witnesses
+  read `@typeInfo(...)` fields instead of reconstructing types.
+- `@typeInfo(T).@"struct".fields` values are comptime-only (they carry
+  `type`), so iteration needs `inline for`; a module's decls are read with
+  `@typeInfo(module)` directly, not `@typeInfo(@TypeOf(module))`.
+
+The 22 still missing are the NEEDS-CODE and DEFERRED-MAY rows above,
+unchanged: the budget subdivision comes before any of them.
