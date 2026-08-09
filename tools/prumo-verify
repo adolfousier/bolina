@@ -176,7 +176,9 @@ fi
 # stored in this script. M5 gates the pre-authentication unit (subdivided into
 # handshake ≤990 and relay ≤510 sub-units, sum ≤1500) and enforces the
 # exhaustiveness clause (every non-test src file in exactly one list, no
-# file in two); M11 gates the post-authentication unit. Absent listed files
+# file in two); M11 gates the post-authentication unit (subdivided into
+# wire-parser ≤723 and session-state ≤777 sub-units, sum ≤1500). Absent listed
+# files
 # count as 0 lines: the lists are normative placement, ahead of the code.
 SURF_SECTION="$(sed -n '/\*\*BE-SURF-03/,/no unmeasured place/p' SPEC.md)"
 SURF_JOINED="$(printf '%s\n' "$SURF_SECTION" | awk '
@@ -198,6 +200,10 @@ HANDSHAKE_FILES="$(surf_sub_bullet_files '**Handshake sub-unit:**')"
 RELAY_FILES="$(surf_sub_bullet_files '**Relay sub-unit:**')"
 HANDSHAKE_CAP="$(surf_sub_bullet_cap '**Handshake sub-unit:**')"
 RELAY_CAP="$(surf_sub_bullet_cap '**Relay sub-unit:**')"
+WIREPARSER_FILES="$(surf_sub_bullet_files '**Wire-parser sub-unit:**')"
+SESSIONSTATE_FILES="$(surf_sub_bullet_files '**Session-state sub-unit:**')"
+WIREPARSER_CAP="$(surf_sub_bullet_cap '**Wire-parser sub-unit:**')"
+SESSIONSTATE_CAP="$(surf_sub_bullet_cap '**Session-state sub-unit:**')"
 POST_AUTH_FILES="$(surf_bullet_files '**Post-authentication unit:**')"
 NON_SURFACE_FILES="$(surf_bullet_files '**Non-surface:**')"
 HARNESS_FILES="$(surf_bullet_files '**Harness and entry:**')"
@@ -245,6 +251,8 @@ PRE_AUTH_LINES="$(surf_unit_lines "$PRE_AUTH_FILES")"
 HANDSHAKE_LINES="$(surf_unit_lines "$HANDSHAKE_FILES")"
 RELAY_LINES="$(surf_unit_lines "$RELAY_FILES")"
 POST_AUTH_LINES="$(surf_unit_lines "$POST_AUTH_FILES")"
+WIREPARSER_LINES="$(surf_unit_lines "$WIREPARSER_FILES")"
+SESSIONSTATE_LINES="$(surf_unit_lines "$SESSIONSTATE_FILES")"
 
 if [ -n "$SURF_PROBLEMS" ]; then
     row M5 FAIL "${SURF_PROBLEMS# } (BE-SURF-03)"
@@ -262,12 +270,16 @@ fi
 if [ -n "$SURF_PROBLEMS" ]; then
     M11_VERDICT="FAIL"
     M11_DETAIL="BE-SURF-03 placement broken, post-authentication sum not trustworthy (see M5)"
-elif [ "$POST_AUTH_LINES" -le "$SURF_CAP" ]; then
+elif [ "$POST_AUTH_LINES" -le "$SURF_CAP" ] && [ "$WIREPARSER_LINES" -le "$WIREPARSER_CAP" ] && [ "$SESSIONSTATE_LINES" -le "$SESSIONSTATE_CAP" ]; then
     M11_VERDICT="PASS"
-    M11_DETAIL="post-authentication unit $POST_AUTH_LINES/$SURF_CAP lines:$(surf_unit_detail "$POST_AUTH_FILES") lists and cap parsed from SPEC.md BE-SURF-03"
+    M11_DETAIL="post-authentication unit $POST_AUTH_LINES/$SURF_CAP lines (wire-parser $WIREPARSER_LINES/$WIREPARSER_CAP, session-state $SESSIONSTATE_LINES/$SESSIONSTATE_CAP):$(surf_unit_detail "$POST_AUTH_FILES") lists and caps parsed from SPEC.md BE-SURF-03"
 else
+    DETAIL=""
+    [ "$WIREPARSER_LINES" -gt "$WIREPARSER_CAP" ] && DETAIL="$DETAIL wire-parser sub-unit $WIREPARSER_LINES/$WIREPARSER_CAP over budget;"
+    [ "$SESSIONSTATE_LINES" -gt "$SESSIONSTATE_CAP" ] && DETAIL="$DETAIL session-state sub-unit $SESSIONSTATE_LINES/$SESSIONSTATE_CAP over budget;"
+    [ "$POST_AUTH_LINES" -gt "$SURF_CAP" ] && DETAIL="$DETAIL total $POST_AUTH_LINES/$SURF_CAP over budget;"
     M11_VERDICT="FAIL"
-    M11_DETAIL="post-authentication unit $POST_AUTH_LINES/$SURF_CAP lines, over budget:$(surf_unit_detail "$POST_AUTH_FILES") (BE-SURF-03)"
+    M11_DETAIL="post-authentication unit ${DETAIL# }:$(surf_unit_detail "$POST_AUTH_FILES") (BE-SURF-03)"
 fi
 
 # ---- M6: build with the network disabled, no package manager ----
