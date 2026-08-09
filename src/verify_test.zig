@@ -970,3 +970,183 @@ test "BE_WIRE_03 verification runs over the transmitted bytes themselves" {
     env_bytes[20] ^= 0x01;
     try std.testing.expectError(error.BadSignature, verify.verifyEnvelope(env));
 }
+
+// ---------------------------------------------------------------------------
+// Refusal verification (SPEC 8.5, BE-GRANT-09 verify half). The Refusal is the
+// approver's signed NO over one intent_id (domain tag 0x06); it transitions a
+// matching PENDING intent to REJECTED and releases the resource lock. The
+// state-machine half (admit/dedupe/exclusivity/timeout/terminality) is bound in
+// intent_test.zig; these tests bind the verify half: the sig MUST verify under
+// tag 0x06 against the envelope sender, the sender's cert MUST carry the
+// approver role, and a verified Refusal drives the PENDING -> REJECTED
+// transition through intent.Table.applyRefusal. The wire is the canonical
+// cross-implementation Refusal vector (test/vectors.json, structure refusal):
+// if the verifier disagrees with it, the verifier is wrong.
+// ---------------------------------------------------------------------------
+
+const intent = @import("intent.zig");
+
+// Canonical Refusal (123 bytes: intent_id 16 + note_len 2 + note 41 + sig 64),
+// signed by the approver over domain tag 0x06. Fields mirror SPEC 8.5.
+const REFUSAL_WIRE_HEX =
+    "0102030405060708090a0b0c0d0e0f10" ++ // intent_id (== cth.INTENT_ID)
+    "0029" ++ // note_len = 41
+    "5265736f75726365206e6f74207265636f676e697a65642062792074686973206578656375746f722e" ++ // note
+    "9d1177e78056b08516ca4ed42797b3f12f528766f610d0299f05cbc66b9bb6708b3c1322f408c834d0846374a71c069e5cd67eed770675bf9bb228d9daa3c40c"; // sig
+
+// on_rejected callback state. Same single_threaded dependency as the grant
+// effect counters above: written by more than one test block.
+var rejected_calls: usize = 0;
+var rejected_intent_id: []const u8 = &[_]u8{};
+
+fn recordRejected(intent_id: []const u8) void {
+    rejected_calls += 1;
+    rejected_intent_id = intent_id;
+}
+
+fn resetRejected() void {
+    rejected_calls = 0;
+    rejected_intent_id = &[_]u8{};
+}
+
+// A body_type=6 envelope whose sender is the approver (BE-GRANT-03 check 1
+// shape). verifyRefusalThen reads only body_type and sender from it.
+fn refusalEnvelope() parser.channel.Envelope {
+    return .{
+        .version = 2,
+        .channel_id = &[_]u8{},
+        .sender = &cth.APPROVER_PUB,
+        .seq = 0,
+        .parent_count = 0,
+        .parents = &[_]u8{},
+        .ts = 0,
+        .body_type = parser.channel.BODY_REFUSAL,
+        .body = &[_]u8{},
+        .tbs = &[_]u8{},
+        .sig = &[_]u8{},
+    };
+}
+
+// A PENDING intent the Refusal is meant to reject. intent_id matches the
+// canonical Refusal vector so applyRefusal finds it.
+fn pendingIntent() parser.channel.Intent {
+    return .{ .intent_id = &cth.INTENT_ID, .resource_id = cth.RESOURCE_ID, .action = ACTION, .rationale = "" };
+}
+
+fn refusalCtx(table: *intent.Table) verify.RefusalContext {
+    return .{
+        .trusted_ca_keys = cth.trustedSet(),
+        .approver_cert = cth.approverCert(),
+        .now_ms = NOW_MS,
+        .intent_table = table,
+    };
+}
+
+test "BE_GRANT_09 canonical refusal verifies and rejects the pending intent" {
+    const wire = decodeHex(REFUSAL_WIRE_HEX);
+    const refusal = try parser.channel.parseRefusal(&wire);
+    const env = refusalEnvelope();
+    var table = intent.Table.init();
+    try table.admit(pendingIntent(), NOW_MS);
+    try std.testing.expectEqual(intent.State.pending, table.entries[0].state);
+    const ctx = refusalCtx(&table);
+    resetRejected();
+    try verify.verifyRefusalThen(env, refusal, ctx, &recordRejected);
+    // The transition ran exactly once, on the intent_id the routine verified.
+    try std.testing.expectEqual(@as(usize, 1), rejected_calls);
+    try std.testing.expectEqualSlices(u8, &cth.INTENT_ID, rejected_intent_id);
+    // PENDING -> REJECTED: the lock is released without waiting for T_pending.
+    try std.testing.expectEqual(intent.State.rejected, table.entries[0].state);
+}
+
+test "BE_GRANT_09 refusal delivered as the wrong body_type is refused" {
+    const wire = decodeHex(REFUSAL_WIRE_HEX);
+    const refusal = try parser.channel.parseRefusal(&wire);
+    var env = refusalEnvelope();
+    env.body_type = parser.channel.BODY_GRANT; // a Refusal is not a Grant
+    var table = intent.Table.init();
+    try table.admit(pendingIntent(), NOW_MS);
+    const ctx = refusalCtx(&table);
+    resetRejected();
+    try std.testing.expectError(error.BadEnvelopeBinding, verify.verifyRefusalThen(env, refusal, ctx, &recordRejected));
+    // Refused before the transition: the intent is still pending, nothing fired.
+    try std.testing.expectEqual(intent.State.pending, table.entries[0].state);
+    try std.testing.expectEqual(@as(usize, 0), rejected_calls);
+}
+
+test "BE_GRANT_09 corrupted refusal sig is refused" {
+    var wire = decodeHex(REFUSAL_WIRE_HEX);
+    wire[60] ^= 0xff; // flip one byte inside the 64-byte sig (offset 59..123)
+    const refusal = try parser.channel.parseRefusal(&wire); // parse still succeeds
+    const env = refusalEnvelope();
+    var table = intent.Table.init();
+    try table.admit(pendingIntent(), NOW_MS);
+    const ctx = refusalCtx(&table);
+    resetRejected();
+    try std.testing.expectError(error.BadSignature, verify.verifyRefusalThen(env, refusal, ctx, &recordRejected));
+    // A forged NO does not reject the intent: it stays pending, lock held.
+    try std.testing.expectEqual(intent.State.pending, table.entries[0].state);
+    try std.testing.expectEqual(@as(usize, 0), rejected_calls);
+}
+
+test "BE_GRANT_09 refusal signed under the wrong domain tag is refused" {
+    var wire = decodeHex(REFUSAL_WIRE_HEX);
+    // Re-sign the identical tbs under DOMAIN_GRANT (0x04) with the approver's
+    // own key, then drop the forged sig into the wire. A signature valid for a
+    // Grant does not authorize a Refusal (BE-SIG-01).
+    const approver = cth.keypair(0x41);
+    var msg: [1 + 59]u8 = undefined; // tag + tbs (intent_id 16 + note_len 2 + note 41 = 59)
+    msg[0] = parser.channel.DOMAIN_GRANT;
+    @memcpy(msg[1..], wire[0..59]);
+    const forged = Ed.Signature.toBytes(try Ed.KeyPair.sign(approver, &msg, null));
+    @memcpy(wire[59..123], &forged);
+    const refusal = try parser.channel.parseRefusal(&wire);
+    const env = refusalEnvelope();
+    var table = intent.Table.init();
+    try table.admit(pendingIntent(), NOW_MS);
+    const ctx = refusalCtx(&table);
+    resetRejected();
+    try std.testing.expectError(error.BadSignature, verify.verifyRefusalThen(env, refusal, ctx, &recordRejected));
+    try std.testing.expectEqual(intent.State.pending, table.entries[0].state);
+}
+
+test "BE_GRANT_09 refusal from a non-approver cert is refused" {
+    const wire = decodeHex(REFUSAL_WIRE_HEX);
+    const refusal = try parser.channel.parseRefusal(&wire);
+    const env = refusalEnvelope();
+    var table = intent.Table.init();
+    try table.admit(pendingIntent(), NOW_MS);
+    var ctx = refusalCtx(&table);
+    // Approver-positioned cert that carries the agent role, not approver. The
+    // sig_pubkey still matches APPROVER_PUB (the signer), so only the role
+    // check fails here: a non-approver cannot issue a Refusal.
+    var role_wire: [512]u8 = undefined;
+    ctx.approver_cert = cth.buildCertInto(
+        &role_wire,
+        cth.APPROVER_PUB,
+        binding.ROLE_AGENT,
+        &[_]u8{0xc0},
+        cth.CERT_NOT_BEFORE,
+        cth.CERT_NOT_AFTER,
+    );
+    resetRejected();
+    try std.testing.expectError(error.BadApproverCert, verify.verifyRefusalThen(env, refusal, ctx, &recordRejected));
+    try std.testing.expectEqual(intent.State.pending, table.entries[0].state);
+    try std.testing.expectEqual(@as(usize, 0), rejected_calls);
+}
+
+test "BE_GRANT_09 a verified refusal matching no pending intent is dropped" {
+    const wire = decodeHex(REFUSAL_WIRE_HEX);
+    const refusal = try parser.channel.parseRefusal(&wire);
+    const env = refusalEnvelope();
+    var table = intent.Table.init();
+    // No intent is admitted: the Refusal matches nothing and is dropped, not
+    // buffered. The sig and role checks still pass, so this is the no_match
+    // branch (BE-GRANT-09), not a refusal.
+    const ctx = refusalCtx(&table);
+    resetRejected();
+    try verify.verifyRefusalThen(env, refusal, ctx, &recordRejected);
+    // No transition to report: on_rejected never fired.
+    try std.testing.expectEqual(@as(usize, 0), rejected_calls);
+    try std.testing.expectEqual(@as(usize, 0), table.len);
+}
