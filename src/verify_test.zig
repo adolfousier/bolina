@@ -913,3 +913,60 @@ test "BE_ENV_01 envelope ts is not a security input" {
     try verify.verifyGrantThen(env_far, &grant, ctx, &recordEffect);
     try std.testing.expectEqual(@as(usize, 1), effect_calls);
 }
+
+// ---------------------------------------------------------------------------
+// BE-GRANT-08 (the approver's own key). A Grant must be signed by a key the
+// approving human controls directly. The envelope binding already forces
+// sender == approver (BE-GRANT-03 check 1); this witness proves the sig check
+// completes the pincer: a grant whose signature is made by the SUBJECT's own
+// key, a valid Ed25519 signature over the identical tbs, is refused. An agent
+// cannot sign its own homework.
+// ---------------------------------------------------------------------------
+
+test "BE_GRANT_08 grant signed by the subject instead of the approver is refused" {
+    // The subject's own signing key: seed prefix 0x81, the canonical agent
+    // identity in tools/gen-vectors.zig.
+    const usurper = cth.keypair(0x81);
+    try std.testing.expectEqual(cth.SUBJECT_PUB, Ed.PublicKey.toBytes(usurper.public_key));
+
+    var grant_bytes = decodeHex(GRANT_HEX); // 271 bytes: TBS 207 + sig 64
+    var msg: [1 + 207]u8 = undefined;
+    msg[0] = parser.channel.DOMAIN_GRANT;
+    @memcpy(msg[1..], grant_bytes[0..207]);
+    const forged = try Ed.KeyPair.sign(usurper, &msg, null);
+    @memcpy(grant_bytes[207..271], &Ed.Signature.toBytes(forged));
+
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant); // sender == approver, envelope binding intact
+    const ctx = baseContext(ACTION, &ledgerFresh);
+    resetEffect();
+    try std.testing.expectError(error.BadSignature, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
+// ---------------------------------------------------------------------------
+// BE-WIRE-03 (signing and hashing operate over the encoded bytes exactly as
+// transmitted). There is no re-encoded copy on the verify path: the parsed
+// tbs aliases the transmitted buffer, and a single flipped bit inside that
+// buffer, after parsing, is enough to fail verification.
+// ---------------------------------------------------------------------------
+
+test "BE_WIRE_03 verification runs over the transmitted bytes themselves" {
+    var env_bytes = decodeHex(ENVELOPE_HEX);
+    const env = try parser.channel.parseEnvelope(&env_bytes);
+
+    // Aliasing proof: the parsed tbs points into the transmitted buffer
+    // itself, so the verifier consumes the encoded bytes as transmitted and
+    // never a re-encoded copy.
+    const buf_start = @intFromPtr(&env_bytes);
+    const buf_end = buf_start + env_bytes.len;
+    const tbs_start = @intFromPtr(env.tbs.ptr);
+    try std.testing.expect(tbs_start >= buf_start);
+    try std.testing.expect(tbs_start + env.tbs.len <= buf_end);
+
+    // Flip one bit of the tbs region inside the transmitted buffer, after
+    // parsing: the same parsed envelope now fails verification, because the
+    // bytes it aliases are exactly the bytes the signature covers.
+    env_bytes[20] ^= 0x01;
+    try std.testing.expectError(error.BadSignature, verify.verifyEnvelope(env));
+}

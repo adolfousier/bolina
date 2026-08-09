@@ -329,3 +329,52 @@ test "BE_REV_01 agent cert with 31.7-year window accepted (no cap)" {
     const cert = cth.buildCertInto(&wire, id_pub, binding.ROLE_AGENT, &[_]u8{0xc0}, 1_000_000_000_000, 2_000_000_000_000);
     try binding.validateCert(cert, cth.trustedSet(), 1_500_000_000_000);
 }
+
+// ===========================================================================
+// BE-ROLE-03: Cert structures MUST NOT include private key fields. API
+// surfaces MUST NOT give certificate holders access to private key
+// material. The agent cert is proof of delegation; the holder can never
+// reach the approver's key bytes.
+// ===========================================================================
+
+test "BE_ROLE_03 cert and binding surfaces carry no secret material" {
+    // The Cert wire struct is exactly the twelve public fields: no secret,
+    // private, or seed field exists anywhere on it, and nothing beyond this
+    // allowlist can appear without failing this witness.
+    const fields = @typeInfo(parser.session.Cert).@"struct".fields;
+    try std.testing.expectEqual(@as(usize, 12), fields.len);
+    const allowlist = [_][]const u8{
+        "version",
+        "role_bits",
+        "sig_pubkey",
+        "kex_pubkey",
+        "not_before",
+        "not_after",
+        "name",
+        "group_count",
+        "group_ids",
+        "ca_sig_count",
+        "ca_sigs",
+        "tbs",
+    };
+    inline for (fields) |f| {
+        var found = false;
+        for (allowlist) |name| {
+            if (std.mem.eql(u8, f.name, name)) found = true;
+        }
+        try std.testing.expect(found);
+        try std.testing.expect(std.mem.indexOf(u8, f.name, "secret") == null);
+        try std.testing.expect(std.mem.indexOf(u8, f.name, "private") == null);
+        try std.testing.expect(std.mem.indexOf(u8, f.name, "seed") == null);
+    }
+
+    // The binding module's public decls hand nothing secret to a caller:
+    // no decl name carries secret, private, or seed, so a cert holder has
+    // no API path to any key bytes but their own public ones.
+    const decls = @typeInfo(binding).@"struct".decls;
+    inline for (decls) |d| {
+        try std.testing.expect(std.mem.indexOf(u8, d.name, "secret") == null);
+        try std.testing.expect(std.mem.indexOf(u8, d.name, "private") == null);
+        try std.testing.expect(std.mem.indexOf(u8, d.name, "seed") == null);
+    }
+}

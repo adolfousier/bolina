@@ -449,3 +449,85 @@ test "BE_EVID_15 method id to class to ceiling mapping is fixed" {
     try std.testing.expectEqual(@as(u8, 191), evidence.ceilingQ8(.documentation));
     try std.testing.expectEqual(@as(u8, 165), evidence.ceilingQ8(.inference));
 }
+
+// ===========================================================================
+// BE-EVID-11: the code path decides, not a parameter. method_id is a
+// compile-time constant of the executor code path; the requester cannot name
+// the method, the wire carries no class, and the receiver's resolution entry
+// point takes neither class nor confidence override as an argument. The class
+// derives from the fixed table, evaluated at compile time.
+// ===========================================================================
+
+fn fieldNamed(comptime T: type, comptime needle: []const u8) bool {
+    const fields = @typeInfo(T).@"struct".fields;
+    inline for (fields) |f| {
+        if (std.mem.indexOf(u8, f.name, needle) != null) return true;
+    }
+    return false;
+}
+
+test "BE_EVID_11 no interface accepts method, class, or confidence" {
+    // The Intent requests an action and cannot name, hint at, or constrain
+    // the observation method: no method, class, or confidence field exists.
+    try std.testing.expect(!comptime fieldNamed(parser.channel.Intent, "method"));
+    try std.testing.expect(!comptime fieldNamed(parser.channel.Intent, "class"));
+    try std.testing.expect(!comptime fieldNamed(parser.channel.Intent, "confidence"));
+
+    // The wire Span carries the code path's method_id byte but no class or
+    // confidence field: there is no transmitted class for a receiver to trust.
+    try std.testing.expect(!comptime fieldNamed(parser.channel.Span, "class"));
+    try std.testing.expect(!comptime fieldNamed(parser.channel.Span, "confidence"));
+
+    // The class table is a compile-time constant: classOf evaluates for all
+    // 256 method_id values at comptime, so no runtime state can influence
+    // the derivation. This block failing to compile IS the failure mode.
+    comptime {
+        var i: usize = 0;
+        while (i < 256) : (i += 1) {
+            _ = evidence.classOf(@as(u8, @intCast(i)));
+        }
+    }
+
+    // classOf is the sole producer of classes and the ceiling map is its sole
+    // consumer: the class value stays inside the fixed table pair.
+    const cls_out = @typeInfo(@TypeOf(evidence.classOf)).@"fn".return_type orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(evidence.EvidenceClass, cls_out);
+
+    // resolveClaim, the single public receiver entry point, consumes claims,
+    // spans, hooks, and envelope bytes only: no EvidenceClass parameter, so
+    // the class can only be derived internally from method_id via classOf.
+    inline for (@typeInfo(@TypeOf(evidence.resolveClaim)).@"fn".params) |p| {
+        if (p.type) |pt| {
+            try std.testing.expect(pt != evidence.EvidenceClass);
+            try std.testing.expect(pt != *const evidence.EvidenceClass);
+            try std.testing.expect(pt != ?evidence.EvidenceClass);
+        }
+    }
+}
+
+// ===========================================================================
+// BE-EVID-14: capture is a precondition. Node-side slice of the executor
+// obligation (SPEC: not receiver-verifiable, logged narrow in D-050): the
+// wire format gives the digest no empty encoding. It is a fixed 32-byte
+// field, and a span truncated inside it is refused, never parsed short.
+// ===========================================================================
+
+test "BE_EVID_14 digest is fixed 32 bytes and truncation is refused" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const kp = H.executorKeypair();
+
+    const w = try H.spanWire(a, H.idOf(0x22), H.idOf(0x32), H.SUBJECT, 1, 1, H.seedFrom(0xa2), kp);
+    const span = try parser.channel.parseSpan(w);
+
+    // The parsed digest is exactly 32 bytes: the fixed take allows no empty
+    // or short encoding to exist on the wire.
+    try std.testing.expectEqual(@as(usize, 32), span.digest.len);
+
+    // Truncate inside the digest region: the span is refused outright rather
+    // than parsed with a shortened digest.
+    const digest_off = @intFromPtr(span.digest.ptr) - @intFromPtr(w.ptr);
+    const cut = try a.dupe(u8, w[0 .. digest_off + 10]);
+    try std.testing.expectError(error.Truncated, parser.channel.parseSpan(cut));
+}
