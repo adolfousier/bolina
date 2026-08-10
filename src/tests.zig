@@ -21,4 +21,5 @@ comptime {
     _ = @import("ledger_test.zig");
     _ = @import("intent_test.zig");
     _ = @import("resolver_test.zig");
+    _ = @import("render_test.zig");
 }
