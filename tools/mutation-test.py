@@ -159,6 +159,7 @@ TARGETS = {
     "ledger.zig": SRC / "ledger.zig",
     "historical.zig": SRC / "historical.zig",
     "intent.zig": SRC / "intent.zig",
+    "resolver.zig": SRC / "resolver.zig",
 }
 ORIGINALS = {name: path.read_text() for name, path in TARGETS.items()}
 
@@ -537,6 +538,43 @@ def refusal_properties_from_spec():
     text = SPEC.read_text()
     props = set()
     for key, _what, pattern in REFUSAL_MARKERS:
+        if re.search(pattern, text):
+            props.add(key)
+    return props
+
+
+# --- resolver denominator, derived from SPEC.md section 8.4 ----------------
+#
+# Canonical resource resolution (src/resolver.zig): the executor-side
+# canonicalizer, alias collapse, own-fingerprint gate, and the signed
+# resource-set publication state (D-053). Six markers, six properties.
+
+RESOLVER_MARKERS = [
+    ("resolver-canonical",
+     "BE-RES-01 the executor canonicalizes, never the requester",
+     r"\*\*BE-RES-01 \(the executor canonicalizes, never the requester\)\*\*"),
+    ("resolver-unknown-refuse",
+     "BE-RES-02 unknown or ambiguous resolves to refusal",
+     r"\*\*BE-RES-02 \(unknown resolves to refusal\)\*\*"),
+    ("resolver-alias-collapse",
+     "BE-RES-03 aliases collapse into the lock",
+     r"\*\*BE-RES-03 \(aliases collapse into the lock\)\*\*"),
+    ("resolver-own-executor",
+     "BE-RES-04 one resource, one executor (own fingerprint gate)",
+     r"\*\*BE-RES-04 \(one resource, one executor\)\*\*"),
+    ("resolver-signed-set",
+     "BE-RES-05 the resource set publishes as signed state",
+     r"\*\*BE-RES-05 \(granularity is declared, not emergent\)\*\*"),
+    ("resolver-fp-blake2s",
+     "BE-RES-06 executor_fp is BLAKE2s-256(sig_pubkey)[0..8], 16 lowercase hex",
+     r"\*\*BE-RES-06 \(the sig_pubkey fingerprint is BLAKE2s-256\)\*\*"),
+]
+
+
+def resolver_properties_from_spec():
+    text = SPEC.read_text()
+    props = set()
+    for key, _what, pattern in RESOLVER_MARKERS:
         if re.search(pattern, text):
             props.add(key)
     return props
@@ -1155,6 +1193,75 @@ MUTANTS = [
      "applyRefusal hook skipped (intent never transitions)",
      "    if (ctx.intent_table.applyRefusal(refusal) == .rejected) {\n        on_rejected(refusal.intent_id);\n    }",
      "    _ = ctx.intent_table; // MUTANT: applyRefusal + on_rejected skipped"),
+
+    # --- resolver domain: canonical resource resolution (src/resolver.zig, SPEC 8.4)
+    # resolver-fp-window (BE-RES-06): the fingerprint is the FIRST 8 bytes of
+    # the BLAKE2s-256 digest. Shifting the window by one byte changes every
+    # hex char and dies on the known-vector test.
+    ("resolver", "resolver.zig", "WRONG-CONSTANT", "resolver-fp-blake2s",
+     "fingerprint digest window shifted by one byte",
+     "    for (digest[0..FP_BYTES], 0..) |b, i| {",
+     "    for (digest[1 .. FP_BYTES + 1], 0..) |b, i| { // MUTANT: window shifted"),
+    # resolver-fp-hex (BE-RES-06): the fingerprint renders as 16 LOWERCASE hex
+    # chars. Uppercasing the table breaks the vector and the class check.
+    ("resolver", "resolver.zig", "WRONG-CONSTANT", "resolver-fp-blake2s",
+     "fingerprint rendered uppercase",
+     "    const hex = \"0123456789abcdef\";",
+     "    const hex = \"0123456789ABCDEF\"; // MUTANT: uppercase hex rendering"),
+    # resolver-grammar-dots (section 8.4 grammar, canonical form for
+    # BE-RES-01): path segments "." and ".." are forbidden. Dropping the dot
+    # rule admits the malformed declarations the grammar test refuses.
+    ("resolver", "resolver.zig", "WRONG-LOGIC", "resolver-canonical",
+     "dot segments accepted in the path grammar",
+     "fn segLenInvalid(seg_len: usize, dots: usize) bool {\n    return seg_len == 0 or (dots == seg_len and seg_len <= 2);\n}",
+     "fn segLenInvalid(seg_len: usize, dots: usize) bool {\n    _ = dots;\n    return seg_len == 0; // MUTANT: dot segments accepted\n}"),
+    # resolver-return-proposal (BE-RES-01): resolve must return the executor's
+    # canonical form. Returning the requester's proposal defeats every
+    # downstream consumer (lock, Grant, rendering, ledger).
+    ("resolver", "resolver.zig", "WRONG-VALUE", "resolver-canonical",
+     "resolve returns the proposed spelling, not the canonical",
+     "        return c;\n    }",
+     "        return proposed; // MUTANT: requester's spelling, not the canonical\n    }"),
+    # resolver-unknown-first (BE-RES-02): zero matches refuse. Resolving to
+    # the first entry instead creates the create-on-first-use path the marker
+    # forbids.
+    ("resolver", "resolver.zig", "WRONG-LOGIC", "resolver-unknown-refuse",
+     "unknown resource resolves to the first entry instead of refusing",
+     "        const idx = found orelse return error.UnknownResource;",
+     "        const idx = found orelse 0; // MUTANT: unknown resolves to first entry"),
+    # resolver-ambiguity-dropped (BE-RES-02): ambiguous matches refuse.
+    # Removing the distinct-entry check lets one spelling reach two resources.
+    ("resolver", "resolver.zig", "CHECK-ABSENCE", "resolver-unknown-refuse",
+     "ambiguity check removed (first match wins)",
+     "                if (found) |f| if (f != i) return error.AmbiguousResource;",
+     "                // MUTANT: ambiguity check removed, first match wins"),
+    # resolver-foreign-fp (BE-RES-04): an executor refuses any canonical that
+    # does not carry its own fingerprint. Removing the gate admits foreign
+    # namespaces.
+    ("resolver", "resolver.zig", "CHECK-ABSENCE", "resolver-own-executor",
+     "foreign-fingerprint gate removed",
+     "        if (!std.mem.eql(u8, c[4 .. 4 + FP_HEX_LEN], &self.own_fp)) return error.ForeignExecutor;",
+     "        // MUTANT: foreign-fingerprint check removed"),
+    # resolver-alias-entry (BE-RES-03): an alias maps to exactly one canonical
+    # entry. Inverting the entry match sends aliases to the wrong resource,
+    # breaking collapse into the lock.
+    ("resolver", "resolver.zig", "WRONG-LOGIC", "resolver-alias-collapse",
+     "alias matched against the wrong entry",
+     "            if (a.entry == entry_idx and a.len == proposed.len and",
+     "            if (a.entry != entry_idx and a.len == proposed.len and // MUTANT"),
+    # resolver-verify-skipped (BE-RES-05): the published set's signature must
+    # verify. Accepting any signature defeats the signed-state obligation.
+    ("resolver", "resolver.zig", "CHECK-ABSENCE", "resolver-signed-set",
+     "signature accepted without verification",
+     "        const signature = Ed.Signature.fromBytes(sig);\n        var v = signature.verifier(pubkey) catch return false;\n        v.update(scratch[0 .. 1 + n]);\n        v.verify() catch return false;\n        return true;",
+     "        const signature = Ed.Signature.fromBytes(sig);\n        _ = signature;\n        _ = pubkey;\n        _ = n;\n        return true; // MUTANT: signature accepted without verification"),
+    # resolver-encoding-endian (BE-RES-05, SPEC v0.3.2-draft encoding clause):
+    # the serialization's u16 lengths are big-endian, the repo convention.
+    # Little-endian breaks the literal encoding witness.
+    ("resolver", "resolver.zig", "WRONG-CONSTANT", "resolver-signed-set",
+     "canonical length written little-endian",
+     "            std.mem.writeInt(u16, out[pos..][0..2], @intCast(e.len), .big);",
+     "            std.mem.writeInt(u16, out[pos..][0..2], @intCast(e.len), .little); // MUTANT: little-endian length"),
 ]
 
 
@@ -1202,6 +1309,9 @@ def main():
     refusal_props = refusal_properties_from_spec()
     if not refusal_props:
         sys.exit("FATAL: no refusal properties detected in SPEC section 8.5/8.1")
+    resolver_props = resolver_properties_from_spec()
+    if not resolver_props:
+        sys.exit("FATAL: no resolver properties detected in SPEC section 8.4")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -1216,6 +1326,7 @@ def main():
     print(f"  ledger properties (§9):          {sorted(ledger_props)} ({len(ledger_props)})")
     print(f"  intent properties (§8.2):        {sorted(intent_props)} ({len(intent_props)})")
     print(f"  refusal properties (§8.5):       {sorted(refusal_props)} ({len(refusal_props)})")
+    print(f"  resolver properties (§8.4):      {sorted(resolver_props)} ({len(resolver_props)})")
     print()
 
     # 2. scope check: no mutant may attack a key its domain's SPEC does not list
@@ -1260,6 +1371,10 @@ def main():
             if key not in refusal_props:
                 sys.exit(f"FATAL: refusal mutant '{name}' attacks '{key}', which "
                          "SPEC section 8.5/8.1 does not declare (scope lie)")
+        elif domain == "resolver":
+            if key not in resolver_props:
+                sys.exit(f"FATAL: resolver mutant '{name}' attacks '{key}', which "
+                         "SPEC section 8.4 does not declare (scope lie)")
         else:
             sys.exit(f"FATAL: mutant '{name}' in unknown domain '{domain}'")
 
@@ -1374,10 +1489,15 @@ def main():
         f_cov = {r["key"] for r in f_run if r["killed"]}
         print(f"refusal:  {len(f_cov)}/{len(refusal_props)} §8.5 "
               f"properties covered by killed mutants")
+    v_run, v_surv, v_uncov, _ = gate_domain("resolver", resolver_props)
+    if in_scope("resolver"):
+        v_cov = {r["key"] for r in v_run if r["killed"]}
+        print(f"resolver: {len(v_cov)}/{len(resolver_props)} §8.4 "
+              f"properties covered by killed mutants")
     total_run = [r for r in results if not r["skipped"]]
     total_killed = sum(1 for r in total_run if r["killed"])
     print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
-          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv)}"
+          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv) + len(v_surv)}"
           f" survived")
     if g_surv:
         print(f"  grant SURVIVORS: {g_surv}")
@@ -1399,6 +1519,8 @@ def main():
         print(f"  intent SURVIVORS: {i_surv}")
     if f_surv:
         print(f"  refusal SURVIVORS: {f_surv}")
+    if v_surv:
+        print(f"  resolver SURVIVORS: {v_surv}")
     if g_uncov:
         print(f"  UNCOVERED grant checks: {g_uncov}")
     if e_uncov:
@@ -1419,16 +1541,18 @@ def main():
         print(f"  UNCOVERED intent properties: {i_uncov}")
     if f_uncov:
         print(f"  UNCOVERED refusal properties: {f_uncov}")
+    if v_uncov:
+        print(f"  UNCOVERED resolver properties: {v_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
     ok = ((not g_surv) and (not e_surv) and (not t_surv) and (not s_surv)
           and (not c_surv) and (not m_surv) and (not r_surv) and (not l_surv)
-          and (not i_surv) and (not f_surv)
+          and (not i_surv) and (not f_surv) and (not v_surv)
           and (not g_uncov) and (not e_uncov) and (not t_uncov)
           and (not s_uncov) and (not c_uncov) and (not m_uncov)
           and (not r_uncov) and (not l_uncov)
-          and (not i_uncov) and (not f_uncov) and g_cb)
+          and (not i_uncov) and (not f_uncov) and (not v_uncov) and g_cb)
     return 0 if ok else 1
 
 
