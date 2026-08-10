@@ -160,6 +160,7 @@ TARGETS = {
     "historical.zig": SRC / "historical.zig",
     "intent.zig": SRC / "intent.zig",
     "resolver.zig": SRC / "resolver.zig",
+    "render.zig": SRC / "render.zig",
 }
 ORIGINALS = {name: path.read_text() for name, path in TARGETS.items()}
 
@@ -575,6 +576,30 @@ def resolver_properties_from_spec():
     text = SPEC.read_text()
     props = set()
     for key, _what, pattern in RESOLVER_MARKERS:
+        if re.search(pattern, text):
+            props.add(key)
+    return props
+
+
+# --- render denominator, derived from SPEC.md section 8.3 -------------------
+# What the human sees: the approving interface renders canonical resource_id,
+# full action bytes, and a recomputed digest (BE-GRANT-07), with any
+# displayed rationale marked untrusted and subordinate (BE-GRANT-07a).
+
+RENDER_MARKERS = [
+    ("render-approve-bytes",
+     "BE-GRANT-07 approving interface renders canonical id, full action, recomputed digest",
+     r"\*\*BE-GRANT-07\*\*"),
+    ("render-rationale-untrusted",
+     "BE-GRANT-07a displayed rationale marked untrusted, subordinate, never alone",
+     r"\*\*BE-GRANT-07a\*\*"),
+]
+
+
+def render_properties_from_spec():
+    text = SPEC.read_text()
+    props = set()
+    for key, _what, pattern in RENDER_MARKERS:
         if re.search(pattern, text):
             props.add(key)
     return props
@@ -1262,6 +1287,44 @@ MUTANTS = [
      "canonical length written little-endian",
      "            std.mem.writeInt(u16, out[pos..][0..2], @intCast(e.len), .big);",
      "            std.mem.writeInt(u16, out[pos..][0..2], @intCast(e.len), .little); // MUTANT: little-endian length"),
+    # render-digest-source (BE-GRANT-07): the view's digest must be
+    # recomputed from exactly the action bytes displayed. Digesting the
+    # resource id instead breaks the grant-binding agreement witness.
+    ("render", "render.zig", "WRONG-VALUE", "render-approve-bytes",
+     "digest computed from the resource id, not the action",
+     "        .action_digest = verify.actionDigest(action),",
+     "        .action_digest = verify.actionDigest(canonical_resource_id), // MUTANT: digest of the id, not the action"),
+    # render-digest-zero (BE-GRANT-07): pinning the digest to zero skips
+    # recomputation entirely; the literal digest witness fails.
+    ("render", "render.zig", "WRONG-VALUE", "render-approve-bytes",
+     "digest pinned to zero, never recomputed",
+     "        .action_digest = verify.actionDigest(action),",
+     "        .action_digest = [_]u8{0} ** 32, // MUTANT: zero digest, never recomputed"),
+    # render-action-truncated (BE-GRANT-07): the view must carry the FULL
+    # action bytes; truncation is a summary, forbidden by the marker.
+    ("render", "render.zig", "WRONG-VALUE", "render-approve-bytes",
+     "action truncated to half (a summary, not the full bytes)",
+     "        .action = action,",
+     "        .action = action[0 .. action.len / 2], // MUTANT: truncated action"),
+    # render-label-trusted (BE-GRANT-07a): displayed rationale must carry
+    # the untrusted label; flipping it to trusted defeats the marking.
+    ("render", "render.zig", "WRONG-VALUE", "render-rationale-untrusted",
+     "rationale label flipped to trusted",
+     "    untrusted_label: []const u8 = RATIONALE_UNTRUSTED_LABEL,",
+     "    untrusted_label: []const u8 = \"trusted, verified\", // MUTANT: rationale marked trusted"),
+    # render-rationale-first (BE-GRANT-07a): rationale must stay visually
+    # subordinate; moving it ahead of the primary content breaks the order
+    # witness.
+    ("render", "render.zig", "WRONG-LOGIC", "render-rationale-untrusted",
+     "rationale field moved before the primary content",
+     "pub const ApprovalView = struct {\n    resource_id: []const u8, // canonical form, resolved by the executor (section 8.4)\n    action: []const u8, // full action bytes, never a summary\n    action_digest: [channel.LEN_ACTION_DIGEST]u8, // recomputed over `action`\n    rationale: ?Rationale = null, // null = not displayed at all\n};",
+     "pub const ApprovalView = struct {\n    rationale: ?Rationale = null, // MUTANT: rationale first, dominant\n    resource_id: []const u8,\n    action: []const u8,\n    action_digest: [channel.LEN_ACTION_DIGEST]u8,\n};"),
+    # render-primary-optional (BE-GRANT-07a): primary content must never be
+    # optional, or rationale could stand alone on screen.
+    ("render", "render.zig", "CHECK-ABSENCE", "render-rationale-untrusted",
+     "primary content made optional (rationale can stand alone)",
+     "    resource_id: []const u8, // canonical form, resolved by the executor (section 8.4)",
+     "    resource_id: ?[]const u8 = null, // MUTANT: primary content optional"),
 ]
 
 
@@ -1313,6 +1376,10 @@ def main():
     if not resolver_props:
         sys.exit("FATAL: no resolver properties detected in SPEC section 8.4")
 
+    render_props = render_properties_from_spec()
+    if not render_props:
+        sys.exit("FATAL: no render properties detected in SPEC section 8.3")
+
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
     print(f"  grant modelled by this slice:  {sorted(modelled)} ({len(modelled)})")
@@ -1327,6 +1394,7 @@ def main():
     print(f"  intent properties (§8.2):        {sorted(intent_props)} ({len(intent_props)})")
     print(f"  refusal properties (§8.5):       {sorted(refusal_props)} ({len(refusal_props)})")
     print(f"  resolver properties (§8.4):      {sorted(resolver_props)} ({len(resolver_props)})")
+    print(f"  render properties (§8.3):        {sorted(render_props)} ({len(render_props)})")
     print()
 
     # 2. scope check: no mutant may attack a key its domain's SPEC does not list
@@ -1375,6 +1443,10 @@ def main():
             if key not in resolver_props:
                 sys.exit(f"FATAL: resolver mutant '{name}' attacks '{key}', which "
                          "SPEC section 8.4 does not declare (scope lie)")
+        elif domain == "render":
+            if key not in render_props:
+                sys.exit(f"FATAL: render mutant '{name}' attacks '{key}', which "
+                         "SPEC section 8.3 does not declare (scope lie)")
         else:
             sys.exit(f"FATAL: mutant '{name}' in unknown domain '{domain}'")
 
@@ -1494,10 +1566,15 @@ def main():
         v_cov = {r["key"] for r in v_run if r["killed"]}
         print(f"resolver: {len(v_cov)}/{len(resolver_props)} §8.4 "
               f"properties covered by killed mutants")
+    w_run, w_surv, w_uncov, _ = gate_domain("render", render_props)
+    if in_scope("render"):
+        w_cov = {r["key"] for r in w_run if r["killed"]}
+        print(f"render:   {len(w_cov)}/{len(render_props)} §8.3 "
+              f"properties covered by killed mutants")
     total_run = [r for r in results if not r["skipped"]]
     total_killed = sum(1 for r in total_run if r["killed"])
     print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
-          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv) + len(v_surv)}"
+          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv) + len(v_surv) + len(w_surv)}"
           f" survived")
     if g_surv:
         print(f"  grant SURVIVORS: {g_surv}")
@@ -1521,6 +1598,8 @@ def main():
         print(f"  refusal SURVIVORS: {f_surv}")
     if v_surv:
         print(f"  resolver SURVIVORS: {v_surv}")
+    if w_surv:
+        print(f"  render SURVIVORS: {w_surv}")
     if g_uncov:
         print(f"  UNCOVERED grant checks: {g_uncov}")
     if e_uncov:
@@ -1543,16 +1622,19 @@ def main():
         print(f"  UNCOVERED refusal properties: {f_uncov}")
     if v_uncov:
         print(f"  UNCOVERED resolver properties: {v_uncov}")
+    if w_uncov:
+        print(f"  UNCOVERED render properties: {w_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
     ok = ((not g_surv) and (not e_surv) and (not t_surv) and (not s_surv)
           and (not c_surv) and (not m_surv) and (not r_surv) and (not l_surv)
-          and (not i_surv) and (not f_surv) and (not v_surv)
+          and (not i_surv) and (not f_surv) and (not v_surv) and (not w_surv)
           and (not g_uncov) and (not e_uncov) and (not t_uncov)
           and (not s_uncov) and (not c_uncov) and (not m_uncov)
           and (not r_uncov) and (not l_uncov)
-          and (not i_uncov) and (not f_uncov) and (not v_uncov) and g_cb)
+          and (not i_uncov) and (not f_uncov) and (not v_uncov)
+          and (not w_uncov) and g_cb)
     return 0 if ok else 1
 
 
