@@ -231,15 +231,17 @@ pub const WalkQueue = struct {
         return hash;
     }
 
-    // Count one envelope examined. The 4097th examination exhausts the
-    // budget: the walk stops mid-stride, surfaces, and does not retry.
+    // Count one envelope examined. The budget admits exactly 4096
+    // examinations; the next attempt exhausts it BEFORE it is counted, so the
+    // surfaced postcondition reads examined == 4096 and the walk never
+    // retries.
     pub fn noteExamined(self: *WalkQueue) SyncError!void {
         if (self.exhausted) return SyncError.WalkExhausted;
-        self.examined += 1;
-        if (self.examined > WALK_MAX_TOTAL) {
+        if (self.examined >= WALK_MAX_TOTAL) {
             self.exhausted = true;
             return SyncError.WalkExhausted;
         }
+        self.examined += 1;
     }
 };
 
