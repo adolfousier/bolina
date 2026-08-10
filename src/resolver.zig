@@ -27,6 +27,8 @@
 const std = @import("std");
 const Blake2s256 = std.crypto.hash.blake2.Blake2s256;
 const Ed = std.crypto.sign.Ed25519;
+const intent_mod = @import("intent.zig");
+const channel = @import("parser/channel.zig");
 
 // ---------------------------------------------------------------------------
 // Constants (SPEC section 8.4 grammar).
@@ -285,6 +287,20 @@ pub const Resolver = struct {
         v.update(scratch[0 .. 1 + n]);
         v.verify() catch return false;
         return true;
+    }
+
+    // resolveAndAdmit (BE-RES-01/02/03/04): the executor-side admission gate.
+    // Resolves the proposed resource_id to the canonical form BEFORE the lock
+    // is touched; unknown, ambiguous, and foreign-fingerprint proposals
+    // refuse without mutating the table (BE-RES-02/04). The entry admitted
+    // carries the canonical bytes, so the lock and everything downstream of
+    // it keys on the executor's form, never the requester's (BE-RES-01), and
+    // two spellings of one resource collapse into one lock (BE-RES-03).
+    pub fn resolveAndAdmit(self: *const Resolver, table: *intent_mod.Table, it: channel.Intent, now_ms: u64) (ResolveError || intent_mod.IntentError)!void {
+        const canonical = try self.resolve(it.resource_id);
+        var resolved = it;
+        resolved.resource_id = canonical;
+        try table.admit(resolved, now_ms);
     }
 
     // --- internal lookups --------------------------------------------------

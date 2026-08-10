@@ -10,6 +10,8 @@
 
 const std = @import("std");
 const resolver = @import("resolver.zig");
+const intent_mod = @import("intent.zig");
+const channel = @import("parser/channel.zig");
 const h = @import("cert_test_helpers.zig");
 const Ed = std.crypto.sign.Ed25519;
 
@@ -24,6 +26,13 @@ const RES_FOREIGN = "bol:" ++ FP2 ++ "/print/queue/main";
 
 fn execResolver() R {
     return R.init(&h.pubkeyOf(0xE1));
+}
+
+const id_a = [_]u8{0xAA} ** 16;
+const id_b = [_]u8{0xBB} ** 16;
+
+fn intentWith(id: []const u8, resource: []const u8) channel.Intent {
+    return .{ .intent_id = id, .resource_id = resource, .action = "", .rationale = "" };
 }
 
 test "BE_RES_06 fingerprint is BLAKE2s-256 first 8 bytes, 16 lowercase hex" {
@@ -169,4 +178,51 @@ test "BE_RES_05 granularity is declared: capacities refuse, never grow" {
         try r.addAlias(RES_A, len);
     }
     try std.testing.expectError(E.AliasPoolFull, r.addAlias(RES_A, "overflow"));
+}
+
+// ---------------------------------------------------------------------------
+// Admission wiring (resolveAndAdmit): the executor resolves before the lock
+// is touched. These are the downstream halves of BE-RES-01 and BE-RES-03.
+// ---------------------------------------------------------------------------
+
+test "BE_RES_01 admission stores the canonical form, never the proposal" {
+    var r = execResolver();
+    try r.add(RES_A);
+    try r.addAlias(RES_A, "q3-report");
+    var t = intent_mod.Table.init();
+    try r.resolveAndAdmit(&t, intentWith(&id_a, "q3-report"), 0);
+    try std.testing.expectEqual(@as(usize, 1), t.len);
+    // the lock entry carries the canonical bytes, not the alias spelling
+    const e = t.entries[0];
+    try std.testing.expectEqual(RES_A.len, e.resource_len);
+    try std.testing.expectEqualStrings(RES_A, e.resource_id[0..e.resource_len]);
+}
+
+test "BE_RES_03 two spellings of one resource collapse into one lock" {
+    var r = execResolver();
+    try r.add(RES_A);
+    try r.addAlias(RES_A, "spelling-one");
+    try r.addAlias(RES_A, "spelling-two");
+    var t = intent_mod.Table.init();
+    try r.resolveAndAdmit(&t, intentWith(&id_a, "spelling-one"), 0);
+    // second intent, different id, second spelling, same canonical: the lock
+    // is already held and BE-GRANT-06 exclusivity refuses on the canonical
+    try std.testing.expectError(intent_mod.IntentError.ResourceHeld, r.resolveAndAdmit(&t, intentWith(&id_b, "spelling-two"), 1));
+    try std.testing.expectEqual(@as(usize, 1), t.len);
+}
+
+test "BE_RES_02 unknown resource refuses admission, table untouched" {
+    var r = execResolver();
+    try r.add(RES_A);
+    var t = intent_mod.Table.init();
+    try std.testing.expectError(E.UnknownResource, r.resolveAndAdmit(&t, intentWith(&id_a, "bol:" ++ FP1 ++ "/files/ghost"), 0));
+    try std.testing.expectEqual(@as(usize, 0), t.len);
+}
+
+test "BE_RES_04 foreign-fingerprint resource refuses admission, table untouched" {
+    var r = execResolver();
+    try r.add(RES_FOREIGN);
+    var t = intent_mod.Table.init();
+    try std.testing.expectError(E.ForeignExecutor, r.resolveAndAdmit(&t, intentWith(&id_a, RES_FOREIGN), 0));
+    try std.testing.expectEqual(@as(usize, 0), t.len);
 }
