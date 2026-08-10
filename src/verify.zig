@@ -39,6 +39,7 @@ const std = @import("std");
 const parser = @import("parser.zig");
 const binding = @import("binding.zig");
 const ledger = @import("ledger.zig");
+const intent = @import("intent.zig");
 
 const Ed = std.crypto.sign.Ed25519;
 const B2s = std.crypto.hash.blake2.Blake2s256;
@@ -241,6 +242,70 @@ pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.ch
     // single invocation is the only reach path to the effect in the tree, which
     // the call-graph wall M10 makes load-bearing.
     execute(grant);
+}
+
+// ---------------------------------------------------------------------------
+// Refusal verification (SPEC 8.5, BE-GRANT-09 parse half).
+//
+// The Refusal is the approver's signed NO over a single intent_id (domain tag
+// 0x06). It is the symmetric counterpart of the Grant: a Grant transitions a
+// PENDING intent to EXECUTING, a Refusal transitions it to REJECTED and so
+// releases the resource lock in one message instead of after T_pending
+// (BE-GRANT-06a). The sig check and the approver-role check run here; the
+// state transition itself is folded into intent.Table.applyRefusal (D-018:
+// bytes-to-values at the parser, state over values here).
+//
+// The note field rides Refusal.tbs but is approver-authored prose with no
+// binding force (BE-GRANT-09): it carries no capability and is read for human
+// display only. The binding content is the intent_id alone (SPEC 8.5 has no
+// version field).
+// ---------------------------------------------------------------------------
+
+pub const RefusalContext = struct {
+    trusted_ca_keys: []const []const u8,
+    approver_cert: parser.session.Cert,
+    now_ms: u64,
+    intent_table: *intent.Table,
+};
+
+// verifyRefusalThen: the single BE-GRANT-09 verification routine. Checks run in
+// order and refuse on the first failure. On a verified Refusal whose intent_id
+// names a PENDING intent, applyRefusal moves it to REJECTED and the caller's
+// on_rejected fires once, inside this frame; a Refusal matching no pending
+// intent is dropped (no_match), and on_rejected does not fire. Nothing
+// representing a "verified refusal" leaves the routine (BE-GRANT-03b shape);
+// on_rejected carries the intent_id only, never a capability.
+pub fn verifyRefusalThen(
+    env: parser.channel.Envelope,
+    refusal: parser.channel.Refusal,
+    ctx: RefusalContext,
+    on_rejected: *const fn (intent_id: []const u8) void,
+) VerifyError!void {
+    // 1. A Refusal arrives as a body_type=6 envelope whose sender is the
+    //    approver (BE-ENV-03 gates BODY_REFUSAL on is_approver at admission;
+    //    this re-binds sender to the sig at verification, the Grant pincer).
+    if (env.body_type != parser.channel.BODY_REFUSAL) return error.BadEnvelopeBinding;
+
+    // 2. Refusal.sig verifies against env.sender over (DOMAIN_REFUSAL || tbs)
+    //    (BE-SIG-01, tag 0x06). tbs is every byte before sig (intent_id || note);
+    //    streamed as two chunks so no tagged buffer is allocated.
+    try verifySigned(parser.channel.DOMAIN_REFUSAL, refusal.tbs, refusal.sig, env.sender);
+
+    // 3. Approver certificate valid NOW and carries the approver role (BE-ID-02,
+    //    BE-ID-04). The cert binds the identity that signed, so its sig_pubkey
+    //    must equal env.sender. Same three sub-checks as the Grant routine.
+    binding.validateCert(ctx.approver_cert, ctx.trusted_ca_keys, ctx.now_ms) catch return error.BadApproverCert;
+    if ((ctx.approver_cert.role_bits & binding.ROLE_APPROVER) == 0) return error.BadApproverCert;
+    if (!std.mem.eql(u8, ctx.approver_cert.sig_pubkey, env.sender)) return error.BadApproverCert;
+
+    // BE-GRANT-09 state transition: a verified Refusal whose intent_id names a
+    // PENDING intent moves it to REJECTED and releases the lock; a Refusal
+    // matching no pending intent is dropped, not buffered. The transition runs
+    // inside this frame, so REJECTED is terminal here as in the table
+    // (BE-GRANT-10): no value representing the refusal survives to be replayed.
+    if (ctx.intent_table.applyRefusal(refusal) == .rejected) {
+        on_rejected(refusal.intent_id);
+    }
 }
 
 // ---------------------------------------------------------------------------

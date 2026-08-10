@@ -52,6 +52,8 @@ pub const Branch = enum {
     effect_accepted, // parseEffect: returned a valid Effect
     claim_trailing, // parseClaim: bytes after the single claim body
     claim_accepted, // parseClaim: returned a valid Claim
+    refusal_trailing, // parseRefusal: bytes after the single refusal
+    refusal_accepted, // parseRefusal: returned a valid Refusal
     // Transport parsers (SPEC 4.1a). Malformed covers the two structural
     // violations SPEC 2.2 / 4.1a make a parse failure: a wrong type byte and a
     // non-zero reserved field. Each fixed message has its own trailing check;
@@ -147,9 +149,9 @@ pub inline fn reject(comptime tag: Branch) parser.ParseError {
     return switch (tag) {
         .cursor_truncated, .data_payload_short => error.Truncated,
         .env_parent_oversize, .env_body_oversize, .field16_oversize, .field32_oversize, .data_payload_oversize, .cert_group_oversize, .cert_ca_count_oversize, .genesis_ca_count_oversize => error.Oversize,
-        .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing, .hs_init_trailing, .hs_resp_trailing, .cookie_trailing, .lookup_req_trailing, .lookup_resp_trailing, .cert_trailing, .relay_route_trailing, .relay_reg_trailing, .bind_trailing, .genesis_trailing, .control_trailing => error.TrailingBytes,
+        .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing, .hs_init_trailing, .hs_resp_trailing, .cookie_trailing, .lookup_req_trailing, .lookup_resp_trailing, .cert_trailing, .relay_route_trailing, .relay_reg_trailing, .bind_trailing, .genesis_trailing, .control_trailing, .refusal_trailing => error.TrailingBytes,
         .hs_init_type, .hs_init_reserved, .hs_resp_type, .hs_resp_reserved, .cookie_type, .cookie_reserved, .data_type, .data_reserved, .frag_total_zero, .frag_index_range, .cert_ca_count_zero, .cert_ca_order, .relay_route_type, .relay_route_reserved, .relay_reg_type, .relay_reg_reserved, .bind_cert_len_zero, .genesis_ca_count_zero => error.Malformed,
-        .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted, .hs_init_accepted, .hs_resp_accepted, .cookie_accepted, .data_accepted, .frag_accepted, .lookup_req_accepted, .lookup_resp_accepted, .cert_accepted, .relay_route_accepted, .relay_reg_accepted, .bind_accepted, .genesis_accepted, .control_accepted => @compileError("accepted exit points do not reject; use accept()"),
+        .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted, .hs_init_accepted, .hs_resp_accepted, .cookie_accepted, .data_accepted, .frag_accepted, .lookup_req_accepted, .lookup_resp_accepted, .cert_accepted, .relay_route_accepted, .relay_reg_accepted, .bind_accepted, .genesis_accepted, .control_accepted, .refusal_accepted => @compileError("accepted exit points do not reject; use accept()"),
     };
 }
 
