@@ -1,15 +1,28 @@
 #!/usr/bin/env python3
 # mutation-test.py
 #
-# Mutation harness v12 for the Grant verifier, the attestation layer, the
+# Mutation harness v15 for the Grant verifier, the attestation layer, the
 # transport DoS gate, the session phase, the channel layer, the mesh identity
-# boundary, the relay surface, the ledger/history surface AND the
-# pending-intent/refusal surface (LANGUAGE.md section 4 metric; SPEC.md
+# boundary, the relay surface, the ledger/history surface, the
+# pending-intent/refusal surface, the resolver/render surface AND the
+# backfill/sync surface (LANGUAGE.md section 4 metric; SPEC.md
 # section 11.2).
 # cargo-mutants does not exist for Zig, so this applies one mutant at a time to
 # a source file, rebuilds, runs the full test suite, and records whether the
 # suite kills it.
 #
+# v15 (sync slice): the sync domain, and the version ledger catches up: v13
+# added the resolver domain (BE-RES-01..06, src/resolver.zig) and v14 the
+# render domain (BE-GRANT-07/07a, src/render.zig) without header notes; this
+# note records all three rounds. BE-SYNC-01..05 shipped as the parser/sync.zig
+# surface sub-unit plus the non-surface src/sync.zig engine (D-054); the
+# denominator is detected from SPEC §6.4 markers like every other domain.
+# Twelve mutants: the session and membership preconditions removed; the
+# 64-envelope ceiling off by one; the 1 MiB cap doubled; the truncated flag
+# pinned to zero; the have-set bound flipped at the ceiling; the depth and
+# total walk comparisons flipped; retry-on-exhaustion reintroduced; the rate
+# budget widened at the count and at the window edge; verify-before-adopt
+# skipped.
 # v12 (pending-intent slice): two domains. src/intent.zig shipped the
 # pending-intent state machine (D-052, SPEC section 8.2) and verify.zig
 # shipped verifyRefusalThen (SPEC 8.5), so both get their own denominator
@@ -161,6 +174,8 @@ TARGETS = {
     "intent.zig": SRC / "intent.zig",
     "resolver.zig": SRC / "resolver.zig",
     "render.zig": SRC / "render.zig",
+    "sync.zig": SRC / "sync.zig",
+    "parser/sync.zig": SRC / "parser" / "sync.zig",
 }
 ORIGINALS = {name: path.read_text() for name, path in TARGETS.items()}
 
@@ -600,6 +615,41 @@ def render_properties_from_spec():
     text = SPEC.read_text()
     props = set()
     for key, _what, pattern in RENDER_MARKERS:
+        if re.search(pattern, text):
+            props.add(key)
+    return props
+
+
+# --- sync denominator, derived from SPEC.md section 6.4 --------------------
+#
+# Backfill surface: the parser/sync.zig wire parsers (third post-auth
+# sub-unit, D-054) and the non-surface src/sync.zig engine. Admission,
+# response bounds, walk budget, rate budget, verify-before-adopt. Five
+# markers, five properties.
+
+SYNC_MARKERS = [
+    ("sync-admission",
+     "BE-SYNC-01 authenticated peers only (session, member, not revoked)",
+     r"\*\*BE-SYNC-01 \(authenticated peers only\)\*\*"),
+    ("sync-bounds",
+     "BE-SYNC-02 hard response bounds (min(max_envelopes,64), 1 MiB, truncated)",
+     r"\*\*BE-SYNC-02 \(hard response bounds\)\*\*"),
+    ("sync-walk",
+     "BE-SYNC-03 walk budget (depth 128, total 4096, stop and surface)",
+     r"\*\*BE-SYNC-03 \(walk budget\)\*\*"),
+    ("sync-rate",
+     "BE-SYNC-04 rate budget (serve 8, issue 4, per peer per 10 s)",
+     r"\*\*BE-SYNC-04 \(rate\)\*\*"),
+    ("sync-adopt",
+     "BE-SYNC-05 verify before adopt",
+     r"\*\*BE-SYNC-05 \(verify before adopt\)\*\*"),
+]
+
+
+def sync_properties_from_spec():
+    text = SPEC.read_text()
+    props = set()
+    for key, _what, pattern in SYNC_MARKERS:
         if re.search(pattern, text):
             props.add(key)
     return props
@@ -1325,6 +1375,88 @@ MUTANTS = [
      "primary content made optional (rationale can stand alone)",
      "    resource_id: []const u8, // canonical form, resolved by the executor (section 8.4)",
      "    resource_id: ?[]const u8 = null, // MUTANT: primary content optional"),
+
+    # --- sync domain: backfill surface (SPEC 6.4, BE-SYNC-01..05, D-054) ---
+    # sync-admission (BE-SYNC-01): SyncRequest is refused outside an
+    # established session. Dropping the precondition admits unauthenticated
+    # peers; the literal test's NoSession witness dies.
+    ("sync", "sync.zig", "CHECK-ABSENCE", "sync-admission",
+     "session precondition removed (SyncRequest admitted with no session)",
+     "    if (!session_established) return SyncError.NoSession;",
+     "    _ = session_established; // MUTANT: session precondition removed"),
+    # sync-admission (BE-SYNC-01): the peer must carry the channel's member
+    # group and must not be revoked. Removing requireMember admits outsiders
+    # and revoked peers alike; both refusal witnesses die.
+    ("sync", "sync.zig", "CHECK-ABSENCE", "sync-admission",
+     "membership precondition removed (outsiders and revoked peers admitted)",
+     "    verify.requireMember(sender_cert, genesis, ctx) catch |err| switch (err) {\n        error.SubjectRevoked => return SyncError.Revoked,\n        error.NotMember => return SyncError.NotMember,\n        // requireMember's error set is ChannelError but its body returns only\n        // these two; the remaining arms are unreachable by construction.\n        else => return SyncError.NotMember,\n    };",
+     "    _ = sender_cert;\n    _ = genesis;\n    _ = ctx; // MUTANT: membership precondition removed"),
+    # sync-bounds (BE-SYNC-02): the responder ceiling is 64 envelopes.
+    # Off-by-one serves a 65th; the count-cap witness dies.
+    ("sync", "sync.zig", "WRONG-CONSTANT", "sync-bounds",
+     "responder ceiling off by one (64 -> 65)",
+     "pub const MAX_RESPONSE_ENVELOPES: usize = 64; // BE-SYNC-02 responder ceiling",
+     "pub const MAX_RESPONSE_ENVELOPES: usize = 65; // MUTANT: ceiling off by one"),
+    # sync-bounds (BE-SYNC-02): a response is capped at 1 MiB. Doubling the
+    # cap admits the 16th 65536-byte envelope; the byte-cap witness dies.
+    ("sync", "sync.zig", "WRONG-CONSTANT", "sync-bounds",
+     "byte cap doubled (1 MiB -> 2 MiB)",
+     "pub const MAX_RESPONSE_BYTES: usize = 1 << 20; // BE-SYNC-02: 1 MiB per response",
+     "pub const MAX_RESPONSE_BYTES: usize = 1 << 21; // MUTANT: byte cap doubled"),
+    # sync-bounds (BE-SYNC-02): the truncated flag is serialized from the
+    # builder's verdict. Pinning it to zero hides every continuation; the
+    # wire-byte witnesses die.
+    ("sync", "sync.zig", "WRONG-VALUE", "sync-bounds",
+     "truncated flag pinned to zero on the wire",
+     "    out[pos] = @intFromBool(truncated);",
+     "    out[pos] = 0; // MUTANT: truncated pinned to zero"),
+    # sync-bounds (BE-SYNC-02, §6.4 grammar): have_hashes carries at most 64
+    # entries; the ceiling itself parses. Flipping > to >= refuses a full
+    # have set; the ceiling witness dies.
+    ("sync", "parser/sync.zig", "WRONG-LOGIC", "sync-bounds",
+     "have-set bound flipped at the ceiling (64 refused)",
+     "    if (have_count > MAX_HAVE) return coverage.reject(.sync_req_have_oversize);",
+     "    if (have_count >= MAX_HAVE) return coverage.reject(.sync_req_have_oversize); // MUTANT: ceiling refused"),
+    # sync-walk (BE-SYNC-03): the queue depth is capped at 128. Flipping the
+    # comparison admits a 129th pending hash; the depth witness dies.
+    ("sync", "sync.zig", "WRONG-LOGIC", "sync-walk",
+     "depth comparison flipped (129 pending admitted)",
+     "        if (self.depth >= WALK_MAX_DEPTH) {",
+     "        if (self.depth > WALK_MAX_DEPTH) { // MUTANT: depth bound off by one"),
+    # sync-walk (BE-SYNC-03): the walk examines at most 4096 envelopes.
+    # Flipping the comparison admits a 4097th; the total witness dies.
+    ("sync", "sync.zig", "WRONG-LOGIC", "sync-walk",
+     "total comparison flipped (4097 examinations admitted)",
+     "        if (self.examined >= WALK_MAX_TOTAL) {",
+     "        if (self.examined > WALK_MAX_TOTAL) { // MUTANT: total bound off by one"),
+    # sync-walk (BE-SYNC-03): on exhaustion the walk stops; nothing drains,
+    # nothing retries. Removing the pop guard lets the exhausted queue keep
+    # handing out hashes; the stop witness dies.
+    ("sync", "sync.zig", "CHECK-ABSENCE", "sync-walk",
+     "retry-on-exhaustion reintroduced (exhausted queue keeps draining)",
+     "        if (self.exhausted or self.depth == 0) return null;",
+     "        if (self.depth == 0) return null; // MUTANT: exhausted walk keeps draining"),
+    # sync-rate (BE-SYNC-04): a peer's budget admits exactly `budget` events
+    # per window. Widening the comparison admits one extra; the 9th-serve
+    # witness dies.
+    ("sync", "sync.zig", "WRONG-LOGIC", "sync-rate",
+     "rate budget admits one extra (8 -> 9 serves)",
+     "        if (inside >= self.budget) return false;",
+     "        if (inside > self.budget) return false; // MUTANT: budget admits one extra"),
+    # sync-rate (BE-SYNC-04): the sliding window is half-open; an event
+    # exactly window_ms old has expired. Making the edge inclusive freezes
+    # the window; the slide witness dies.
+    ("sync", "sync.zig", "WRONG-LOGIC", "sync-rate",
+     "window edge made inclusive (the window never slides)",
+     "            if (s != 0 and now_ms >= s and now_ms - s < window_ms) inside += 1;",
+     "            if (s != 0 and now_ms >= s and now_ms - s <= window_ms) inside += 1; // MUTANT: window edge inclusive"),
+    # sync-adopt (BE-SYNC-05): a backfilled envelope passes the live
+    # signature check before ledger entry. Skipping verifyEnvelope admits any
+    # signature; the tampered-sig witness dies.
+    ("sync", "sync.zig", "CHECK-ABSENCE", "sync-adopt",
+     "verify-before-adopt skipped (any signature admitted)",
+     "    verify.verifyEnvelope(env) catch return SyncError.BadEnvelope;",
+     "    _ = env; // MUTANT: signature verification skipped"),
 ]
 
 
@@ -1379,6 +1511,9 @@ def main():
     render_props = render_properties_from_spec()
     if not render_props:
         sys.exit("FATAL: no render properties detected in SPEC section 8.3")
+    sync_props = sync_properties_from_spec()
+    if not sync_props:
+        sys.exit("FATAL: no sync properties detected in SPEC section 6.4")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -1395,6 +1530,7 @@ def main():
     print(f"  refusal properties (§8.5):       {sorted(refusal_props)} ({len(refusal_props)})")
     print(f"  resolver properties (§8.4):      {sorted(resolver_props)} ({len(resolver_props)})")
     print(f"  render properties (§8.3):        {sorted(render_props)} ({len(render_props)})")
+    print(f"  sync properties (§6.4):          {sorted(sync_props)} ({len(sync_props)})")
     print()
 
     # 2. scope check: no mutant may attack a key its domain's SPEC does not list
@@ -1447,6 +1583,10 @@ def main():
             if key not in render_props:
                 sys.exit(f"FATAL: render mutant '{name}' attacks '{key}', which "
                          "SPEC section 8.3 does not declare (scope lie)")
+        elif domain == "sync":
+            if key not in sync_props:
+                sys.exit(f"FATAL: sync mutant '{name}' attacks '{key}', which "
+                         "SPEC section 6.4 does not declare (scope lie)")
         else:
             sys.exit(f"FATAL: mutant '{name}' in unknown domain '{domain}'")
 
@@ -1571,6 +1711,11 @@ def main():
         w_cov = {r["key"] for r in w_run if r["killed"]}
         print(f"render:   {len(w_cov)}/{len(render_props)} §8.3 "
               f"properties covered by killed mutants")
+    x_run, x_surv, x_uncov, _ = gate_domain("sync", sync_props)
+    if in_scope("sync"):
+        x_cov = {r["key"] for r in x_run if r["killed"]}
+        print(f"sync:     {len(x_cov)}/{len(sync_props)} §6.4 "
+              f"properties covered by killed mutants")
     total_run = [r for r in results if not r["skipped"]]
     total_killed = sum(1 for r in total_run if r["killed"])
     print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
@@ -1600,6 +1745,8 @@ def main():
         print(f"  resolver SURVIVORS: {v_surv}")
     if w_surv:
         print(f"  render SURVIVORS: {w_surv}")
+    if x_surv:
+        print(f"  sync SURVIVORS: {x_surv}")
     if g_uncov:
         print(f"  UNCOVERED grant checks: {g_uncov}")
     if e_uncov:
@@ -1624,17 +1771,20 @@ def main():
         print(f"  UNCOVERED resolver properties: {v_uncov}")
     if w_uncov:
         print(f"  UNCOVERED render properties: {w_uncov}")
+    if x_uncov:
+        print(f"  UNCOVERED sync properties: {x_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
     ok = ((not g_surv) and (not e_surv) and (not t_surv) and (not s_surv)
           and (not c_surv) and (not m_surv) and (not r_surv) and (not l_surv)
           and (not i_surv) and (not f_surv) and (not v_surv) and (not w_surv)
+          and (not x_surv)
           and (not g_uncov) and (not e_uncov) and (not t_uncov)
           and (not s_uncov) and (not c_uncov) and (not m_uncov)
           and (not r_uncov) and (not l_uncov)
           and (not i_uncov) and (not f_uncov) and (not v_uncov)
-          and (not w_uncov) and g_cb)
+          and (not w_uncov) and (not x_uncov) and g_cb)
     return 0 if ok else 1
 
 

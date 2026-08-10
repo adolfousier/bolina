@@ -47,6 +47,19 @@ test "sync request round trip" {
     @memcpy(long[0..wire.len], &wire);
     long[wire.len] = 0;
     try std.testing.expectError(error.TrailingBytes, sync_wire.parseSyncRequest(&long));
+    // have_count at the declared ceiling parses; one past it refuses.
+    var max_wire: [1 + 32 + 1 + 64 * 32 + 2]u8 = undefined;
+    @memset(&max_wire, 0);
+    max_wire[0] = 1;
+    max_wire[33] = 64;
+    writeU16(max_wire[max_wire.len - 2 ..], 3);
+    const req64 = try sync_wire.parseSyncRequest(&max_wire);
+    try std.testing.expectEqual(@as(u8, 64), req64.have_count);
+    var over_wire: [1 + 32 + 1 + 65 * 32 + 2]u8 = undefined;
+    @memset(&over_wire, 0);
+    over_wire[0] = 1;
+    over_wire[33] = 65;
+    try std.testing.expectError(error.Oversize, sync_wire.parseSyncRequest(&over_wire));
 }
 
 test "sync response round trip" {
@@ -156,6 +169,10 @@ test "BE_SYNC_02 response binds at min(max_envelopes,64), at 1 MiB, truncated ex
     const r5 = try sync.buildResponse(&out, syncReq(&channel_id, &[_]u8{}, 0, 64), items[0..5]);
     try std.testing.expectEqual(@as(usize, 5), r5.count);
     try std.testing.expect(!r5.truncated);
+    // The serialized flag byte pins BE-SYNC-02's truncated clause on the wire,
+    // not just in the result struct: 1 when more remains, 0 when exhausted.
+    try std.testing.expectEqual(@as(u8, 1), out[r64.bytes_written - 1]);
+    try std.testing.expectEqual(@as(u8, 0), out[r5.bytes_written - 1]);
 
     // Have-set skip: the hash the requester already holds is not served.
     const rskip = try sync.buildResponse(&out, syncReq(&channel_id, &items[2].hash, 1, 64), items[0..5]);
