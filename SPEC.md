@@ -26,6 +26,11 @@ fan-out the whole envelope travels inside a Noise session.
 
 **Changes from v0.3.0-draft:** BE-HIST-02 anchoring vehicle corrected. The v0.3.0 text anchored a signer's certificate "by a `Control` envelope carrying it", which contradicts BE-CTRL-01's closed `action_type` enum {1 Genesis, 2 Revoke} — no cert-carrying action exists and no extension path may. The anchoring obligation is unchanged; the vehicle is now self-anchoring: the first envelope accepted from a signer in a channel is that signer's anchoring record, with the certificate verified under BE-ID-01 through BE-ID-04 during that envelope's own admission (§9.2, D-046). No wire byte changes. This draft also places `src/ledger.zig` and `src/historical.zig` in the BE-SURF-03 non-surface list, making the D-045 placement normative (D-047). This draft also subdivides the post-authentication unit into a wire-parser sub-unit and a session-state sub-unit, caps not exceeding 1500; the D-052 compaction commit ratcheted the session-state sub-unit to its fresh measured floor of 748 lines (wire-parser unchanged at 723, its measured floor 621), and places `src/intent.zig`, `src/resolver.zig`, `src/render.zig` in the non-surface list ahead of their creation (D-052).
 
+**Changes from v0.3.1-draft:** BE-SIG-01 gains domain tag `0x08` for `ResourceSet`, and §8.4
+declares the `ResourceSet` encoding and publication signature (D-053). The executor obligation
+BE-RES-05 names requires every signature to be domain-tagged (BE-SIG-01) and the tag table was
+closed; this edit supplies the row the obligation owed. No envelope wire bytes change.
+
 ---
 
 ## 0. What Bolina is
@@ -290,6 +295,7 @@ signature whose tag does not match the structure being verified:
 | `0x05` | Handshake binding over Noise `h` (§4.1) |
 | `0x06` | `Refusal` (§8.5) |
 | `0x07` | `RelayRegistration` (§5.2a) |
+| `0x08` | `ResourceSet` (§8.4) |
 
 *Executor keys sign both `Span` and envelopes; approver keys sign both `Grant` and envelopes; every
 key signs the handshake binding. Current field layouts happen to make a cross-type collision
@@ -1508,6 +1514,14 @@ signed channel state. Approval volume is a direct function of resource granulari
 volume is what produces the approver fatigue named as the dominant residual risk
 (`THREAT-MODEL.md` §4.1). Granularity is therefore an explicit, reviewable operator decision, not a
 by-product of how agents happen to phrase requests.
+
+`ResourceSet` encoding (D-053): the set is serialized in declaration order; each entry is a `u16`
+canonical length plus the canonical `resource_id` bytes (which MUST satisfy the grammar above),
+then a `u16` alias count, then for each alias a `u16` length plus alias bytes (an alias is an
+arbitrary byte string up to the maximum `resource_id` length). The publication signature is
+Ed25519 by the executor's `sig_key` over the domain tag `0x08` followed by those bytes
+(BE-SIG-01). Two proposed identifiers that reach the same canonical entry, by exact match or by
+declared alias, are the same resource for every purpose (BE-RES-03).
 
 **BE-RES-06 (the sig_pubkey fingerprint is BLAKE2s-256)**: `executor_fp` is a digest of the executor's signing public key, never the raw bytes: `executor_fp = BLAKE2s-256(sig_pubkey)[0..8]`, rendered as 16 lowercase hex chars. A fingerprint is a hash; raw key bytes are not a fingerprint and would leak key structure into the namespace. Two implementations that derive `executor_fp` differently produce disjoint namespaces and silently defeat BE-RES-03 alias collapsing and BE-RES-04 one-resource-one-executor. The fingerprint affects canonicalization only: `resource_id` is opaque on the wire (a `u16` length plus bytes), so this rule constrains the executor-side canonical resolver, not the wire encoding.
 
