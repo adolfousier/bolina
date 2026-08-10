@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.3.1-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-08
+**Version:** 0.3.3-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-10
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -30,6 +30,8 @@ fan-out the whole envelope travels inside a Noise session.
 declares the `ResourceSet` encoding and publication signature (D-053). The executor obligation
 BE-RES-05 names requires every signature to be domain-tagged (BE-SIG-01) and the tag table was
 closed; this edit supplies the row the obligation owed. No envelope wire bytes change.
+
+**Changes from v0.3.2-draft:** BE-SURF-03 subdivides the post-authentication unit into three sub-units: the wire-parser cap is ratcheted down to its measured floor of 652, session-state stays at 748, and a sync sub-unit (`src/parser/sync.zig`, cap 100 lines) is declared for the §6.4 wire formats; the cap sum stays 1500 and no unit cap is raised (D-054). `src/sync.zig` joins the non-surface list ahead of its code (D-054). §6.4 declares the BE-SYNC-04 rate budget. No envelope wire bytes change.
 
 ---
 
@@ -251,21 +253,24 @@ rather than be noted. *"Small enough for one person to audit" is either a number
 one number per audit unit, and the unit is what an attacker can reach.* (D-030.) The pre-authentication
 unit is subdivided into a handshake sub-unit (cap 990 lines) and a relay sub-unit (cap 510 lines);
 both caps MUST be enforced independently and the sum MUST NOT exceed 1500 lines. The
-post-authentication unit is subdivided into a wire-parser sub-unit (cap 723 lines) and a
-session-state sub-unit (cap 748 lines); both caps MUST be enforced independently and the sum MUST
-NOT exceed 1500 lines. (D-052.)
+post-authentication unit is subdivided into a wire-parser sub-unit (cap 652 lines), a
+session-state sub-unit (cap 748 lines), and a sync sub-unit (cap 100 lines); all three caps MUST
+be enforced independently and the sum MUST NOT exceed 1500 lines. (D-052, split and ratcheted by
+D-054.)
 
 - **Pre-authentication unit:** subdivided into two sub-units:
   - **Handshake sub-unit:** `src/parser.zig`, `src/mac.zig`, `src/noise.zig` — cap 990 lines.
   - **Relay sub-unit:** `src/relay.zig` — cap 510 lines.
 - **Post-authentication unit:** subdivided into two sub-units, together everything an auditor must
   read to verify what a hostile authenticated peer's bytes can reach:
-  - **Wire-parser sub-unit:** `src/parser/channel.zig`, `src/parser/session.zig` — cap 723 lines.
+  - **Wire-parser sub-unit:** `src/parser/channel.zig`, `src/parser/session.zig` — cap 652 lines.
   - **Session-state sub-unit:** `src/session.zig`, `src/binding.zig`, `src/replay.zig`, `src/reassembly.zig` — cap 748 lines.
+  - **Sync sub-unit:** `src/parser/sync.zig` — cap 100 lines.
 - **Non-surface:** `src/dag.zig`, `src/evidence.zig`, `src/verify.zig`, `src/ledger.zig`,
-  `src/historical.zig`, `src/intent.zig`, `src/resolver.zig`, `src/render.zig` — state over parsed
-  values (D-018), not reached by attacker bytes directly. The last three are placed ahead of their
-  code (D-052).
+  `src/historical.zig`, `src/intent.zig`, `src/resolver.zig`, `src/render.zig`, `src/sync.zig` —
+  state over parsed values (D-018), not reached by attacker bytes directly. intent.zig,
+  resolver.zig and render.zig are placed ahead of their code (D-052), sync.zig ahead of its code
+  by D-054.
 - **Harness and entry:** `src/main.zig`, `src/tests.zig`, `src/fuzz.zig`, `src/coverage.zig`,
   `src/evidence_test_helpers.zig`, `src/cert_test_helpers.zig`, and every `*_test.zig`.
 
@@ -941,7 +946,10 @@ is a denial-of-service against the node performing it.*
 
 **BE-SYNC-04 (rate)** — A node MUST rate-limit both requests it serves and requests it issues, per
 peer, with a declared budget. A member is authenticated, which prevents spoofing; it does not
-prevent a compromised member from asking expensive questions forever.
+prevent a compromised member from asking expensive questions forever. The declared budget: a
+responder serves at most 8 SyncRequests per peer in any 10-second window; a requester issues at
+most 4 SyncRequests per peer in any 10-second window. Under BE-SYNC-02 ceilings the worst-case
+served cost per peer per window is 512 envelopes and 8 MiB. (D-054.)
 
 **BE-SYNC-05 (verify before adopt)** — Every envelope received by backfill MUST pass the same
 verification as one received live — signature (BE-ENV-02), sender role (BE-ENV-03), membership
