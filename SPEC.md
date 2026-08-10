@@ -261,7 +261,7 @@ D-054.)
 - **Pre-authentication unit:** subdivided into two sub-units:
   - **Handshake sub-unit:** `src/parser.zig`, `src/mac.zig`, `src/noise.zig` — cap 990 lines.
   - **Relay sub-unit:** `src/relay.zig` — cap 510 lines.
-- **Post-authentication unit:** subdivided into two sub-units, together everything an auditor must
+- **Post-authentication unit:** subdivided into three sub-units, together everything an auditor must
   read to verify what a hostile authenticated peer's bytes can reach:
   - **Wire-parser sub-unit:** `src/parser/channel.zig`, `src/parser/session.zig` — cap 652 lines.
   - **Session-state sub-unit:** `src/session.zig`, `src/binding.zig`, `src/replay.zig`, `src/reassembly.zig` — cap 748 lines.

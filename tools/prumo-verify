@@ -29,13 +29,15 @@
 #        byte-layout walker (tools/verify-layout.py). PENDING only when python3
 #        with cryptography is unavailable.
 #   M5/M11: BE-SURF-03 splits the surface into two capped units at the
-#        authentication line. Both gates parse the four normative file lists
-#        and the cap from SPEC.md BE-SURF-03 at run time (denominator law),
-#        and sum the listed files from the source tree; absent listed files
-#        count as 0 lines. M5 gates the pre-authentication unit and also
+#        authentication line. Both gates parse the four normative file lists,
+#        each unit's cap, and the sub-unit caps from SPEC.md BE-SURF-03 at
+#        run time (denominator law), and sum the listed files from the source
+#        tree; absent listed files count as 0 lines. M5 gates the
+#        pre-authentication unit (handshake + relay sub-units) and also
 #        enforces the exhaustiveness clause (every non-test src file in
 #        exactly one list, no file in two); M11 gates the post-authentication
-#        unit and fails while placement is broken.
+#        unit (wire-parser + session-state + sync sub-units per D-054) and
+#        fails while placement is broken.
 #   M6: Offline build: the gate is "build succeeds with the network
 #        disabled". Isolation is tried in order: unshare -rn, then sudo
 #        ip netns (runner-friendly, build runs as the invoking user).
@@ -202,23 +204,36 @@ HANDSHAKE_CAP="$(surf_sub_bullet_cap '**Handshake sub-unit:**')"
 RELAY_CAP="$(surf_sub_bullet_cap '**Relay sub-unit:**')"
 WIREPARSER_FILES="$(surf_sub_bullet_files '**Wire-parser sub-unit:**')"
 SESSIONSTATE_FILES="$(surf_sub_bullet_files '**Session-state sub-unit:**')"
+SYNC_FILES="$(surf_sub_bullet_files '**Sync sub-unit:**')"
 WIREPARSER_CAP="$(surf_sub_bullet_cap '**Wire-parser sub-unit:**')"
 SESSIONSTATE_CAP="$(surf_sub_bullet_cap '**Session-state sub-unit:**')"
+SYNC_CAP="$(surf_sub_bullet_cap '**Sync sub-unit:**')"
 POST_AUTH_FILES="$(surf_bullet_files '**Post-authentication unit:**')"
 NON_SURFACE_FILES="$(surf_bullet_files '**Non-surface:**')"
 HARNESS_FILES="$(surf_bullet_files '**Harness and entry:**')"
 HARNESS_TEST_GLOB=0
 printf '%s\n' "$SURF_JOINED" | grep -F '**Harness and entry:**' | grep -q '\*_test\.zig' && HARNESS_TEST_GLOB=1
-SURF_CAP="$(printf '%s\n' "$SURF_SECTION" | tr '\n' ' ' | grep -o 'MUST NOT exceed \*\*[0-9][0-9]* lines\*\*' | head -1 | grep -o '[0-9][0-9]*')"
+SURF_FLAT="$(printf '%s\n' "$SURF_SECTION" | tr '\n' ' ')"
+UNIT_CAP="$(printf '%s\n' "$SURF_FLAT" | grep -o 'MUST NOT exceed \*\*[0-9][0-9]* lines\*\*' | head -1 | grep -o '[0-9][0-9]*')"
+PRE_AUTH_CAP="$(printf '%s\n' "$SURF_FLAT" | grep -o 'the sum MUST NOT exceed [0-9][0-9]* lines' | sed -n '1p' | grep -o '[0-9][0-9]*')"
+POST_AUTH_CAP="$(printf '%s\n' "$SURF_FLAT" | grep -o 'the sum MUST NOT exceed [0-9][0-9]* lines' | sed -n '2p' | grep -o '[0-9][0-9]*')"
 
 SURF_PROBLEMS=""
-[ -z "$SURF_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS line cap not parsed from SPEC.md BE-SURF-03;"
+[ -z "$UNIT_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS unit line cap not parsed from SPEC.md BE-SURF-03;"
+[ -z "$PRE_AUTH_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS pre-authentication cap-sum sentence not parsed from SPEC.md BE-SURF-03;"
+[ -z "$POST_AUTH_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS post-authentication cap-sum sentence not parsed from SPEC.md BE-SURF-03;"
+[ -n "$PRE_AUTH_CAP" ] && [ -n "$UNIT_CAP" ] && [ "$PRE_AUTH_CAP" -gt "$UNIT_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS pre-authentication cap ($PRE_AUTH_CAP) exceeds unit cap ($UNIT_CAP);"
+[ -n "$POST_AUTH_CAP" ] && [ -n "$UNIT_CAP" ] && [ "$POST_AUTH_CAP" -gt "$UNIT_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS post-authentication cap ($POST_AUTH_CAP) exceeds unit cap ($UNIT_CAP);"
 [ -z "$PRE_AUTH_FILES" ] && SURF_PROBLEMS="$SURF_PROBLEMS pre-authentication list not parsed from SPEC.md BE-SURF-03;"
 [ -z "$POST_AUTH_FILES" ] && SURF_PROBLEMS="$SURF_PROBLEMS post-authentication list not parsed from SPEC.md BE-SURF-03;"
 [ "$HARNESS_TEST_GLOB" -eq 0 ] && SURF_PROBLEMS="$SURF_PROBLEMS harness *_test.zig glob not found in SPEC.md BE-SURF-03;"
 [ -z "$HANDSHAKE_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS handshake sub-unit cap not parsed from SPEC.md BE-SURF-03;"
 [ -z "$RELAY_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS relay sub-unit cap not parsed from SPEC.md BE-SURF-03;"
-[ -n "$HANDSHAKE_CAP" ] && [ -n "$RELAY_CAP" ] && [ "$((HANDSHAKE_CAP + RELAY_CAP))" -gt "$SURF_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS handshake cap ($HANDSHAKE_CAP) + relay cap ($RELAY_CAP) exceeds unit cap ($SURF_CAP);"
+[ -z "$WIREPARSER_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS wire-parser sub-unit cap not parsed from SPEC.md BE-SURF-03;"
+[ -z "$SESSIONSTATE_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS session-state sub-unit cap not parsed from SPEC.md BE-SURF-03;"
+[ -z "$SYNC_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS sync sub-unit cap not parsed from SPEC.md BE-SURF-03;"
+[ -n "$HANDSHAKE_CAP" ] && [ -n "$RELAY_CAP" ] && [ -n "$PRE_AUTH_CAP" ] && [ "$((HANDSHAKE_CAP + RELAY_CAP))" -gt "$PRE_AUTH_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS handshake cap ($HANDSHAKE_CAP) + relay cap ($RELAY_CAP) exceeds pre-authentication cap ($PRE_AUTH_CAP);"
+[ -n "$WIREPARSER_CAP" ] && [ -n "$SESSIONSTATE_CAP" ] && [ -n "$SYNC_CAP" ] && [ -n "$POST_AUTH_CAP" ] && [ "$((WIREPARSER_CAP + SESSIONSTATE_CAP + SYNC_CAP))" -gt "$POST_AUTH_CAP" ] && SURF_PROBLEMS="$SURF_PROBLEMS wire-parser cap ($WIREPARSER_CAP) + session-state cap ($SESSIONSTATE_CAP) + sync cap ($SYNC_CAP) exceeds post-authentication cap ($POST_AUTH_CAP);"
 SURF_DUPES="$(printf '%s\n%s\n%s\n%s\n' "$PRE_AUTH_FILES" "$POST_AUTH_FILES" "$NON_SURFACE_FILES" "$HARNESS_FILES" | grep -v '^$' | sort | uniq -d)"
 [ -n "$SURF_DUPES" ] && SURF_PROBLEMS="$SURF_PROBLEMS placed in more than one BE-SURF-03 list: $(printf '%s\n' "$SURF_DUPES" | tr '\n' ' ');"
 SURF_PLACED="$(printf '%s\n%s\n%s\n%s\n' "$PRE_AUTH_FILES" "$POST_AUTH_FILES" "$NON_SURFACE_FILES" "$HARNESS_FILES" | grep -v '^$' | sort)"
@@ -253,31 +268,33 @@ RELAY_LINES="$(surf_unit_lines "$RELAY_FILES")"
 POST_AUTH_LINES="$(surf_unit_lines "$POST_AUTH_FILES")"
 WIREPARSER_LINES="$(surf_unit_lines "$WIREPARSER_FILES")"
 SESSIONSTATE_LINES="$(surf_unit_lines "$SESSIONSTATE_FILES")"
+SYNC_LINES="$(surf_unit_lines "$SYNC_FILES")"
 
 if [ -n "$SURF_PROBLEMS" ]; then
     row M5 FAIL "${SURF_PROBLEMS# } (BE-SURF-03)"
     FAILS=$((FAILS + 1))
-elif [ "$HANDSHAKE_LINES" -le "$HANDSHAKE_CAP" ] && [ "$RELAY_LINES" -le "$RELAY_CAP" ] && [ "$PRE_AUTH_LINES" -le "$SURF_CAP" ]; then
-    row M5 PASS "pre-authentication unit $PRE_AUTH_LINES/$SURF_CAP lines (handshake $HANDSHAKE_LINES/$HANDSHAKE_CAP, relay $RELAY_LINES/$RELAY_CAP):$(surf_unit_detail "$PRE_AUTH_FILES") lists and caps parsed from SPEC.md BE-SURF-03"
+elif [ "$HANDSHAKE_LINES" -le "$HANDSHAKE_CAP" ] && [ "$RELAY_LINES" -le "$RELAY_CAP" ] && [ "$PRE_AUTH_LINES" -le "$PRE_AUTH_CAP" ]; then
+    row M5 PASS "pre-authentication unit $PRE_AUTH_LINES/$PRE_AUTH_CAP lines (handshake $HANDSHAKE_LINES/$HANDSHAKE_CAP, relay $RELAY_LINES/$RELAY_CAP):$(surf_unit_detail "$PRE_AUTH_FILES") lists and caps parsed from SPEC.md BE-SURF-03"
 else
     DETAIL=""
     [ "$HANDSHAKE_LINES" -gt "$HANDSHAKE_CAP" ] && DETAIL="$DETAIL handshake sub-unit $HANDSHAKE_LINES/$HANDSHAKE_CAP over budget;"
     [ "$RELAY_LINES" -gt "$RELAY_CAP" ] && DETAIL="$DETAIL relay sub-unit $RELAY_LINES/$RELAY_CAP over budget;"
-    [ "$PRE_AUTH_LINES" -gt "$SURF_CAP" ] && DETAIL="$DETAIL total $PRE_AUTH_LINES/$SURF_CAP over budget;"
+    [ "$PRE_AUTH_LINES" -gt "$PRE_AUTH_CAP" ] && DETAIL="$DETAIL total $PRE_AUTH_LINES/$PRE_AUTH_CAP over budget;"
     row M5 FAIL "pre-authentication unit ${DETAIL# }:$(surf_unit_detail "$PRE_AUTH_FILES") (BE-SURF-03)"
     FAILS=$((FAILS + 1))
 fi
 if [ -n "$SURF_PROBLEMS" ]; then
     M11_VERDICT="FAIL"
     M11_DETAIL="BE-SURF-03 placement broken, post-authentication sum not trustworthy (see M5)"
-elif [ "$POST_AUTH_LINES" -le "$SURF_CAP" ] && [ "$WIREPARSER_LINES" -le "$WIREPARSER_CAP" ] && [ "$SESSIONSTATE_LINES" -le "$SESSIONSTATE_CAP" ]; then
+elif [ "$POST_AUTH_LINES" -le "$POST_AUTH_CAP" ] && [ "$WIREPARSER_LINES" -le "$WIREPARSER_CAP" ] && [ "$SESSIONSTATE_LINES" -le "$SESSIONSTATE_CAP" ] && [ "$SYNC_LINES" -le "$SYNC_CAP" ]; then
     M11_VERDICT="PASS"
-    M11_DETAIL="post-authentication unit $POST_AUTH_LINES/$SURF_CAP lines (wire-parser $WIREPARSER_LINES/$WIREPARSER_CAP, session-state $SESSIONSTATE_LINES/$SESSIONSTATE_CAP):$(surf_unit_detail "$POST_AUTH_FILES") lists and caps parsed from SPEC.md BE-SURF-03"
+    M11_DETAIL="post-authentication unit $POST_AUTH_LINES/$POST_AUTH_CAP lines (wire-parser $WIREPARSER_LINES/$WIREPARSER_CAP, session-state $SESSIONSTATE_LINES/$SESSIONSTATE_CAP, sync $SYNC_LINES/$SYNC_CAP):$(surf_unit_detail "$POST_AUTH_FILES") lists and caps parsed from SPEC.md BE-SURF-03"
 else
     DETAIL=""
     [ "$WIREPARSER_LINES" -gt "$WIREPARSER_CAP" ] && DETAIL="$DETAIL wire-parser sub-unit $WIREPARSER_LINES/$WIREPARSER_CAP over budget;"
     [ "$SESSIONSTATE_LINES" -gt "$SESSIONSTATE_CAP" ] && DETAIL="$DETAIL session-state sub-unit $SESSIONSTATE_LINES/$SESSIONSTATE_CAP over budget;"
-    [ "$POST_AUTH_LINES" -gt "$SURF_CAP" ] && DETAIL="$DETAIL total $POST_AUTH_LINES/$SURF_CAP over budget;"
+    [ "$SYNC_LINES" -gt "$SYNC_CAP" ] && DETAIL="$DETAIL sync sub-unit $SYNC_LINES/$SYNC_CAP over budget;"
+    [ "$POST_AUTH_LINES" -gt "$POST_AUTH_CAP" ] && DETAIL="$DETAIL total $POST_AUTH_LINES/$POST_AUTH_CAP over budget;"
     M11_VERDICT="FAIL"
     M11_DETAIL="post-authentication unit ${DETAIL# }:$(surf_unit_detail "$POST_AUTH_FILES") (BE-SURF-03)"
 fi
