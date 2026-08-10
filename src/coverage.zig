@@ -128,6 +128,17 @@ pub const Branch = enum {
     genesis_accepted, // parseControlGenesis: returned a valid ControlGenesis
     control_trailing, // parseControl: bytes after the control body
     control_accepted, // parseControl: returned a valid Control
+    // Sync parsers (SPEC 6.4, D-054). have_count is the one structural bound
+    // the SyncRequest grammar declares (≤ 64); max_envelopes is parsed not
+    // rejected (BE-SYNC-02's min() is responder policy, applied by the
+    // engine). SyncResponse items are a flat region the adopt path re-walks;
+    // truncated is a declared flag, so any value above 1 is malformed.
+    sync_req_have_oversize, // parseSyncRequest: have_count > 64
+    sync_req_trailing, // parseSyncRequest: bytes after max_envelopes
+    sync_req_accepted, // parseSyncRequest: returned a valid SyncRequest
+    sync_resp_truncated_range, // parseSyncResponse: truncated flag > 1
+    sync_resp_trailing, // parseSyncResponse: bytes after the truncated flag
+    sync_resp_accepted, // parseSyncResponse: returned a valid SyncResponse
 };
 
 pub const COUNT: usize = @typeInfo(Branch).@"enum".fields.len;
@@ -148,10 +159,10 @@ pub inline fn reject(comptime tag: Branch) parser.ParseError {
     hit(tag);
     return switch (tag) {
         .cursor_truncated, .data_payload_short => error.Truncated,
-        .env_parent_oversize, .env_body_oversize, .field16_oversize, .field32_oversize, .data_payload_oversize, .cert_group_oversize, .cert_ca_count_oversize, .genesis_ca_count_oversize => error.Oversize,
-        .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing, .hs_init_trailing, .hs_resp_trailing, .cookie_trailing, .lookup_req_trailing, .lookup_resp_trailing, .cert_trailing, .relay_route_trailing, .relay_reg_trailing, .bind_trailing, .genesis_trailing, .control_trailing, .refusal_trailing => error.TrailingBytes,
-        .hs_init_type, .hs_init_reserved, .hs_resp_type, .hs_resp_reserved, .cookie_type, .cookie_reserved, .data_type, .data_reserved, .frag_total_zero, .frag_index_range, .cert_ca_count_zero, .cert_ca_order, .relay_route_type, .relay_route_reserved, .relay_reg_type, .relay_reg_reserved, .bind_cert_len_zero, .genesis_ca_count_zero => error.Malformed,
-        .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted, .hs_init_accepted, .hs_resp_accepted, .cookie_accepted, .data_accepted, .frag_accepted, .lookup_req_accepted, .lookup_resp_accepted, .cert_accepted, .relay_route_accepted, .relay_reg_accepted, .bind_accepted, .genesis_accepted, .control_accepted, .refusal_accepted => @compileError("accepted exit points do not reject; use accept()"),
+        .env_parent_oversize, .env_body_oversize, .field16_oversize, .field32_oversize, .data_payload_oversize, .cert_group_oversize, .cert_ca_count_oversize, .genesis_ca_count_oversize, .sync_req_have_oversize => error.Oversize,
+        .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing, .hs_init_trailing, .hs_resp_trailing, .cookie_trailing, .lookup_req_trailing, .lookup_resp_trailing, .cert_trailing, .relay_route_trailing, .relay_reg_trailing, .bind_trailing, .genesis_trailing, .control_trailing, .refusal_trailing, .sync_req_trailing, .sync_resp_trailing => error.TrailingBytes,
+        .hs_init_type, .hs_init_reserved, .hs_resp_type, .hs_resp_reserved, .cookie_type, .cookie_reserved, .data_type, .data_reserved, .frag_total_zero, .frag_index_range, .cert_ca_count_zero, .cert_ca_order, .relay_route_type, .relay_route_reserved, .relay_reg_type, .relay_reg_reserved, .bind_cert_len_zero, .genesis_ca_count_zero, .sync_resp_truncated_range => error.Malformed,
+        .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted, .hs_init_accepted, .hs_resp_accepted, .cookie_accepted, .data_accepted, .frag_accepted, .lookup_req_accepted, .lookup_resp_accepted, .cert_accepted, .relay_route_accepted, .relay_reg_accepted, .bind_accepted, .genesis_accepted, .control_accepted, .refusal_accepted, .sync_req_accepted, .sync_resp_accepted => @compileError("accepted exit points do not reject; use accept()"),
     };
 }
 

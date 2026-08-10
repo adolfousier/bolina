@@ -37,10 +37,10 @@
 const std = @import("std");
 const coverage = @import("coverage.zig");
 
-// The two post-authentication submodules, re-exported so one import reaches
-// the whole wire grammar (D-032 decision 2).
+// The three post-authentication submodules, re-exported so one import reaches the whole wire grammar (D-032 decision 2; sync by D-054).
 pub const channel = @import("parser/channel.zig");
 pub const session = @import("parser/session.zig");
+pub const sync = @import("parser/sync.zig");
 
 // ---------------------------------------------------------------------------
 // Transport-wide declared limits (SPEC BE-TR-05). MAX_MESSAGE is the
