@@ -486,3 +486,27 @@ The remaining markers now number nine: BE-GRANT-07/07a (approving render),
 BE-SURF-04 (fuzz oracle), BE-SYNC-01..05 (backfill/sync surface), and the
 deferred MAY BE-MESH-03 (D-051). This supersedes the 15-marker count in the
 pending-intent addendum's closing paragraph.
+
+
+## Render round addendum (branch main, measured 2026-08-10)
+
+The render slice binds BE-GRANT-07 and BE-GRANT-07a (SPEC section 8.3) over
+non-surface `src/render.zig` (56 lines, D-052 placement, zero M11 cost).
+`renderApproval` has no digest parameter, so a wire-sourced digest has no
+path into the view (BE-GRANT-07); the view's action_digest is recomputed
+from exactly the bytes the view carries, via the same primitive the Grant
+binds (verify.actionDigest, check 9), so display and signature agree by
+construction, witnessed against the grant fixture literal pair (action
+"apt-get install -y sqlite3", digest
+61a0be1fa7039021e3a6d10a38e41e21873abd4668419d6b45dfcd56686d60c3).
+Rationale handling (BE-GRANT-07a) is typed: any displayed rationale carries
+the untrusted label as part of its type, sits after the action bytes in
+field order, and the primary content is non-optional, so rationale can
+never be the sole element on screen. M1 ratchet 100 to 102 of 109
+(committed with the tests, 3e7592a). Mutation harness v14 adds the render
+domain: six SPEC-keyed mutants, 2/2 section-8.3 properties covered; full
+suite 106/106 on a clean tree, zero residue after the run
+(mutation_render_full.log). The remaining markers now number 7:
+BE-SURF-04 (fuzz oracle), BE-SYNC-01..05 (backfill surface), and the
+deferred MAY BE-MESH-03 (D-051). This supersedes the 9-marker count in the
+resolver round addendum.
