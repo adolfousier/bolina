@@ -2,7 +2,7 @@
 
 Estimate-first per §13 of POSTAUTH-ESTIMATE.md: the sync surface touches the
 M11 post-authentication line budget, so budget and placement are measured and
-decided BEFORE any code. Status: PROPOSED, awaiting D-055 ruling.
+decided BEFORE any code. Status: PROPOSED, awaiting D-054 ruling.
 
 ## 1. Scope
 
@@ -57,7 +57,7 @@ sub-unit binds its own measured lines against its declared cap; M5
 additionally enforces handshake-cap + relay-cap ≤ unit-cap, and M11 has no
 equivalent cap-sum check today.
 
-Decision owed (D-055): declare the sync sub-unit and rule on cap-sum
+Decision owed (D-054): declare the sync sub-unit and rule on cap-sum
 consistency (see §5.1). If measured overruns 100, the slice STOPS and
 renegotiates via a new decision with justification. Caps never rise quietly.
 
@@ -81,7 +81,7 @@ renegotiates via a new decision with justification. Caps never rise quietly.
    (1400 + parser ≤ 1500).
    (b) Cap-sum precedent: M5 enforces sub-unit caps summing to at most the
    unit cap; applying the same discipline to M11 caps sync at 1500 - 723 -
-   748 = 29 lines, below any realistic parser. D-055 rules between: enforce
+   748 = 29 lines, below any realistic parser. D-054 rules between: enforce
    cap-sum consistency and renegotiate the M11 total cap under D-030 rules
    (proposal: 1500 to 1600, justified by the declared sync surface), or
    declare sync at cap 29 and fail by construction. Recommendation:
@@ -118,14 +118,14 @@ the full suite.
 
 ## 8. Slice order
 
-D-055 ruling → SPEC edits (one D-029 commit) → sync.zig engine + parser +
+D-054 ruling → SPEC edits (one D-029 commit) → sync.zig engine + parser +
 literal tests → ratchet 102→107 with the tests → harness sync domain →
 chunked + full suite → docs sync → push → closeout.
 
 ## 9. Risks
 
 - The §5.1 conflict is the dominant risk: 29 lines is likely unachievable
-  for two bounded wire parsers; D-055 must choose between an engineering
+  for two bounded wire parsers; D-054 must choose between an engineering
   squeeze and a justified total-cap renegotiation BEFORE any code.
 - Zero-slack tripwires are fragile: any unrelated post-auth surface work
   after this slice has no room until the next renegotiation.
