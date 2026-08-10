@@ -1,13 +1,27 @@
 #!/usr/bin/env python3
 # mutation-test.py
 #
-# Mutation harness v11 for the Grant verifier, the attestation layer, the
+# Mutation harness v12 for the Grant verifier, the attestation layer, the
 # transport DoS gate, the session phase, the channel layer, the mesh identity
-# boundary, the relay surface AND the ledger/history surface (LANGUAGE.md
-# section 4 metric; SPEC.md section 11.2).
+# boundary, the relay surface, the ledger/history surface AND the
+# pending-intent/refusal surface (LANGUAGE.md section 4 metric; SPEC.md
+# section 11.2).
 # cargo-mutants does not exist for Zig, so this applies one mutant at a time to
 # a source file, rebuilds, runs the full test suite, and records whether the
 # suite kills it.
+#
+# v12 (pending-intent slice): two domains. src/intent.zig shipped the
+# pending-intent state machine (D-052, SPEC section 8.2) and verify.zig
+# shipped verifyRefusalThen (SPEC 8.5), so both get their own denominator
+# detected from SPEC markers like every other domain:
+#   intent  <- §8.2 BE-GRANT-04/06/06a/06b/09/10 markers
+#   refusal <- §8.5 the 0x06 domain tag + approver-role map + BE-GRANT-09 apply
+# Six intent keys: restart collapse, resource exclusivity, T_pending sweep,
+# intent_id dedupe, the refusal state transition, and REJECTED terminality.
+# Three refusal keys: the 0x06 domain tag, the approver role, and the
+# applyRefusal hook. BE-GRANT-09 splits across both domains on purpose: its
+# state-machine half (PENDING -> REJECTED) is keyed under intent, its
+# verification half (sig + approver + apply) under refusal. No key is omitted.
 #
 # v11 (ledger slice): the ledger domain. BE-LEDGER-01/02/03, BE-HIST-02/03/04
 # and BE-ENV-03/04/05 shipped as src/ledger.zig plus src/historical.zig and
@@ -144,6 +158,7 @@ TARGETS = {
     "relay.zig": SRC / "relay.zig",
     "ledger.zig": SRC / "ledger.zig",
     "historical.zig": SRC / "historical.zig",
+    "intent.zig": SRC / "intent.zig",
 }
 ORIGINALS = {name: path.read_text() for name, path in TARGETS.items()}
 
@@ -454,6 +469,74 @@ def ledger_properties_from_spec():
     text = SPEC.read_text()
     props = set()
     for key, _what, pattern in LEDGER_MARKERS:
+        if re.search(pattern, text):
+            props.add(key)
+    return props
+
+
+# --- intent denominator, derived from SPEC.md section 8 -------------------
+#
+# The pending-intent state machine (src/intent.zig), non-surface. Each property
+# is detected from a bold BE-GRANT marker in section 8, exactly as the other
+# denominators. BE-GRANT-09 splits across two domains: its state-machine half
+# (PENDING -> REJECTED) lives here; its verification half (sig + role) is the
+# refusal domain below. Both detect the same SPEC sentence, by design.
+
+INTENT_MARKERS = [
+    ("intent-restart-collapse",
+     "BE-GRANT-04 restart collapses every PENDING to EXPIRED (memory-only)",
+     r"\*\*BE-GRANT-04 \(fail-closed on restart\)\*\*"),
+    ("intent-exclusivity",
+     "BE-GRANT-06 resource exclusivity (one holder, no queue)",
+     r"\*\*BE-GRANT-06 \(resource exclusivity\)\*\*"),
+    ("intent-tpending",
+     "BE-GRANT-06a T_pending timeout transitions PENDING to EXPIRED",
+     r"\*\*BE-GRANT-06a \(pending timeout\)\*\*"),
+    ("intent-dedupe",
+     "BE-GRANT-06b intent_id uniqueness at admission",
+     r"\*\*BE-GRANT-06b \(intent_id uniqueness\)\*\*"),
+    ("intent-refusal-transition",
+     "BE-GRANT-09 a matched Refusal transitions PENDING to REJECTED",
+     r"\*\*BE-GRANT-09 \(refusal semantics\)\*\*"),
+    ("intent-terminal-rejected",
+     "BE-GRANT-10 REJECTED is terminal, no transition out",
+     r"\*\*BE-GRANT-10 \(refusal is terminal\)\*\*"),
+]
+
+
+def intent_properties_from_spec():
+    text = SPEC.read_text()
+    props = set()
+    for key, _what, pattern in INTENT_MARKERS:
+        if re.search(pattern, text):
+            props.add(key)
+    return props
+
+
+# --- refusal denominator, derived from SPEC.md section 8.5 + 8.1 ----------
+#
+# The Refusal verification half (verify.zig verifyRefusalThen): the signature
+# domain tag, the approver-role gate, and the pending-intent transition hook.
+# The sig tag 0x06 is a BE-SIG-01 row; the role is the body_type/role map; the
+# transition is BE-GRANT-09's verify half (its state half is the intent domain).
+
+REFUSAL_MARKERS = [
+    ("refusal-domain-tag",
+     "BE-SIG-01 the Refusal signature uses domain tag 0x06",
+     r"domain tag 0x06 \(BE-SIG-01\)"),
+    ("refusal-approver-role",
+     "a Refusal requires the approver role (body_type/role map)",
+     r"`Grant` and `Refusal` require `approver`"),
+    ("refusal-apply-hook",
+     "BE-GRANT-09 a verified Refusal transitions the pending intent",
+     r"\*\*BE-GRANT-09 \(refusal semantics\)\*\*"),
+]
+
+
+def refusal_properties_from_spec():
+    text = SPEC.read_text()
+    props = set()
+    for key, _what, pattern in REFUSAL_MARKERS:
         if re.search(pattern, text):
             props.add(key)
     return props
@@ -1010,6 +1093,68 @@ MUTANTS = [
      "Grant and Refusal gated on agent instead of approver",
      "        parser.channel.BODY_GRANT, parser.channel.BODY_REFUSAL => is_approver,",
      "        parser.channel.BODY_GRANT, parser.channel.BODY_REFUSAL => is_agent, // MUTANT: Grant and Refusal need agent"),
+
+    # --- intent domain: pending-intent state machine (src/intent.zig, SPEC 8.2)
+    # intent-restart-collapse (BE-GRANT-04): a fresh Table after a crash holds
+    # no PENDING/EXECUTING (memory-only dead-man's switch). The restart test
+    # constructs a new Table and asserts len == 0; seeding len=1 breaks it.
+    ("intent", "intent.zig", "WRONG-CONSTANT", "intent-restart-collapse",
+     "fresh table starts non-empty (len seeded to 1)",
+     "    len: usize = 0,",
+     "    len: usize = 1, // MUTANT: fresh table starts non-empty"),
+    # intent-exclusivity (BE-GRANT-06): a second PENDING on a held resource is
+    # refused. Removing the held-resource lookup admits a second holder.
+    ("intent", "intent.zig", "CHECK-ABSENCE", "intent-exclusivity",
+     "resource exclusivity dropped (second holder admitted)",
+     "        if (self.findHeldByResource(intent.resource_id) != null) return error.ResourceHeld;",
+     "        // MUTANT: resource exclusivity check removed"),
+    # intent-tpending (BE-GRANT-06a): a PENDING older than T_pending expires.
+    # Flipping >= to < inverts the sweep so nothing ever expires.
+    ("intent", "intent.zig", "WRONG-LOGIC", "intent-tpending",
+     "T_pending comparison inverted (nothing expires)",
+     "            if (e.state == .pending and now_ms >= e.admitted_ms + T_PENDING_MS) {",
+     "            if (e.state == .pending and now_ms < e.admitted_ms + T_PENDING_MS) { // MUTANT"),
+    # intent-dedupe (BE-GRANT-06b): a duplicate intent_id is refused. Removing
+    # the lookup admits the duplicate.
+    ("intent", "intent.zig", "CHECK-ABSENCE", "intent-dedupe",
+     "intent_id dedupe dropped (duplicate admitted)",
+     "        if (self.findPendingByIntentId(intent.intent_id) != null) return error.DuplicateIntentId;",
+     "        // MUTANT: intent_id dedupe check removed"),
+    # intent-refusal-transition (BE-GRANT-09 state half): a matched Refusal
+    # moves PENDING to REJECTED. Dropping the transition returns no_match, so
+    # the intent_test GRANT-09 case (expects .rejected) dies.
+    ("intent", "intent.zig", "WRONG-VALUE", "intent-refusal-transition",
+     "refusal transition dropped (always returns no_match)",
+     "        self.entries[idx].state = .rejected;\n        return .rejected;",
+     "        _ = idx;\n        return .no_match; // MUTANT: transition removed"),
+    # intent-terminal-rejected (BE-GRANT-10): REJECTED is terminal, so a later
+    # match on the same intent_id finds nothing. Widening findPendingByIntentId
+    # to also match REJECTED breaks terminality.
+    ("intent", "intent.zig", "WRONG-LOGIC", "intent-terminal-rejected",
+     "terminality broken (REJECTED entries still match)",
+     "            if (e.state == .pending and std.mem.eql(u8, e.intent_id[0..], intent_id)) return i;",
+     "            if ((e.state == .pending or e.state == .rejected) and std.mem.eql(u8, e.intent_id[0..], intent_id)) return i; // MUTANT"),
+
+    # --- refusal domain: refusal verification (src/verify.zig, SPEC 8.5/8.1)
+    # refusal-domain-tag (BE-SIG-01): the Refusal signature uses domain tag
+    # 0x06. Swapping DOMAIN_REFUSAL to DOMAIN_GRANT breaks signature verify.
+    ("refusal", "verify.zig", "WRONG-CONSTANT", "refusal-domain-tag",
+     "refusal domain tag swapped (DOMAIN_REFUSAL -> DOMAIN_GRANT)",
+     "    try verifySigned(parser.channel.DOMAIN_REFUSAL, refusal.tbs, refusal.sig, env.sender);",
+     "    try verifySigned(parser.channel.DOMAIN_GRANT, refusal.tbs, refusal.sig, env.sender); // MUTANT"),
+    # refusal-approver-role (BE-ID-04): a Refusal needs the approver role.
+    # Swapping ROLE_APPROVER to ROLE_AGENT admits a non-approver.
+    ("refusal", "verify.zig", "WRONG-CONSTANT", "refusal-approver-role",
+     "approver role swapped (ROLE_APPROVER -> ROLE_AGENT)",
+     "    if ((ctx.approver_cert.role_bits & binding.ROLE_APPROVER) == 0) return error.BadApproverCert;",
+     "    if ((ctx.approver_cert.role_bits & binding.ROLE_AGENT) == 0) return error.BadApproverCert; // MUTANT"),
+    # refusal-apply-hook (BE-GRANT-09 verify half): applyRefusal runs the state
+    # transition; skipping it leaves the intent PENDING so on_rejected never
+    # fires and the verify_test GRANT-09 case dies.
+    ("refusal", "verify.zig", "WRONG-LOGIC", "refusal-apply-hook",
+     "applyRefusal hook skipped (intent never transitions)",
+     "    if (ctx.intent_table.applyRefusal(refusal) == .rejected) {\n        on_rejected(refusal.intent_id);\n    }",
+     "    _ = ctx.intent_table; // MUTANT: applyRefusal + on_rejected skipped"),
 ]
 
 
@@ -1051,6 +1196,12 @@ def main():
     ledger_props = ledger_properties_from_spec()
     if not ledger_props:
         sys.exit("FATAL: no ledger properties detected in SPEC §9/BE-ENV-03/04/05")
+    intent_props = intent_properties_from_spec()
+    if not intent_props:
+        sys.exit("FATAL: no intent properties detected in SPEC section 8")
+    refusal_props = refusal_properties_from_spec()
+    if not refusal_props:
+        sys.exit("FATAL: no refusal properties detected in SPEC section 8.5/8.1")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -1063,6 +1214,8 @@ def main():
     print(f"  section-5 mesh properties:       {sorted(mesh_props)} ({len(mesh_props)})")
     print(f"  relay properties (§5.2a):        {sorted(relay_props)} ({len(relay_props)})")
     print(f"  ledger properties (§9):          {sorted(ledger_props)} ({len(ledger_props)})")
+    print(f"  intent properties (§8.2):        {sorted(intent_props)} ({len(intent_props)})")
+    print(f"  refusal properties (§8.5):       {sorted(refusal_props)} ({len(refusal_props)})")
     print()
 
     # 2. scope check: no mutant may attack a key its domain's SPEC does not list
@@ -1099,6 +1252,14 @@ def main():
             if key not in ledger_props:
                 sys.exit(f"FATAL: ledger mutant '{name}' attacks '{key}', which "
                          "SPEC §9/BE-ENV-03/04/05 does not declare (scope lie)")
+        elif domain == "intent":
+            if key not in intent_props:
+                sys.exit(f"FATAL: intent mutant '{name}' attacks '{key}', which "
+                         "SPEC section 8 does not declare (scope lie)")
+        elif domain == "refusal":
+            if key not in refusal_props:
+                sys.exit(f"FATAL: refusal mutant '{name}' attacks '{key}', which "
+                         "SPEC section 8.5/8.1 does not declare (scope lie)")
         else:
             sys.exit(f"FATAL: mutant '{name}' in unknown domain '{domain}'")
 
@@ -1203,10 +1364,20 @@ def main():
         l_cov = {r["key"] for r in l_run if r["killed"]}
         print(f"ledger:   {len(l_cov)}/{len(ledger_props)} §9/BE-ENV "
               f"properties covered by killed mutants")
+    i_run, i_surv, i_uncov, _ = gate_domain("intent", intent_props)
+    if in_scope("intent"):
+        i_cov = {r["key"] for r in i_run if r["killed"]}
+        print(f"intent:   {len(i_cov)}/{len(intent_props)} §8.2 "
+              f"properties covered by killed mutants")
+    f_run, f_surv, f_uncov, _ = gate_domain("refusal", refusal_props)
+    if in_scope("refusal"):
+        f_cov = {r["key"] for r in f_run if r["killed"]}
+        print(f"refusal:  {len(f_cov)}/{len(refusal_props)} §8.5 "
+              f"properties covered by killed mutants")
     total_run = [r for r in results if not r["skipped"]]
     total_killed = sum(1 for r in total_run if r["killed"])
     print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
-          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv)}"
+          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv)}"
           f" survived")
     if g_surv:
         print(f"  grant SURVIVORS: {g_surv}")
@@ -1224,6 +1395,10 @@ def main():
         print(f"  relay SURVIVORS: {r_surv}")
     if l_surv:
         print(f"  ledger SURVIVORS: {l_surv}")
+    if i_surv:
+        print(f"  intent SURVIVORS: {i_surv}")
+    if f_surv:
+        print(f"  refusal SURVIVORS: {f_surv}")
     if g_uncov:
         print(f"  UNCOVERED grant checks: {g_uncov}")
     if e_uncov:
@@ -1240,14 +1415,20 @@ def main():
         print(f"  UNCOVERED relay properties: {r_uncov}")
     if l_uncov:
         print(f"  UNCOVERED ledger properties: {l_uncov}")
+    if i_uncov:
+        print(f"  UNCOVERED intent properties: {i_uncov}")
+    if f_uncov:
+        print(f"  UNCOVERED refusal properties: {f_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
     ok = ((not g_surv) and (not e_surv) and (not t_surv) and (not s_surv)
           and (not c_surv) and (not m_surv) and (not r_surv) and (not l_surv)
+          and (not i_surv) and (not f_surv)
           and (not g_uncov) and (not e_uncov) and (not t_uncov)
           and (not s_uncov) and (not c_uncov) and (not m_uncov)
-          and (not r_uncov) and (not l_uncov) and g_cb)
+          and (not r_uncov) and (not l_uncov)
+          and (not i_uncov) and (not f_uncov) and g_cb)
     return 0 if ok else 1
 
 

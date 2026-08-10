@@ -384,3 +384,64 @@ The remaining NEEDS-CODE rows stand: C5's pending-intent table and refusal
 verifier (BE-GRANT-06/06b/09), BE-RES-06's executor fingerprint, and the
 confirm-then-key pair BE-TR-06 and BE-EVID-11. The ledger slice closed the
 divergence surface that BE-ENV-05 and BE-LEDGER-01 both named.
+
+---
+
+## Pending-intent slice addendum (branch post-auth-slice, measured 2026-08-09)
+
+Buckets C5 and D2 empty out. `src/intent.zig` (190 lines) landed as the
+non-surface pending-intent state machine under the D-052 placement: states
+PENDING / EXECUTING / EXPIRED / REJECTED, a per-resource exclusivity lock,
+intent_id dedupe, the T_pending = 900s timeout sweep, restart collapse
+(memory-only per BE-GRANT-04), lock release on every exit path, and REJECTED
+terminality. The refusal verifier landed in `src/verify.zig`
+(`verifyRefusalThen`): the 0x06 DOMAIN_REFUSAL tag, the approver-role check,
+and the applyRefusal hook that transitions a matched pending intent to
+REJECTED. The wire parser half is `parseRefusal` in `parser/channel.zig`
+(body_type 6: intent_id, note, sig).
+
+Seven markers move to BOUND, each by a literal behavioural test named per
+D-027:
+
+- BE-GRANT-01a (interrupted effect leaves grant_id spent, never retried):
+  `verify_test.zig`.
+- BE-GRANT-04 (fresh table holds no pending state; restart collapse):
+  `intent_test.zig`.
+- BE-GRANT-06 (second intent on a held resource refused; exclusivity):
+  `intent_test.zig`.
+- BE-GRANT-06a (T_pending timeout expires pending and releases the lock):
+  `intent_test.zig`.
+- BE-GRANT-06b (duplicate intent_id refused at admission):
+  `intent_test.zig`.
+- BE-GRANT-09 (canonical refusal verifies and rejects the pending intent;
+  wrong body_type / bad sig / wrong domain tag / non-approver each refused;
+  a refusal matching no pending intent is dropped): six cases in
+  `verify_test.zig` plus the no-match drop in `intent_test.zig`.
+- BE-GRANT-10 (a rejected intent cannot re-enter EXECUTING):
+  `intent_test.zig`.
+
+These were the D2/C5 rows the audit had parked on the executor. The
+resolution matches the session and relay rounds: the state machine that
+enforces each property exists in `src/` now and is the unit the executor will
+wire, so the property is testable today; the daemon dispatch (`main.zig` is
+still a 13-line stub) is a later milestone and does not unbind a property the
+state machine already enforces.
+
+M1 ratchet reads 94/109 bound, high water 94 (DECL 109 still excludes
+BE-GRANT-03c per its SUPERSEDED BY REMOVAL clause, D-041). The seven GRANT
+markers raised the high water 87 to 94.
+
+Full gauntlet at `ebafcfa` plus the docs/ratchet commit: `zig fmt --check`
+clean; `zig build test` green; em-dash scan clean over `src/` and `tools/`;
+`verify-vectors` PASSED 77 FAILED 0; prumo-verify 0 failing (M5
+pre-authentication 1173/1500 with handshake 990/990 and relay 183/510, M11
+post-authentication 1400/1500 subdivided per D-052 into wire-parser 652/723
+and session-state 748/748, M9 denominator 66 exit points); mutation harness
+v12 90/90 killed, 0 survived across ten domains (grant 17, evidence 11,
+session 11, channel 8, mesh 6, transport 4, relay 11, ledger 13, intent 6,
+refusal 3), single writer per run (D-035).
+
+The remaining 15 missing markers span the executor and approving-UI
+obligations, the confirm-then-key pair (BE-TR-06, BE-EVID-11), BE-RES-06's
+executor fingerprint, and the sync set: all NEEDS-CODE or OUT-OF-SLICE, none
+addressable by a runtime test against code that does not yet exist (D-027).
