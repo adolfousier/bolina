@@ -445,3 +445,44 @@ The remaining 15 missing markers span the executor and approving-UI
 obligations, the confirm-then-key pair (BE-TR-06, BE-EVID-11), BE-RES-06's
 executor fingerprint, and the sync set: all NEEDS-CODE or OUT-OF-SLICE, none
 addressable by a runtime test against code that does not yet exist (D-027).
+
+## Resolver round addendum (branch post-auth-slice, measured 2026-08-10)
+
+The resolver round binds the six BE-RES markers (SPEC section 8.4) over
+non-surface `src/resolver.zig` (322 lines, placed by D-052 ahead of creation,
+zero M11 line cost): `executorFp` renders BLAKE2s-256(sig_pubkey)[0..8] as 16
+lowercase hex chars (BE-RES-06), `validateCanonical` walks the
+bol:fp/namespace/path grammar refusing dot and dotdot segments and the length
+bounds, `resolve` refuses zero matches and more than one distinct canonical
+(BE-RES-02, BE-RES-03), the own-fingerprint gate refuses canonical ids that
+carry another executor's fp (BE-RES-04), and `resolveAndAdmit` threads the
+canonical into the intent lock table so every downstream consumer keys on the
+executor's form, never the requester's (BE-RES-01).
+
+BE-RES-05 binds as signed executor-side state per D-053: the operator-declared
+set serializes deterministically in declaration order (u16 big-endian lengths)
+and signs Ed25519 under the new domain tag 0x08, declared by the SPEC
+v0.3.2-draft edit committed ahead of the code (D-029 pre-flag). The channel
+publication vehicle is undeclared in SPEC (body_type enum closed 1-6,
+BE-CTRL-01 action_type closed {1, 2} with no extension path), so publication
+waits on the daemon milestone: the same resolution as the pending-intent
+addendum, the unit enforcing the property exists in src/ and is testable now.
+Aliases are operator-declared entries per D-053 (granularity is declared, not
+emergent, per BE-RES-05's own text); no fuzzy or prefix matching; resolution
+counts distinct canonical entries reached, so two spellings of one resource
+collapse onto one lock and any real ambiguity refuses.
+
+Ratchet 94 to 100 of 109, high water committed with the tests (c54d34f).
+Mutation harness v13 adds the resolver domain: 10 SPEC-keyed mutants, 6/6
+section-8.4 properties covered by killed mutants. Full suite 100/100 on a
+clean tree, receipt `mutation_resolver_clean.log`. The first full run started
+on residue from a killed launch (a grant-domain mutant left un-restored in
+`src/verify.zig`), which skipped that mutant and masked one resolver survivor;
+root cause named, tree restored, clean re-run killed all 100 including both.
+Lesson recorded in LANGUAGE.md: the harness restores from launch-time
+snapshots, so verify zero residue before launching.
+
+The remaining markers now number nine: BE-GRANT-07/07a (approving render),
+BE-SURF-04 (fuzz oracle), BE-SYNC-01..05 (backfill/sync surface), and the
+deferred MAY BE-MESH-03 (D-051). This supersedes the 15-marker count in the
+pending-intent addendum's closing paragraph.
