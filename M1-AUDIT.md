@@ -132,15 +132,15 @@ move for them).
 | BE-MESH-02 | Relay forwards Noise transport packets, holds no key material, cannot decrypt | **BOUND** (`BE_MESH_02`) - implemented in `src/relay.zig` (relay sub-unit 183/510, D-043): opaque type-5 forwarding through a bounded 4096-entry table, one-shot signed registration (domain tag 0x07), no key material in the relay unit. 17 tests bind the marker by name; 11 relay mutants killed (harness v10). M1 high water moved 67 to 68. |
 | BE-MESH-03 | Relay MAY store forwarded ciphertext for an offline recipient under quota + TTL | No relay code. M2. |
 
-### C2. Sync / backfill (sync slice)
+### C2. Sync / backfill (LANDED in the sync slice)
 
 | Marker | Requirement | Status |
 |--------|-------------|--------|
-| BE-SYNC-01 | SyncRequest MUST be refused outside an established session | No sync code. |
-| BE-SYNC-02 | Responder returns at most `min(max_envelopes, 64)`, max 1 MiB | No sync code. |
-| BE-SYNC-03 | Walk budget: max depth 128, max 4096 envelopes | No sync code. |
-| BE-SYNC-04 | Rate-limit both requests served and issued | No sync code. |
-| BE-SYNC-05 | Every backfilled envelope passes the same verification as a live one | No sync code. |
+| BE-SYNC-01 | SyncRequest MUST be refused outside an established session | **BOUND** (`BE_SYNC_01`) - implemented in `src/sync.zig` (non-surface, D-054): admission reuses `verify.requireMember` behind the session-established check, so a request outside an established session, from a non-member, or from a revoked peer refuses. One literal test binds the marker by name; 2 admission mutants killed (harness v15). M1 high water moved 102 to 103. |
+| BE-SYNC-02 | Responder returns at most `min(max_envelopes, 64)`, max 1 MiB | **BOUND** (`BE_SYNC_02`) - implemented in `src/sync.zig`: stateless response builder binds at `min(max_envelopes, 64)` and 1 MiB, sets the truncated flag exactly when unserved candidates remain, and retains no state between responses; `max_envelopes` is parsed and carried by `src/parser/sync.zig` (sync sub-unit 77/100), never rejected at the wire. One literal test binds the marker by name; 4 bounds mutants killed (harness v15). M1 high water moved 103 to 104. |
+| BE-SYNC-03 | Walk budget: max depth 128, max 4096 envelopes | **BOUND** (`BE_SYNC_03`) - implemented in `src/sync.zig`: explicit walk queue, depth 128 and total 4096, stop + surface + no retry path exists (a recursive walk cannot compile past the explicit queue shape, BE-DEP-02). One literal test binds the marker by name; 3 walk mutants killed (harness v15). M1 high water moved 104 to 105. |
+| BE-SYNC-04 | Rate-limit both requests served and issued | **BOUND** (`BE_SYNC_04`) - implemented in `src/sync.zig`: sliding-window rate limiter, serve 8 and issue 4 per peer per 10 s (budgets declared by D-054's SPEC edit), fail closed. One literal test binds the marker by name; 2 rate mutants killed (harness v15). M1 high water moved 105 to 106. |
+| BE-SYNC-05 | Every backfilled envelope passes the same verification as a live one | **BOUND** (`BE_SYNC_05`) - implemented in `src/sync.zig`: `adoptVerify` runs `parseEnvelope` + `verify.verifyEnvelope` before any ledger entry, so a backfilled envelope meets the same signature, role, membership, and parent-hash checks as a live one. One literal test binds the marker by name; 1 adopt mutant killed (harness v15). M1 high water moved 106 to 107. |
 
 ### C3. Ledger, DAG, history (LANDED in the ledger slice)
 
@@ -510,3 +510,37 @@ suite 106/106 on a clean tree, zero residue after the run
 BE-SURF-04 (fuzz oracle), BE-SYNC-01..05 (backfill surface), and the
 deferred MAY BE-MESH-03 (D-051). This supersedes the 9-marker count in the
 resolver round addendum.
+
+
+## Sync round addendum (branch main, measured 2026-08-11)
+
+The sync slice binds BE-SYNC-01..05 (SPEC section 6.4, Backfill). D-054
+ruled the budget before any code: the post-authentication unit is
+subdivided into three sub-units (wire-parser, session-state, sync), the
+wire-parser cap ratchets DOWN from 723 to its measured floor 652, the sync
+sub-unit is declared at cap 100 over `src/parser/sync.zig` (77 measured),
+and the cap sum stays 1500 - nothing raised, per BE-SURF-03 (the
+estimate's renegotiation recommendation was the error the ruling
+corrects). `src/sync.zig` (289 lines, non-surface per D-054) carries the
+SyncEngine: admission reuses `verify.requireMember` (BE-SYNC-01), the
+response builder binds at min(max_envelopes, 64) and 1 MiB with the exact
+truncated flag and no retained state (BE-SYNC-02), the walk queue is
+explicit at depth 128 and total 4096 with stop + surface + no retry
+(BE-SYNC-03), the sliding-window rate limiter serves 8 and issues 4 per
+peer per 10 s, budgets declared in the same SPEC edit (BE-SYNC-04, D-054),
+and `adoptVerify` runs `parseEnvelope` + `verify.verifyEnvelope` before
+any ledger entry (BE-SYNC-05). Five literal tests bind the markers by name
+(D-027); ratchet 102 to 107 of 109, high water committed with the tests
+(c43990d). Mutation harness v15 adds the sync domain: twelve SPEC-keyed
+mutants (eleven over `src/sync.zig`, one over `src/parser/sync.zig`), 5/5
+section-6.4 properties covered by killed mutants; chunked sync run 12/12
+killed, full suite 118/118 on a clean tree, zero residue before launch and
+after the run (mutation_sync_chunk.log, mutation_sync_full.log).
+LANGUAGE.md's exit-point cell carries a denominator repair in the same
+commit: the Branch enum grew 66 to 72 with the six sync exits (the two
+refusal exits added since the 2026-08-08 measurement went unlogged), so
+the cell reads 17 of 72 reached and 55 unreached, no new measurement
+claimed. The
+remaining markers now number 2: BE-SURF-04 (fuzz oracle, next per §13
+lineage) and the deferred MAY BE-MESH-03 (D-051). This supersedes the
+7-marker count in the render round addendum.
