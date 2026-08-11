@@ -92,6 +92,8 @@ Bolina's answer is to stop asking the sender for the guarantee:
 | **`LANGUAGE.md`** | Decided: **Zig**, on the zero-dependency constraint. Records the four obligations that choice activates, and what would reopen it |
 | **`M1-AUDIT.md`** | What has been measured in M1 and how: the marker-by-marker keying audit, the mutation rounds, the attack-surface budget, and the addenda that correct earlier numbers |
 | **`CONTRIBUTING.md`** | The merge rules, split into mechanical (`tools/prumo-verify` refuses it) and judgement (a person decides and records why) |
+| **`M1-AUDIT.md`** | What has been measured in M1 and how: the marker-by-marker keying audit, the mutation rounds, the attack-surface budget, and the addenda that correct earlier numbers |
+| **`CONTRIBUTING.md`** | The merge rules, split into mechanical (`tools/prumo-verify` refuses it) and judgement (a person decides and records why) |
 
 Read `SPEC.md` §0 and §7–§8 first; those are the parts that are not borrowed.
 
