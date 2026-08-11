@@ -291,7 +291,7 @@ D-054.)
 - **Pre-authentication unit:** subdivided into three sub-units:
   - **Handshake sub-unit:** `src/parser.zig`, `src/mac.zig`, `src/noise.zig` — cap 990 lines.
   - **Relay sub-unit:** `src/relay.zig` — cap 256 lines, ratcheted from 510 to its measured floor (PHASE-B-ESTIMATE.md).
-  - **Listener sub-unit:** `src/listener.zig` — cap 250 lines, declared ahead of its code.
+  - **Listener sub-unit:** `src/listener.zig`, `src/handshake.zig` — cap 250 lines, both declared ahead of their code.
 - **Post-authentication unit:** subdivided into three sub-units, together everything an auditor must
   read to verify what a hostile authenticated peer's bytes can reach:
   - **Wire-parser sub-unit:** `src/parser/channel.zig`, `src/parser/session.zig` — cap 652 lines.
