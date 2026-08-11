@@ -428,7 +428,6 @@ test "DAEMON_A consumed registry: a reused grant_id refuses even against a fresh
     try std.testing.expectEqual(@as(usize, 1), effect_count);
 }
 
-
 // ---------------------------------------------------------------------------
 // Refusal happy path through the session seam: approver-signed refusal,
 // DOMAIN_REFUSAL signature, REJECTED transition inside the verify frame,
