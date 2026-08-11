@@ -32,7 +32,7 @@ prints every gate on every run and returns non-zero if an enforced one fails.
 |---|---|---|
 | BE-\* items bound to a named test | 108 of 109 declared, high-water ratchet at 108 | M1, enforced |
 | Test vectors cross-verified (Zig against Python `cryptography`) | 77 passed, 0 failed | M3, enforced |
-| Differential fuzz divergences (production parser against an independent Python reference) | 0 over 2000 records, reaching 15 of 72 parser exit points | M4, enforced |
+| Differential fuzz divergences (production parser against an independent Python reference) | 0 over 20000 records, reaching 69 of 72 parser exit points | M4, enforced |
 | Mutants killed by the test suite | 118 of 118 | M2, measured but **not** wired into the exit code |
 | Pre-authentication attack surface | 1173 of 1500 lines | M5, enforced |
 | Post-authentication attack surface | 1477 of 1500 lines | M11, enforced |
@@ -46,10 +46,18 @@ the tool's own output rather than absent from it, which is the point of printing
 
 **M4** is honest about its own reach rather than its verdict. The oracle compares the production
 parser against an independent Python reference written from the SPEC field tables alone, and zero
-divergences over the bounded corpus is a real result. But the corpus currently drives 6 of the 20
-parse entry points, so it reaches 15 of the 72 measured exit points: what the gate proves clean is
-the part it reaches, not the whole parser. Widening the corpus to every entry point is the next
-step, and the reached-count is printed on the gate row so the limit cannot be quietly forgotten.
+divergences over the bounded corpus is a real result. The corpus now drives all 22 parse entry
+points and reaches 69 of the 72 measured exit points. Three are still unreached and are named on
+the gate row every run rather than rounded away: `data_payload_oversize`, `cert_ca_count_zero`, and
+`bind_cert_len_zero`, each needing a shape the corpus does not construct rather than a parser path
+that does not exist. What the gate proves clean is still the part it reaches.
+
+Widening it to 22 entry points is also what made the oracle earn its keep: it reported 579
+divergences where the reference accepted a fragment header the parser rejected, and the finding was
+that the parser had been enforcing a bound `SPEC.md` §4.5 never stated. The sentence now lives in
+the specification (D-057). A second class, 25 divergences on `Control.action_type`, turned out to
+be the reference putting a verifier rule at the parse layer; BE-CTRL-01 is enforced in
+`src/verify.zig` with a test binding it, so the reference was corrected instead.
 
 What this does **not** say: no part of the protocol has been model-checked, no adversarial
 evaluation against a real model has been run, and no external cryptographic review of the
