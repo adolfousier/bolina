@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.3.5-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-11
+**Version:** 0.3.6-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-11
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -36,6 +36,8 @@ closed; this edit supplies the row the obligation owed. No envelope wire bytes c
 **Changes from v0.3.3-draft:** §5.2a gains the store-and-forward mechanics clause for BE-MESH-03 (store condition, keying by `overlay_addr`, drain at registration with relay-layer `recipient_index` rewrite, declared quotas, TTL, and body-size cap); `src/relay_store.zig` joins the BE-SURF-03 non-surface list ahead of its code (D-058). No wire bytes change: the relay packet inventory stays types 5 and 6.
 
 **Changes from v0.3.4-draft:** BE-SURF-03 places `src/dispatch.zig` in the non-surface list ahead of its phase-B wiring (D-059): the daemon milestone's phase A dispatch core, state over parsed values, not reached by attacker bytes directly. No wire bytes change.
+
+**Changes from v0.3.5-draft:** the daemon milestone's phase B declares three listener and session markers (§0.4): BE-EXEC-02 one listener per endpoint, BE-EXEC-03 single address family, BE-SESS-02 no half-session on failed handshake; BE-EXEC-01 stays reserved for the phase-D lifecycle falsification. BE-SURF-03 ratchets the relay sub-unit cap from 510 to its measured floor 256 and declares a listener sub-unit (`src/listener.zig`, cap 250 lines) in the pre-authentication unit; pre-authentication cap sum 990 + 256 + 250 = 1496 ≤ 1500 (PHASE-B-ESTIMATE.md). No wire bytes change.
 
 ---
 
@@ -109,6 +111,29 @@ constraint asks for: logic errors are caught by §11, timing side channels are n
 network is flat, fixed-order, and length-prefixed (§2.2). The one field with arbitrary structure,
 `Intent.action`, is handled by the daemon as opaque bytes and hashed, never interpreted. Structured
 interpretation happens only in the executor, which is not exposed to the network.
+
+### 0.4 Daemon execution discipline
+
+The daemon is the process that owns the sockets and runs the protocol. Three properties of it are
+declared here for phase B of the daemon milestone; a fourth is reserved and stated so the number
+is not silently reused.
+
+**BE-EXEC-02 (one listener per endpoint)** — The daemon MUST run at most one listener per
+(address, port) endpoint. A second attempt to bind an endpoint that already has a listener MUST be
+refused. The endpoint is owned by exactly one socket or it is free; there is no third state.
+
+**BE-EXEC-03 (single address family)** — A listener socket MUST bind exactly one address family.
+Dual-stack sockets are forbidden: an IPv4 listener and an IPv6 listener are two sockets and two
+binds, never one socket pretending to be both.
+
+**BE-SESS-02 (no half-session)** — A handshake that fails or is abandoned MUST leave no
+half-session behind. Partial state allocated for the attempt (indices, key material, pending
+records) MUST be cleaned before the failure returns to the network layer.
+
+*BE-EXEC-01 (daemon lifecycle: one process, no fork-per-session, bounded resources) is reserved
+for the phase-D falsification of restart semantics. It is not declared above because its
+falsification does not exist yet, and declaring markers without falsification is the inflation
+this document forbids.*
 
 ---
 
@@ -255,16 +280,18 @@ exceed **1500 lines**, measured and enforced in CI. Exceeding either unit does n
 design; it invalidates the mitigation that justified the language choice, and it MUST fail the build
 rather than be noted. *"Small enough for one person to audit" is either a number or it is a slogan:
 one number per audit unit, and the unit is what an attacker can reach.* (D-030.) The pre-authentication
-unit is subdivided into a handshake sub-unit (cap 990 lines) and a relay sub-unit (cap 510 lines);
-both caps MUST be enforced independently and the sum MUST NOT exceed 1500 lines. The
+unit is subdivided into a handshake sub-unit (cap 990 lines), a relay sub-unit (cap 256 lines),
+and a listener sub-unit (cap 250 lines); all three caps MUST be enforced independently and the
+sum MUST NOT exceed 1500 lines. The
 post-authentication unit is subdivided into a wire-parser sub-unit (cap 652 lines), a
 session-state sub-unit (cap 748 lines), and a sync sub-unit (cap 100 lines); all three caps MUST
 be enforced independently and the sum MUST NOT exceed 1500 lines. (D-052, split and ratcheted by
 D-054.)
 
-- **Pre-authentication unit:** subdivided into two sub-units:
+- **Pre-authentication unit:** subdivided into three sub-units:
   - **Handshake sub-unit:** `src/parser.zig`, `src/mac.zig`, `src/noise.zig` — cap 990 lines.
-  - **Relay sub-unit:** `src/relay.zig` — cap 510 lines.
+  - **Relay sub-unit:** `src/relay.zig` — cap 256 lines, ratcheted from 510 to its measured floor (PHASE-B-ESTIMATE.md).
+  - **Listener sub-unit:** `src/listener.zig` — cap 250 lines, declared ahead of its code.
 - **Post-authentication unit:** subdivided into three sub-units, together everything an auditor must
   read to verify what a hostile authenticated peer's bytes can reach:
   - **Wire-parser sub-unit:** `src/parser/channel.zig`, `src/parser/session.zig` — cap 652 lines.
