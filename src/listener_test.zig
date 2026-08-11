@@ -14,6 +14,7 @@ const listener_mod = @import("listener.zig");
 extern "c" fn socket(domain: c_uint, sock_type: c_uint, protocol: c_uint) c_int;
 extern "c" fn sendto(fd: c_int, buf: [*]const u8, len: usize, flags: c_int, dest_addr: [*]const u8, addrlen: c_uint) isize;
 extern "c" fn close(fd: c_int) c_int;
+extern "c" fn getsockname(fd: c_int, addr: [*]u8, addrlen: *c_uint) c_int;
 
 const LOOPBACK_V4 = [4]u8{ 127, 0, 0, 1 };
 const LOOPBACK_V6 = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
@@ -113,4 +114,30 @@ test "BE_EXEC_03 datagrams flow through the bound listener" {
     const n = try l.recv(&buf);
     try std.testing.expectEqual(PROBE.len, n);
     try std.testing.expectEqualStrings(PROBE, buf[0..n]);
+}
+
+test "BE_EXEC_03 the created socket carries exactly the declared family" {
+    // Inspect the created sockets: BE-EXEC-03 forbids a socket pretending to
+    // a family it was not created with (the dual-stack leak). getsockname on
+    // an unbound socket still reports its real domain.
+    var l4 = try listener_mod.Listener.open(.ipv4);
+    defer l4.close();
+    var sa4: [28]u8 = undefined;
+    var len4: c_uint = 28;
+    _ = getsockname(l4.fd, &sa4, &len4);
+    const fam4: u8 = switch (builtin.os.tag) {
+        .macos, .freebsd, .openbsd, .netbsd, .dragonfly => sa4[1],
+        else => sa4[0],
+    };
+    try std.testing.expectEqual(@as(u8, 2), fam4); // AF_INET, nothing else
+    var l6 = try listener_mod.Listener.open(.ipv6);
+    defer l6.close();
+    var sa6: [28]u8 = undefined;
+    var len6: c_uint = 28;
+    _ = getsockname(l6.fd, &sa6, &len6);
+    const fam6: u8 = switch (builtin.os.tag) {
+        .macos, .freebsd, .openbsd, .netbsd, .dragonfly => sa6[1],
+        else => sa6[0],
+    };
+    try std.testing.expect(fam6 != 2); // an ipv6 socket, never AF_INET
 }

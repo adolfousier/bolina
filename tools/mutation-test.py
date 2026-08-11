@@ -171,6 +171,8 @@ TARGETS = {
     "relay.zig": SRC / "relay.zig",
     "relay_store.zig": SRC / "relay_store.zig",
     "dispatch.zig": SRC / "dispatch.zig",
+    "listener.zig": SRC / "listener.zig",
+    "handshake.zig": SRC / "handshake.zig",
     "ledger.zig": SRC / "ledger.zig",
     "historical.zig": SRC / "historical.zig",
     "intent.zig": SRC / "intent.zig",
@@ -402,6 +404,30 @@ def mesh_properties_from_spec():
     text = SPEC.read_text()
     props = set()
     for key, _what, pattern in MESH_MARKERS:
+        if re.search(pattern, text):
+            props.add(key)
+    return props
+
+
+# --- daemon denominator, derived from SPEC.md section 0.4 ------------------
+
+DAEMON_MARKERS = [
+    # (denominator key, what SPEC says, marker text that must be present)
+    ("daemon-exec-02", "BE-EXEC-02 one listener per endpoint",
+     r"\*\*BE-EXEC-02"),
+    ("daemon-exec-03", "BE-EXEC-03 single address family",
+     r"\*\*BE-EXEC-03"),
+    ("daemon-sess-02", "BE-SESS-02 no half-session",
+     r"\*\*BE-SESS-02"),
+]
+
+
+def daemon_properties_from_spec():
+    """The set of section-0.4 daemon properties the slice must prove, each
+    detected from its bold marker in SPEC section 0.4."""
+    text = SPEC.read_text()
+    props = set()
+    for key, _what, pattern in DAEMON_MARKERS:
         if re.search(pattern, text):
             props.add(key)
     return props
@@ -1567,6 +1593,53 @@ MUTANTS = [
      "verify-before-adopt skipped (any signature admitted)",
      "    verify.verifyEnvelope(env) catch return SyncError.BadEnvelope;",
      "    _ = env; // MUTANT: signature verification skipped"),
+    # --- daemon domain: the listener + handshake surface (src/listener.zig,
+    # src/handshake.zig, SPEC §0.4) ---
+    # daemon-exec-02 (BE-EXEC-02): registry ownership check removed. The
+    # registry test expecting EndpointBusy on the second claim kills this.
+    ("daemon", "listener.zig", "CHECK-ABSENCE", "daemon-exec-02",
+     "endpoint ownership never checked (double claim accepted)",
+     "        if (self.owns(addr, port)) return error.EndpointBusy;",
+     "        // MUTANT: endpoint ownership never checked"),
+    # daemon-exec-02: OS bind refusal ignored. The OS-level duplicate-bind
+    # test expecting BindRefused kills this.
+    ("daemon", "listener.zig", "CHECK-ABSENCE", "daemon-exec-02",
+     "OS bind refusal ignored (duplicate endpoint silently bound)",
+     "        if (libc.bind(self.fd, &sa, sa_len) != 0) {",
+     "        if (false) { // MUTANT: OS bind refusal ignored"),
+    # daemon-exec-03 (BE-EXEC-03): family length gate removed. The
+    # wrong-family test expecting FamilyMismatch kills this.
+    ("daemon", "listener.zig", "CHECK-ABSENCE", "daemon-exec-03",
+     "address family length gate removed",
+     "        if (addr.len != want_len) return error.FamilyMismatch;",
+     "        // MUTANT: address family length gate removed"),
+    # daemon-exec-03: the socket in open() is created with the ipv6 family
+    # for an ipv4 listener. The getsockname family witness (the created
+    # socket must carry exactly the declared family) kills this. The
+    # sockaddr family byte in makeSockaddr is not the target: macOS bind
+    # ignores it, which makes it an equivalent mutant.
+    ("daemon", "listener.zig", "WRONG-VALUE", "daemon-exec-03",
+     "ipv4 listener socket created with the ipv6 address family",
+     "            .ipv4 => AF_INET,",
+     "            .ipv4 => AF_INET6, // MUTANT: wrong address family"),
+    # daemon-sess-02 (BE-SESS-02): the type/size gate removed. Truncated and
+    # wrong-type datagrams then reach the Noise layer; both witnesses die.
+    ("daemon", "handshake.zig", "CHECK-ABSENCE", "daemon-sess-02",
+     "initiation type/size gate removed",
+     "        if (datagram.len < noise.MSG1_SIZE or datagram[0] != 1) return error.NotInitiation;",
+     "        // MUTANT: initiation type/size gate removed"),
+    # daemon-sess-02: handshake failure swallowed, processing continues with
+    # broken state. The tampered-mac1 test expecting Refused kills this.
+    ("daemon", "handshake.zig", "CHECK-ABSENCE", "daemon-sess-02",
+     "handshake failure swallowed (half-session proceeds)",
+     "        responder.readInitiation(datagram[0..noise.MSG1_SIZE], self.responder_sig_pubkey) catch return error.Refused;",
+     "        responder.readInitiation(datagram[0..noise.MSG1_SIZE], self.responder_sig_pubkey) catch {}; // MUTANT: failure swallowed"),
+    # daemon-sess-02: committed session swaps send/recv keys. The success
+    # test asserting the key-agreement direction kills this.
+    ("daemon", "handshake.zig", "WRONG-FIELD", "daemon-sess-02",
+     "committed session swaps send and recv keys",
+     "            .send_key = result.send_key,",
+     "            .send_key = result.recv_key, // MUTANT: send/recv swapped"),
 ]
 
 
@@ -1627,6 +1700,9 @@ def main():
     dispatch_props = dispatch_properties()
     if not dispatch_props:
         sys.exit("FATAL: no dispatch properties detected (D-059 missing?)")
+    daemon_props = daemon_properties_from_spec()
+    if not daemon_props:
+        sys.exit("FATAL: no daemon properties detected (SPEC section 0.4 missing?)")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -1642,6 +1718,7 @@ def main():
     print(f"  intent properties (§8.2):        {sorted(intent_props)} ({len(intent_props)})")
     print(f"  refusal properties (§8.5):       {sorted(refusal_props)} ({len(refusal_props)})")
     print(f"  resolver properties (§8.4):      {sorted(resolver_props)} ({len(resolver_props)})")
+    print(f"  daemon properties (§0.4):        {sorted(daemon_props)} ({len(daemon_props)})")
     print(f"  dispatch properties (D-059):     {sorted(dispatch_props)} ({len(dispatch_props)})")
     print(f"  render properties (§8.3):        {sorted(render_props)} ({len(render_props)})")
     print(f"  sync properties (§6.4):          {sorted(sync_props)} ({len(sync_props)})")
@@ -1677,6 +1754,10 @@ def main():
             if key not in dispatch_props:
                 sys.exit(f"FATAL: dispatch mutant '{name}' attacks '{key}', which "
                          "the D-059 ruling does not record (scope lie)")
+        elif domain == "daemon":
+            if key not in daemon_props:
+                sys.exit(f"FATAL: daemon mutant '{name}' attacks '{key}', which "
+                         "section 0.4 of SPEC does not declare (scope lie)")
         elif domain == "relay":
             if key not in relay_props:
                 sys.exit(f"FATAL: relay mutant '{name}' attacks '{key}', which "
@@ -1804,6 +1885,11 @@ def main():
         dp_cov = {r["key"] for r in dp_run if r["killed"]}
         print(f"dispatch: {len(dp_cov)}/{len(dispatch_props)} D-059 "
               f"properties covered by killed mutants")
+    dmn_run, dmn_surv, dmn_uncov, _ = gate_domain("daemon", daemon_props)
+    if in_scope("daemon"):
+        dmn_cov = {r["key"] for r in dmn_run if r["killed"]}
+        print(f"daemon:   {len(dmn_cov)}/{len(daemon_props)} §0.4 "
+              f"properties covered by killed mutants")
     r_run, r_surv, r_uncov, _ = gate_domain("relay", relay_props)
     if in_scope("relay"):
         r_cov = {r["key"] for r in r_run if r["killed"]}
@@ -1842,7 +1928,7 @@ def main():
     total_run = [r for r in results if not r["skipped"]]
     total_killed = sum(1 for r in total_run if r["killed"])
     print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
-          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv) + len(v_surv) + len(w_surv) + len(dp_surv)}"
+          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv) + len(v_surv) + len(w_surv) + len(dp_surv) + len(dmn_surv)}"
           f" survived")
     if g_surv:
         print(f"  grant SURVIVORS: {g_surv}")
@@ -1872,6 +1958,8 @@ def main():
         print(f"  sync SURVIVORS: {x_surv}")
     if dp_surv:
         print(f"  dispatch SURVIVORS: {dp_surv}")
+    if dmn_surv:
+        print(f"  daemon SURVIVORS: {dmn_surv}")
     if g_uncov:
         print(f"  UNCOVERED grant checks: {g_uncov}")
     if e_uncov:
@@ -1900,6 +1988,8 @@ def main():
         print(f"  UNCOVERED sync properties: {x_uncov}")
     if dp_uncov:
         print(f"  UNCOVERED dispatch properties: {dp_uncov}")
+    if dmn_uncov:
+        print(f"  UNCOVERED daemon properties: {dmn_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
@@ -1912,7 +2002,8 @@ def main():
           and (not r_uncov) and (not l_uncov)
           and (not i_uncov) and (not f_uncov) and (not v_uncov)
           and (not w_uncov) and (not x_uncov)
-          and (not dp_surv) and (not dp_uncov) and g_cb)
+          and (not dp_surv) and (not dp_uncov)
+          and (not dmn_surv) and (not dmn_uncov) and g_cb)
     return 0 if ok else 1
 
 
