@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.3.7-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-11
+**Version:** 0.3.8-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-11
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -40,6 +40,8 @@ closed; this edit supplies the row the obligation owed. No envelope wire bytes c
 **Changes from v0.3.5-draft:** the daemon milestone's phase B declares three listener and session markers (§0.4): BE-EXEC-02 one listener per endpoint, BE-EXEC-03 single address family, BE-SESS-02 no half-session on failed handshake; BE-EXEC-01 stays reserved for the phase-D lifecycle falsification. BE-SURF-03 ratchets the relay sub-unit cap from 510 to its measured floor 256 and declares a listener sub-unit (`src/listener.zig`, cap 250 lines) in the pre-authentication unit; pre-authentication cap sum 990 + 256 + 250 = 1496 ≤ 1500 (PHASE-B-ESTIMATE.md). No wire bytes change.
 
 **Changes from v0.3.6-draft:** the daemon milestone's phase C declares BE-EXEC-04 (relay serving on live traffic) in §0.4: the serve-loop that classifies inbound datagrams, forwards type-5 packets through the §5.2a decision table, and drains stored packets at registration (D-060). BE-SURF-03 places `src/relay_serve.zig` in the non-surface list ahead of its code (D-060), sibling of `src/dispatch.zig`. No wire bytes change: the relay packet inventory stays types 5 and 6, and every sub-unit cap is unchanged (pre-authentication sum 990 + 256 + 246 = 1492 ≤ 1500).
+
+**Changes from v0.3.7-draft:** the daemon milestone's phase D promotes BE-EXEC-01 from reserved to declared in §0.4 (daemon lifecycle: one process, no fork-per-session, bounded resources, restart semantics). BE-SURF-03 places `src/grant_ledger.zig` in the non-surface list ahead of its code (D-061), the hand-rolled two-phase durable append log over `std.fs` that implements BE-GRANT-01/01a (durable commit before the effect; committed-but-unpublished publishes an `interrupted` Effect on restart) and BE-REV-02 (revocation persists). It is distinct from the DAG hash ledger `src/ledger.zig` (BE-LEDGER-02/03), which is untouched. No new DAG marker. No wire bytes change and no sub-unit cap changes: the grant ledger is post-admission and non-surface.
 
 ---
 
@@ -117,8 +119,8 @@ interpretation happens only in the executor, which is not exposed to the network
 ### 0.4 Daemon execution discipline
 
 The daemon is the process that owns the sockets and runs the protocol. Three properties of it are
-declared here for phase B of the daemon milestone, phase C adds the serving property, and a
-further marker is reserved and stated so the number is not silently reused.
+declared here for phase B of the daemon milestone, phase C adds the serving property, and phase D
+binds the lifecycle property that was previously reserved.
 
 **BE-EXEC-02 (one listener per endpoint)** — The daemon MUST run at most one listener per
 (address, port) endpoint. A second attempt to bind an endpoint that already has a listener MUST be
@@ -144,10 +146,19 @@ accepted for a recipient with stored packets MUST drain that queue in store orde
 each packet's relay-layer `recipient_index` to the fresh `client_index`, and the Noise
 ciphertext body MUST pass byte-for-byte unchanged (BE-MESH-02).
 
-*BE-EXEC-01 (daemon lifecycle: one process, no fork-per-session, bounded resources) is reserved
-for the phase-D falsification of restart semantics. It is not declared above because its
-falsification does not exist yet, and declaring markers without falsification is the inflation
-this document forbids.*
+**BE-EXEC-01 (daemon lifecycle)** — The daemon runs as one process that owns the sockets and the
+ledger; it MUST NOT fork per session. Its durable state is the consumed-grant ledger and the
+revocation set (BE-GRANT-01/01a, BE-REV-02), kept as a hand-rolled append log over `std.fs` with
+an fsync barrier on each commit (`src/grant_ledger.zig`, non-surface, D-061) — no embedded
+database, because BE-DEP-01 forbids third-party dependencies. The DAG hash ledger
+(`src/ledger.zig`, BE-LEDGER-02/03) is a distinct, already-placed non-surface unit and is not
+touched. On restart, recovery scans the log: an orphan `commit` (committed whose Effect never
+published) yields exactly one `interrupted` Effect and is then tombstoned so recovery is
+idempotent (BE-GRANT-01a); pending approvals are memory-only and are NOT restored — they expire
+(BE-GRANT-04, the deliberate fail-safe asymmetry). Consumed grant_ids past their validity window
+are pruned, which is sound because the expiry check (§2 check 10) precedes and is independent of
+the ledger check (§2 check 11); revocations are never pruned. Resources are bounded: the ledger,
+the pending set, the session table, and the relay store each carry declared caps.
 
 ---
 
@@ -313,11 +324,11 @@ D-054.)
   - **Sync sub-unit:** `src/parser/sync.zig` — cap 100 lines.
 - **Non-surface:** `src/dag.zig`, `src/evidence.zig`, `src/verify.zig`, `src/ledger.zig`,
   `src/historical.zig`, `src/intent.zig`, `src/resolver.zig`, `src/render.zig`, `src/sync.zig`,
-  `src/relay_store.zig`, `src/dispatch.zig`, `src/relay_serve.zig` — state over parsed values (D-018), not reached by
+  `src/relay_store.zig`, `src/dispatch.zig`, `src/relay_serve.zig`, `src/grant_ledger.zig` — state over parsed values (D-018), not reached by
   attacker bytes directly. intent.zig, resolver.zig and render.zig are placed ahead of their code
   (D-052), sync.zig ahead of its code by D-054, relay_store.zig ahead of its code by D-058,
   dispatch.zig ahead of its phase-B wiring by D-059, relay_serve.zig ahead of its phase-C wiring
-  by D-060.
+  by D-060, grant_ledger.zig ahead of its phase-D wiring by D-061.
 - **Harness and entry:** `src/main.zig`, `src/tests.zig`, `src/fuzz.zig`, `src/coverage.zig`,
   `src/evidence_test_helpers.zig`, `src/cert_test_helpers.zig`, and every `*_test.zig`.
 
