@@ -30,11 +30,11 @@ prints every gate on every run and returns non-zero if an enforced one fails.
 
 | Measure | Value | Gate |
 |---|---|---|
-| BE-\* items bound to a named test | 108 of 109 declared, high-water ratchet at 108 | M1, enforced |
+| BE-\* items bound to a named test | 109 of 109 declared, high-water ratchet at 109 | M1, enforced |
 | Test vectors cross-verified (Zig against Python `cryptography`) | 77 passed, 0 failed | M3, enforced |
 | Differential fuzz divergences (production parser against an independent Python reference) | 0 over 20000 records, reaching 69 of 72 parser exit points | M4, enforced |
-| Mutants killed by the test suite | 118 of 118 | M2, measured but **not** wired into the exit code |
-| Pre-authentication attack surface | 1173 of 1500 lines | M5, enforced |
+| Mutants killed by the test suite | 125 of 125 | M2, measured but **not** wired into the exit code |
+| Pre-authentication attack surface | 1246 of 1500 lines | M5, enforced |
 | Post-authentication attack surface | 1477 of 1500 lines | M11, enforced |
 | Parser exit points with a matching `Branch` member | 72 of 72, zero raw error returns | M9, enforced |
 | Pointer-minting builtins in `src/` | 0 | M8, enforced |

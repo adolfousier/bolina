@@ -586,3 +586,33 @@ from the mutant population), so 118/118 killed at sync-slice HEAD
 measurement and no mutation re-run was made. The
 remaining markers now number 1: the deferred MAY BE-MESH-03 (D-051).
 This supersedes the 2-marker count in the sync round addendum.
+
+## Store-and-forward round addendum (branch main, measured 2026-08-11)
+
+The mesh slice binds BE-MESH-03 (SPEC section 5.2a store-and-forward clause,
+normativized by the v0.3.4-draft edit): a relay MAY store forwarded ciphertext
+for offline recipients under declared bounds. Daniel's 2026-08-11 rulings
+("keep going, follow the spec"; "you are in charge of the decisions") closed
+the D-051 deferral: option 1, build and bind. D-058 supplies the mechanics
+warrant: storage keys by overlay_addr because session-scoped client indexes
+die with the session; drain rewrites the relay-layer recipient_index at
+registration time and never touches the ciphertext body (BE-MESH-02 opacity);
+BE-MESH-04's no-service rule for unknown indexes extends to storage. Declared
+bounds: 64 packets and 4 MiB per recipient (the byte bound is
+defense-in-depth, dominated by 64 times 2048), 2048-byte body cap, 72-hour
+TTL on the caller clock, 1024 global slots; quota exhaustion counts and never
+blocks live forwarding.
+
+Implementation: src/relay_store.zig 139 lines (non-surface per D-058, zero
+budget cost); src/relay.zig 183 to 256 lines (storeDeferred, drainFor,
+writeRelayRoute; M9 held clean via named error sets); relay sub-unit 256/510,
+pre-authentication unit 1246/1500. M1 ratchet 108 to 109 of 109, committed
+with the binding tests (758c92d): every marker the SPEC declares is now bound
+by code and literal tests. Mutation harness v16 adds mesh-03 to the
+denominator with seven mutants over relay_store.zig and relay.zig; the full
+suite reads 125/125 killed, zero survivors, mesh 5/5 section-5 properties
+covered, zero residue after the run (logs/mutation_mesh_full_v16.log). The
+remaining markers now number zero. This supersedes the 1-marker count in the
+BE-SURF-04 round addendum. M1 is complete; the daemon milestone (main.zig,
+13-line stub) is the next declared territory, estimate first
+(DAEMON-ESTIMATE.md).
