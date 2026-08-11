@@ -91,7 +91,7 @@ test "sync response round trip" {
 }
 
 // ---------------------------------------------------------------------------
-// BE_SYNC_01 — admission.
+// BE_SYNC_01: admission.
 // ---------------------------------------------------------------------------
 
 // GENESIS: member_group=0xAA*8, admin_group=0xBB*8 (same canonical vector as
@@ -136,7 +136,7 @@ test "BE_SYNC_01 admission requires an established session, member, not revoked"
 }
 
 // ---------------------------------------------------------------------------
-// BE_SYNC_02 — stateless response bounds.
+// BE_SYNC_02: stateless response bounds.
 // ---------------------------------------------------------------------------
 
 fn syncReq(channel_id: []const u8, have: []const u8, have_count: u8, max_envelopes: u16) sync_wire.SyncRequest {
@@ -219,7 +219,7 @@ test "BE_SYNC_02 response binds at min(max_envelopes,64), at 1 MiB, truncated ex
 }
 
 // ---------------------------------------------------------------------------
-// BE_SYNC_03 — bounded walk, surface, no retry.
+// BE_SYNC_03: bounded walk, surface, no retry.
 // ---------------------------------------------------------------------------
 
 test "BE_SYNC_03 walk stops at depth 128 and total 4096, surfaces unresolved, never retries" {
@@ -243,7 +243,7 @@ test "BE_SYNC_03 walk stops at depth 128 and total 4096, surfaces unresolved, ne
 }
 
 // ---------------------------------------------------------------------------
-// BE_SYNC_04 — per-peer sliding-window budgets.
+// BE_SYNC_04: per-peer sliding-window budgets.
 // ---------------------------------------------------------------------------
 
 test "BE_SYNC_04 9th serve refused, window slides, issue symmetric at 4, fail closed" {
@@ -276,7 +276,7 @@ test "BE_SYNC_04 9th serve refused, window slides, issue symmetric at 4, fail cl
 }
 
 // ---------------------------------------------------------------------------
-// BE_SYNC_05 — verify before adopt.
+// BE_SYNC_05: verify before adopt.
 // ---------------------------------------------------------------------------
 
 // Canonical intent envelope (test/vectors.json; same bytes verify_test.zig
