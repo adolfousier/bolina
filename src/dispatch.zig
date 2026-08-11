@@ -159,11 +159,14 @@ pub const Dispatch = struct {
         const entry = self.intents.entries[idx];
         const rec = self.senderFor(entry.intent_id) orelse return error.UnknownSender;
         const approver_cert = hooks.cert_for_sender(env.sender) orelse return error.UnknownSender;
+        // D-059 correction: the subject cert belongs to the intent sender and
+        // rides the same session seam, never construction state.
+        const subject_cert = hooks.cert_for_sender(&rec.sender) orelse return error.UnknownSender;
         const ctx = verify.GrantContext{
             .own_pubkey = self.own_pubkey,
             .trusted_ca_keys = self.trusted_ca_keys,
             .approver_cert = approver_cert,
-            .subject_cert = self.own_cert,
+            .subject_cert = subject_cert,
             .intent_sender = &rec.sender,
             .pending_intent_id = &entry.intent_id,
             .pending_resource_id = entry.resource_id[0..entry.resource_len],
