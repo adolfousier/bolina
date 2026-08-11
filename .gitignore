@@ -5,3 +5,6 @@ zig-out/
 __pycache__/
 *.pyc
 .fuzz-diff/
+
+# run receipts (mutation/gauntlet logs): referenced by closeouts, kept locally, never committed
+/logs/

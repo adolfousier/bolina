@@ -1,0 +1,25 @@
+# Ralph loop config for bolina (#947: a project file at the session working
+# dir wins over the machine-wide ~/.opencrabs/safety/ralph_loop.toml, whose
+# cargo-flavored verification table was leaking Rust commands into this Zig
+# tree). Only sections the binary actually reads; serde defaults cover rest.
+# Gate commands use the pinned toolchain path (zig is not on PATH).
+
+[forward]
+max_iterations = 20
+fresh_context = true
+state_on_disk = true
+
+[verification]
+# Gate ON: build/test completions must pass these before acceptance.
+enabled = true
+require_all_pass = true
+# Criteria declared but no commands for the type: log Uncertain, not Verified.
+criteria_policy = "downgrade"
+
+[[verification.task_type_commands]]
+task_type = "build"
+commands = ["$HOME/srv/zig/toolchain/zig-aarch64-macos-0.16.0/zig build"]
+
+[[verification.task_type_commands]]
+task_type = "test"
+commands = ["$HOME/srv/zig/toolchain/zig-aarch64-macos-0.16.0/zig build test"]
