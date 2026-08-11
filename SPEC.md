@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.3.4-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-11
+**Version:** 0.3.5-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-11
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -34,6 +34,8 @@ closed; this edit supplies the row the obligation owed. No envelope wire bytes c
 **Changes from v0.3.2-draft:** BE-SURF-03 subdivides the post-authentication unit into three sub-units: the wire-parser cap is ratcheted down to its measured floor of 652, session-state stays at 748, and a sync sub-unit (`src/parser/sync.zig`, cap 100 lines) is declared for the §6.4 wire formats; the cap sum stays 1500 and no unit cap is raised (D-054). `src/sync.zig` joins the non-surface list ahead of its code (D-054). §6.4 declares the BE-SYNC-04 rate budget. No envelope wire bytes change.
 
 **Changes from v0.3.3-draft:** §5.2a gains the store-and-forward mechanics clause for BE-MESH-03 (store condition, keying by `overlay_addr`, drain at registration with relay-layer `recipient_index` rewrite, declared quotas, TTL, and body-size cap); `src/relay_store.zig` joins the BE-SURF-03 non-surface list ahead of its code (D-058). No wire bytes change: the relay packet inventory stays types 5 and 6.
+
+**Changes from v0.3.4-draft:** BE-SURF-03 places `src/dispatch.zig` in the non-surface list ahead of its phase-B wiring (D-059): the daemon milestone's phase A dispatch core, state over parsed values, not reached by attacker bytes directly. No wire bytes change.
 
 ---
 
@@ -270,9 +272,10 @@ D-054.)
   - **Sync sub-unit:** `src/parser/sync.zig` — cap 100 lines.
 - **Non-surface:** `src/dag.zig`, `src/evidence.zig`, `src/verify.zig`, `src/ledger.zig`,
   `src/historical.zig`, `src/intent.zig`, `src/resolver.zig`, `src/render.zig`, `src/sync.zig`,
-  `src/relay_store.zig` — state over parsed values (D-018), not reached by attacker bytes
-  directly. intent.zig, resolver.zig and render.zig are placed ahead of their code (D-052),
-  sync.zig ahead of its code by D-054, relay_store.zig ahead of its code by D-058.
+  `src/relay_store.zig`, `src/dispatch.zig` — state over parsed values (D-018), not reached by
+  attacker bytes directly. intent.zig, resolver.zig and render.zig are placed ahead of their code
+  (D-052), sync.zig ahead of its code by D-054, relay_store.zig ahead of its code by D-058,
+  dispatch.zig ahead of its phase-B wiring by D-059.
 - **Harness and entry:** `src/main.zig`, `src/tests.zig`, `src/fuzz.zig`, `src/coverage.zig`,
   `src/evidence_test_helpers.zig`, `src/cert_test_helpers.zig`, and every `*_test.zig`.
 
