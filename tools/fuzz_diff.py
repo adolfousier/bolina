@@ -40,13 +40,26 @@ import refparse  # noqa: E402
 TAG_NAMES = {
     0x01: "envelope", 0x02: "intent", 0x03: "grant",
     0x04: "span", 0x05: "effect", 0x06: "claim",
+    0x07: "refusal", 0x08: "control_genesis", 0x09: "control",
+    0x0A: "handshake_initiation", 0x0B: "handshake_response",
+    0x0C: "cookie_reply", 0x0D: "data_packet_header",
+    0x0E: "relay_route", 0x0F: "relay_registration",
+    0x10: "fragment_header", 0x11: "lookup_request",
+    0x12: "lookup_response", 0x13: "cert",
+    0x14: "binding_message", 0x15: "sync_request",
+    0x16: "sync_response",
 }
 
 CORPUS_DESCRIPTION = (
-    "6 seeds (envelope, grant, intent, span, effect, claim from "
-    "test/vectors.json), 4 mutation operators (bit flip, byte overwrite, "
-    "truncate, saturate), 40% mutated-seed / 60% fully-random, 4096-byte "
-    "input cap, deterministic PRNG seed 0x626f6c696e61, tags 0x01-0x06, "
+    "22 seeds, one per parse entry point (envelope, intent, grant, span, "
+    "effect, claim, refusal from test/vectors.json; cert synthesized with a "
+    "two-signature CA list; binding built from the real vectors cert; "
+    "genesis, control, handshake initiation/response, cookie reply, "
+    "data header, relay route/registration, fragment header, lookup "
+    "request/response, sync request/response synthesized from their SPEC "
+    "field tables), 5 mutation operators (bit flip, byte overwrite, "
+    "truncate, saturate, extend), 40% mutated-seed / 60% fully-random, 4096-byte "
+    "input cap, deterministic PRNG seed 0x626f6c696e61, tags 0x01-0x16, "
     "record framing u8 tag || u16 BE len || bytes"
 )
 

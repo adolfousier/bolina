@@ -42,7 +42,7 @@
 #        coverage reached over the exit-point denominator, and the corpus
 #        description, so the SPEC section 11.6 receipt is visible on every
 #        run instead of living in a log nobody opens. The budget is bounded
-#        (M4_BUDGET, default 2000 records) to keep prumo fast; the full
+#        (M4_BUDGET, default 20000 records) to keep prumo fast; the full
 #        long-budget run is a separate campaign, not this gate. PENDING only
 #        when python3 is unavailable; a PASS without the reference parser
 #        would be a false green, so it never happens.
@@ -81,7 +81,7 @@
 # Exit code: number of failing ENFORCED gates (M1, M3, M4, M5, M6, M7, M8, M9,
 # M10, M11).
 # Usage: run from anywhere; ZIG=/path/to/zig overrides PATH lookup,
-#        M4_BUDGET=N sets the differential corpus size (default 2000).
+#        M4_BUDGET=N sets the differential corpus size (default 20000).
 
 set -u
 
@@ -199,7 +199,7 @@ fi
 # (records, divergences, coverage over the exit-point denominator, corpus
 # description) is parsed back out of the orchestrator's own output and printed
 # on the row: the numbers come from the run, never from this script.
-M4_BUDGET="${M4_BUDGET:-2000}"
+M4_BUDGET="${M4_BUDGET:-20000}"
 m4_verdict="PASS"
 m4_detail=""
 if ! command -v python3 >/dev/null 2>&1; then

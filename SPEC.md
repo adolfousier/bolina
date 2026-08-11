@@ -574,6 +574,13 @@ Messages larger than the packet limit are fragmented by the sender into a flat h
 discarded after a 30-second incomplete timeout. Fragments are protected by the session AEAD like
 any other packet; there is no unauthenticated fragmentation.
 
+`total` MUST be at least 1, and `index` MUST be strictly less than `total`. A header failing either
+is a parse failure, not a reassembly-time condition. *A fragment naming no position in its own
+message can never complete, so admitting it is how an attacker opens a reassembly context that is
+guaranteed to sit there until the timeout. The bound was enforced by the parser before it was
+written here; the differential oracle (§11.6) found the specification silent on a rule the code was
+applying, which is the direction the denominator law says must be closed in the specification.*
+
 **BE-TR-06** — Transport failure MUST NOT be reported upward as any form of success. Exactly one
 code path marks an envelope delivered, and it requires a bound session per BE-TR-01.
 
