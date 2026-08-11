@@ -427,3 +427,115 @@ test "DAEMON_A consumed registry: a reused grant_id refuses even against a fresh
     try std.testing.expectError(verify.VerifyError.AlreadyConsumed, d.dispatch(grantEnvelopeSigned(buildGrantWire(G_INTENT_ID_B, canonical_b, ACTION)), hooks, GRANT_NOW_MS));
     try std.testing.expectEqual(@as(usize, 1), effect_count);
 }
+
+
+// ---------------------------------------------------------------------------
+// Refusal happy path through the session seam: approver-signed refusal,
+// DOMAIN_REFUSAL signature, REJECTED transition inside the verify frame,
+// on_rejected fired exactly once. Plus the bad-signature gate test.
+// ---------------------------------------------------------------------------
+
+const R_INTENT_ID: [16]u8 = .{0x91} ** 16;
+const R_NOTE = "resource quota exceeded";
+
+var g_refusal_body: [160]u8 = undefined;
+var r_sender: [32]u8 = undefined;
+var r_sig: [64]u8 = undefined;
+var r_tbs: [64]u8 = undefined;
+var rejected_count: usize = 0;
+var rejected_intent_id: [16]u8 = undefined;
+
+fn testOnRejected(intent_id: []const u8) void {
+    rejected_count += 1;
+    @memcpy(&rejected_intent_id, intent_id);
+}
+
+fn buildRefusalWire(intent_id: [16]u8, note: []const u8) []u8 {
+    var n: usize = 0;
+    @memcpy(g_refusal_body[n..][0..16], &intent_id);
+    n += 16;
+    std.mem.writeInt(u16, g_refusal_body[n..][0..2], @intCast(note.len), .big);
+    n += 2;
+    @memcpy(g_refusal_body[n..][0..note.len], note);
+    n += note.len;
+    // tbs is every byte before sig; sign DOMAIN_REFUSAL || tbs (SPEC 5.4).
+    var msg: [1 + 96]u8 = undefined;
+    msg[0] = channel.DOMAIN_REFUSAL;
+    @memcpy(msg[1..][0..n], g_refusal_body[0..n]);
+    const sig = Ed.KeyPair.sign(cth.keypair(APPROVER_PREFIX), msg[0 .. 1 + n], null) catch unreachable;
+    const sig_bytes = Ed.Signature.toBytes(sig);
+    @memcpy(g_refusal_body[n..][0..64], &sig_bytes);
+    n += 64;
+    return g_refusal_body[0..n];
+}
+
+fn refusalEnvelopeSigned(body: []const u8) channel.Envelope {
+    const kp = cth.keypair(APPROVER_PREFIX);
+    r_sender = Ed.PublicKey.toBytes(kp.public_key);
+    @memcpy(r_tbs[0..G_TBS.len], G_TBS);
+    var msg: [1 + G_TBS.len]u8 = undefined;
+    msg[0] = channel.DOMAIN_ENVELOPE;
+    @memcpy(msg[1..], G_TBS);
+    const sig = Ed.KeyPair.sign(kp, &msg, null) catch unreachable;
+    r_sig = Ed.Signature.toBytes(sig);
+    return .{
+        .version = 2,
+        .channel_id = &CHANNEL_ID,
+        .sender = &r_sender,
+        .seq = 1,
+        .parent_count = 0,
+        .parents = "",
+        .ts = 1000,
+        .body_type = channel.BODY_REFUSAL,
+        .body = body,
+        .tbs = r_tbs[0..G_TBS.len],
+        .sig = &r_sig,
+    };
+}
+
+test "DAEMON_A refusal happy path: REJECTED inside the frame, on_rejected once" {
+    rejected_count = 0;
+    ensureGrantCerts();
+    const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
+    var res = resolver_mod.Resolver.init(&executor_pub);
+    var canonical_buf_r: [64]u8 = undefined;
+    const canonical_r = executorCanonical(&canonical_buf_r, "logs/deploy.log");
+    try res.add(canonical_r);
+    var d = dispatch_mod.Dispatch.init(res, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+    const hooks = dispatch_mod.Hooks{ .execute_effect = &testEffect, .cert_for_sender = &grantPathCertHook, .on_rejected = &testOnRejected };
+    // 1. The agent admits the intent (envelope signed by the agent key).
+    const len_i = buildIntentBodyId(&intent_body_a, &R_INTENT_ID, canonical_r, ACTION);
+    var a_sender: [32]u8 = undefined;
+    var a_sig: [64]u8 = undefined;
+    var a_tbs: [64]u8 = undefined;
+    try std.testing.expectEqual(dispatch_mod.Outcome.intent_admitted, try d.dispatch(agentEnvelopeSigned(intent_body_a[0..len_i], &a_sender, &a_sig, &a_tbs), hooks, GRANT_NOW_MS));
+    // 2. The approver refuses it: REJECTED transition inside the verify frame.
+    const refusal_wire = buildRefusalWire(R_INTENT_ID, R_NOTE);
+    try std.testing.expectEqual(dispatch_mod.Outcome.refusal_applied, try d.dispatch(refusalEnvelopeSigned(refusal_wire), hooks, GRANT_NOW_MS));
+    // 3. The intent is REJECTED; on_rejected fired exactly once, literal id.
+    var found_rejected = false;
+    for (d.intents.entries[0..d.intents.len]) |e| {
+        if (std.mem.eql(u8, &e.intent_id, &R_INTENT_ID) and e.state == .rejected) found_rejected = true;
+    }
+    try std.testing.expect(found_rejected);
+    try std.testing.expectEqual(@as(usize, 1), rejected_count);
+    try std.testing.expectEqual(R_INTENT_ID, rejected_intent_id);
+}
+
+test "DAEMON_A bad envelope signature refused at the structural gate" {
+    const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
+    var res = resolver_mod.Resolver.init(&executor_pub);
+    var canonical_buf_b: [64]u8 = undefined;
+    const canonical_b = executorCanonical(&canonical_buf_b, "logs/deploy.log");
+    try res.add(canonical_b);
+    var d = dispatch_mod.Dispatch.init(res, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+    const hooks = dispatch_mod.Hooks{ .execute_effect = &testEffect, .cert_for_sender = &grantPathCertHook, .on_rejected = &testOnRejected };
+    const len_i = buildIntentBodyId(&intent_body_a, &R_INTENT_ID, canonical_b, ACTION);
+    var a_sender: [32]u8 = undefined;
+    var a_sig: [64]u8 = undefined;
+    var a_tbs: [64]u8 = undefined;
+    const env = agentEnvelopeSigned(intent_body_a[0..len_i], &a_sender, &a_sig, &a_tbs);
+    a_sig[0] ^= 0xFF; // corrupt the envelope signature
+    try std.testing.expectError(dispatch_mod.DispatchError.BadEnvelope, d.dispatch(env, hooks, GRANT_NOW_MS));
+    try std.testing.expectEqual(@as(usize, 0), d.intents.len);
+}
