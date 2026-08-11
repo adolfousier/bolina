@@ -24,4 +24,5 @@ comptime {
     _ = @import("render_test.zig");
     _ = @import("sync_test.zig");
     _ = @import("fuzz_test.zig");
+    _ = @import("relay_store_test.zig");
 }
