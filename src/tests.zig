@@ -28,4 +28,5 @@ comptime {
     _ = @import("dispatch_test.zig");
     _ = @import("listener_test.zig");
     _ = @import("handshake_test.zig");
+    _ = @import("relay_serve_test.zig");
 }
