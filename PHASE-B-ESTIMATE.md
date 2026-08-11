@@ -1,6 +1,6 @@
 # PHASE-B-ESTIMATE.md — listener + live Noise handshake (daemon milestone, Phase B)
 
-**Status:** estimate. No code before the owed SPEC edit lands and this estimate closes.
+**Status:** CLOSED 2026-08-11. The owed SPEC edit landed at v0.3.6-draft (`fc7dfad`): §0.4 declares BE-EXEC-02/03 + BE-SESS-02, relay cap ratcheted 510→256, listener sub-unit cap 250. B1 listener 175 lines (`106e11a`), B2 live Noise_IK handshake +71, sub-unit 246/250 (`f253f51`). Ratchet 109→112, M1 112/112. Daemon mutation domain 7/7 killed (§0.4 3/3 covered), full suite 138/138 over 15 domains, receipt `logs/mutation_daemon_full.log`.
 **Date:** 2026-08-11
 **Authorization:** Daniel, 19:03 UTC "podes prosseguir com o plano". Estimate-first per house discipline.
 **Supersedes scope note:** DAEMON-ESTIMATE.md Phase B line ("listener and live session establishment, handshake over the wire").

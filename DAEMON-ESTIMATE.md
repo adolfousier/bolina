@@ -38,7 +38,7 @@ M1 is 109/109: every wire format, state machine, and verifier the SPEC declares 
 ## 4. Phase sketch (pending section 3)
 
 - Phase A (CLOSED 2026-08-11): in-memory dispatch core. Envelope admission, intent, `resolveAndAdmit`, Grant verification, the refusal transition, the effect call site, over the bound state machines, zero sockets. Seams falsified: routing, envelope gate, subject seam, executing transition, consumed commit (dispatch domain 6/6 killed, full suite 131/131). D-059 records the ruling plus one correction found below the line (verifyEnvelope is the BE-ENV-02 signature check, not a structural gate).
-- Phase B: listener and live session establishment, handshake over the wire.
+- Phase B (CLOSED 2026-08-11): listener and live session establishment, handshake over the wire. B1: flat libc UDP listener (BE-EXEC-02/03). B2: live Noise_IK handshake over the listener (BE-SESS-02 by construction). Daemon mutation domain: 7 mutants, 3/3 §0.4 properties covered, full suite 138/138.
 - Phase C: relay serving with store-and-forward drain on live registration.
 - Phase D: persistence and restart collapse semantics (intent restart collapse is bound as a state rule already; the daemon must survive it).
 
