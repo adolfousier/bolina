@@ -1,12 +1,12 @@
 # DAEMON-ESTIMATE.md — the daemon milestone: from M1 binding layer to running node
 
-**Status:** estimate skeleton (scope inventory, open questions, phase sketch). No code before the estimate closes and its rulings land.
+**Status:** Phase A CLOSED 2026-08-11 (D-059 ruling, SPEC v0.3.5-draft placement, dispatch core, grant and refusal happy paths through the seam, dispatch mutation domain 6/6, full suite 131/131, harness v17). Phases B-D open; estimate-first per phase.
 **Date:** 2026-08-11
 **Authorization:** Daniel, 2026-08-11 12:20 UTC: build the other things in parallel.
 
 ## 1. What M1 hands the daemon
 
-M1 is 109/109: every wire format, state machine, and verifier the SPEC declares is bound by code and literal tests, mutation-green across twelve domains (125/125, harness v16). `main.zig` is a 13-line DECLARED stub. Nothing listens, nothing dispatches, nothing persists. Every slice named the live wiring it deferred to this milestone:
+M1 is 109/109: every wire format, state machine, and verifier the SPEC declares is bound by code and literal tests, mutation-green across fourteen domains (131/131, harness v17). `main.zig` is a 13-line DECLARED stub. Nothing listens, nothing dispatches, nothing persists. Every slice named the live wiring it deferred to this milestone:
 
 | Slice unit | Bound now | The daemon owes |
 |---|---|---|
@@ -37,7 +37,7 @@ M1 is 109/109: every wire format, state machine, and verifier the SPEC declares 
 
 ## 4. Phase sketch (pending section 3)
 
-- Phase A: in-memory dispatch core. Envelope admission, intent, `resolveAndAdmit`, Grant verification, the effect call site, over the bound state machines, zero sockets. Falsifies the integration seams.
+- Phase A (CLOSED 2026-08-11): in-memory dispatch core. Envelope admission, intent, `resolveAndAdmit`, Grant verification, the refusal transition, the effect call site, over the bound state machines, zero sockets. Seams falsified: routing, envelope gate, subject seam, executing transition, consumed commit (dispatch domain 6/6 killed, full suite 131/131). D-059 records the ruling plus one correction found below the line (verifyEnvelope is the BE-ENV-02 signature check, not a structural gate).
 - Phase B: listener and live session establishment, handshake over the wire.
 - Phase C: relay serving with store-and-forward drain on live registration.
 - Phase D: persistence and restart collapse semantics (intent restart collapse is bound as a state rule already; the daemon must survive it).
