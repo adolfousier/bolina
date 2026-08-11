@@ -170,6 +170,7 @@ TARGETS = {
     "binding.zig": SRC / "binding.zig",
     "relay.zig": SRC / "relay.zig",
     "relay_store.zig": SRC / "relay_store.zig",
+    "dispatch.zig": SRC / "dispatch.zig",
     "ledger.zig": SRC / "ledger.zig",
     "historical.zig": SRC / "historical.zig",
     "intent.zig": SRC / "intent.zig",
@@ -404,6 +405,37 @@ def mesh_properties_from_spec():
         if re.search(pattern, text):
             props.add(key)
     return props
+
+
+# --- dispatch denominator, derived from the D-059 ruling -------------------
+#
+# The dispatch seam (src/dispatch.zig) is daemon-milestone code: it carries
+# no SPEC markers, so its denominator keys derive from the D-059 ruling's
+# recorded decisions, hardcoded here with the ruling as the cited text. The
+# law still holds: every property needs a killed mutant keyed to it, and
+# removing a ruling decision removes its key here.
+
+DISPATCH_PROPS = [
+    # (denominator key, what D-059 records)
+    ("dispatch-routing", "D-059 decision 2: body_type routes to its machine; "
+     "intent/grant/refusal run their full machines, utterance passes "
+     "through, control/effect routing-verified"),
+    ("dispatch-envelope-gate", "D-059 decision 1 (corrected): the dispatch "
+     "entry gate is verifyEnvelope, the BE-ENV-02 envelope signature check"),
+    ("dispatch-subject-seam", "D-059 correction: the subject cert belongs to "
+     "the intent sender and rides the cert_for_sender seam"),
+    ("dispatch-executing-transition", "D-059 decision 4: the EXECUTING "
+     "transition lands after a successful grant verify frame"),
+    ("dispatch-consumed-commit", "D-059 decision 3: the consumed-grant hook "
+     "is a check-and-set registry; first sight commits the grant_id"),
+]
+
+
+def dispatch_properties():
+    """The set of phase-A dispatch properties the slice must prove, each
+    derived from a recorded D-059 decision (daemon-milestone code carries no
+    SPEC markers)."""
+    return {key for key, _what in DISPATCH_PROPS}
 
 
 # --- relay denominator, derived from SPEC.md §5.2/§5.2a/BE-SIG-01 -----------
@@ -1036,6 +1068,33 @@ MUTANTS = [
      "revocation never consulted at use (cached verdict carried forward)",
      "    if (ctx.is_revoked(served.sig_pubkey)) return error.ServedCertRevoked;",
      "    // MUTANT: revocation never consulted at use"),
+    # dispatch seam (src/dispatch.zig): the D-059 ruling's recorded
+    # decisions, each attacked by a mutant keyed to its property. The seam
+    # tests, grant tests, and refusal tests in dispatch_test.zig kill them.
+    ("dispatch", "dispatch.zig", "WRONG-VALUE", "dispatch-routing",
+     "intent body_type routed to the utterance pass-through",
+     "            channel.BODY_INTENT => self.dispatchIntent(env, now_ms),",
+     "            channel.BODY_INTENT => Outcome.utterance, // MUTANT: intent never admitted"),
+    ("dispatch", "dispatch.zig", "WRONG-VALUE", "dispatch-routing",
+     "control body_type routed to the utterance pass-through",
+     "            channel.BODY_CONTROL => Outcome.control,",
+     "            channel.BODY_CONTROL => Outcome.utterance, // MUTANT: control misrouted"),
+    ("dispatch", "dispatch.zig", "CHECK-ABSENCE", "dispatch-envelope-gate",
+     "envelope signature gate skipped",
+     "        verify.verifyEnvelope(env) catch return error.BadEnvelope;",
+     "        // MUTANT: envelope signature gate skipped"),
+    ("dispatch", "dispatch.zig", "WRONG-SOURCE", "dispatch-subject-seam",
+     "subject cert taken from the approver, not the intent sender seam",
+     "        const subject_cert = hooks.cert_for_sender(&rec.sender) orelse return error.UnknownSender;",
+     "        const subject_cert = approver_cert; // MUTANT: subject cert taken from the approver"),
+    ("dispatch", "dispatch.zig", "CHECK-ABSENCE", "dispatch-executing-transition",
+     "EXECUTING transition skipped after the grant frame",
+     "        try self.intents.beginExecuting(idx);",
+     "        // MUTANT: EXECUTING transition skipped"),
+    ("dispatch", "dispatch.zig", "CHECK-ABSENCE", "dispatch-consumed-commit",
+     "grant_id never committed to the consumed registry",
+     "    if (consumed_len < MAX_CONSUMED and grant_id.len == channel.LEN_GRANT_ID) {\n        @memcpy(&consumed_registry[consumed_len], grant_id);\n        consumed_len += 1;\n    }",
+     "    // MUTANT: grant_id never committed"),
     # --- mesh-03: store-and-forward (relay_store.zig + relay.zig wiring,
     # SPEC 5.2a clause, D-058). Quota, body cap, TTL, storage order, opacity,
     # drain rewrite, and BE-MESH-04-extended no-service for unknown indexes.
@@ -1565,6 +1624,9 @@ def main():
     sync_props = sync_properties_from_spec()
     if not sync_props:
         sys.exit("FATAL: no sync properties detected in SPEC section 6.4")
+    dispatch_props = dispatch_properties()
+    if not dispatch_props:
+        sys.exit("FATAL: no dispatch properties detected (D-059 missing?)")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -1580,6 +1642,7 @@ def main():
     print(f"  intent properties (§8.2):        {sorted(intent_props)} ({len(intent_props)})")
     print(f"  refusal properties (§8.5):       {sorted(refusal_props)} ({len(refusal_props)})")
     print(f"  resolver properties (§8.4):      {sorted(resolver_props)} ({len(resolver_props)})")
+    print(f"  dispatch properties (D-059):     {sorted(dispatch_props)} ({len(dispatch_props)})")
     print(f"  render properties (§8.3):        {sorted(render_props)} ({len(render_props)})")
     print(f"  sync properties (§6.4):          {sorted(sync_props)} ({len(sync_props)})")
     print()
@@ -1610,6 +1673,10 @@ def main():
             if key not in mesh_props:
                 sys.exit(f"FATAL: mesh mutant '{name}' attacks '{key}', which "
                          "section 5 of SPEC does not declare (scope lie)")
+        elif domain == "dispatch":
+            if key not in dispatch_props:
+                sys.exit(f"FATAL: dispatch mutant '{name}' attacks '{key}', which "
+                         "the D-059 ruling does not record (scope lie)")
         elif domain == "relay":
             if key not in relay_props:
                 sys.exit(f"FATAL: relay mutant '{name}' attacks '{key}', which "
@@ -1732,6 +1799,11 @@ def main():
         m_cov = {r["key"] for r in m_run if r["killed"]}
         print(f"mesh:     {len(m_cov)}/{len(mesh_props)} section-5 "
               f"properties covered by killed mutants")
+    dp_run, dp_surv, dp_uncov, _ = gate_domain("dispatch", dispatch_props)
+    if in_scope("dispatch"):
+        dp_cov = {r["key"] for r in dp_run if r["killed"]}
+        print(f"dispatch: {len(dp_cov)}/{len(dispatch_props)} D-059 "
+              f"properties covered by killed mutants")
     r_run, r_surv, r_uncov, _ = gate_domain("relay", relay_props)
     if in_scope("relay"):
         r_cov = {r["key"] for r in r_run if r["killed"]}
@@ -1770,7 +1842,7 @@ def main():
     total_run = [r for r in results if not r["skipped"]]
     total_killed = sum(1 for r in total_run if r["killed"])
     print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
-          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv) + len(v_surv) + len(w_surv)}"
+          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv) + len(v_surv) + len(w_surv) + len(dp_surv)}"
           f" survived")
     if g_surv:
         print(f"  grant SURVIVORS: {g_surv}")
@@ -1798,6 +1870,8 @@ def main():
         print(f"  render SURVIVORS: {w_surv}")
     if x_surv:
         print(f"  sync SURVIVORS: {x_surv}")
+    if dp_surv:
+        print(f"  dispatch SURVIVORS: {dp_surv}")
     if g_uncov:
         print(f"  UNCOVERED grant checks: {g_uncov}")
     if e_uncov:
@@ -1824,6 +1898,8 @@ def main():
         print(f"  UNCOVERED render properties: {w_uncov}")
     if x_uncov:
         print(f"  UNCOVERED sync properties: {x_uncov}")
+    if dp_uncov:
+        print(f"  UNCOVERED dispatch properties: {dp_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
@@ -1835,7 +1911,8 @@ def main():
           and (not s_uncov) and (not c_uncov) and (not m_uncov)
           and (not r_uncov) and (not l_uncov)
           and (not i_uncov) and (not f_uncov) and (not v_uncov)
-          and (not w_uncov) and (not x_uncov) and g_cb)
+          and (not w_uncov) and (not x_uncov)
+          and (not dp_surv) and (not dp_uncov) and g_cb)
     return 0 if ok else 1
 
 
