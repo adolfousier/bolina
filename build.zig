@@ -125,7 +125,7 @@ pub fn build(b: *std.Build) void {
     //   zig build fuzz-corpus [-Dcorpus-budget=N] [-- OUT_PATH]
     //   zig build fuzz-diff [-- CORPUS_PATH]
     const corpus_opts = b.addOptions();
-    corpus_opts.addOption(bool, "coverage_enabled", false);
+    corpus_opts.addOption(bool, "coverage_enabled", coverage_on);
     corpus_opts.addOption(u64, "fuzz_budget", fuzz_budget);
     corpus_opts.addOption(FuzzMode, "fuzz_mode", FuzzMode.corpus);
     corpus_opts.addOption(u64, "corpus_budget", corpus_budget);
@@ -144,7 +144,7 @@ pub fn build(b: *std.Build) void {
     corpus_step.dependOn(&run_corpus.step);
 
     const diff_opts = b.addOptions();
-    diff_opts.addOption(bool, "coverage_enabled", false);
+    diff_opts.addOption(bool, "coverage_enabled", coverage_on);
     diff_opts.addOption(u64, "fuzz_budget", fuzz_budget);
     diff_opts.addOption(FuzzMode, "fuzz_mode", FuzzMode.diff);
     diff_opts.addOption(u64, "corpus_budget", corpus_budget);

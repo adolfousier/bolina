@@ -211,24 +211,30 @@ fn runChaos() !void {
     // built with -Dcoverage, which sets coverage.ENABLED comptime true. Manual
     // instrumentation IS the measurement: the toolchain's -ffuzz coverage has
     // no script-readable output, so hit_count is read directly here.
-    if (coverage.ENABLED) {
-        var reached: usize = 0;
+    printCoverageReport();
+}
+
+// SPEC section 11.6 receipt shape: exit points reached over the denominator,
+// the unreached list, and the corpus description. Shared by chaos and diff
+// modes; comptime-off unless built with -Dcoverage.
+fn printCoverageReport() void {
+    if (!coverage.ENABLED) return;
+    var reached: usize = 0;
+    for (0..coverage.COUNT) |i| {
+        if (coverage.hit_count[i] > 0) reached += 1;
+    }
+    std.debug.print("COVERAGE: {d}/{d} exit points reached\n", .{ reached, coverage.COUNT });
+    if (reached == coverage.COUNT) {
+        std.debug.print("COVERAGE: no unreached exit points\n", .{});
+    } else {
+        std.debug.print("COVERAGE: unreached exit points:\n", .{});
         for (0..coverage.COUNT) |i| {
-            if (coverage.hit_count[i] > 0) reached += 1;
-        }
-        std.debug.print("COVERAGE: {d}/{d} exit points reached\n", .{ reached, coverage.COUNT });
-        if (reached == coverage.COUNT) {
-            std.debug.print("COVERAGE: no unreached exit points\n", .{});
-        } else {
-            std.debug.print("COVERAGE: unreached exit points:\n", .{});
-            for (0..coverage.COUNT) |i| {
-                if (coverage.hit_count[i] == 0) {
-                    std.debug.print("  - {s}\n", .{@tagName(@as(coverage.Branch, @enumFromInt(i)))});
-                }
+            if (coverage.hit_count[i] == 0) {
+                std.debug.print("  - {s}\n", .{@tagName(@as(coverage.Branch, @enumFromInt(i)))});
             }
         }
-        std.debug.print("COVERAGE: corpus = 6 seeds (envelope, grant, intent, span, effect, claim from test/vectors.json), 4 mutation operators (bit flip, byte overwrite, truncate, saturate), 40% mutated-seed / 60% fully-random, 4096-byte input cap\n", .{});
     }
+    std.debug.print("COVERAGE: corpus = 6 seeds (envelope, grant, intent, span, effect, claim from test/vectors.json), 4 mutation operators (bit flip, byte overwrite, truncate, saturate), 40% mutated-seed / 60% fully-random, 4096-byte input cap\n", .{});
 }
 
 // Corpus-emit mode (D-056 part two). Writes tagged records round-robin over
@@ -315,4 +321,7 @@ fn runDiff(init: std.process.Init) !void {
     }
     try out.flush();
     std.debug.print("DIFF DONE: {d} records, {d} accepted, {d} rejected\n", .{ idx, accepted, rejected });
+    // SPEC section 11.6 receipt for the differential run (built with
+    // -Dcoverage): exit points reached plus the corpus description.
+    printCoverageReport();
 }

@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""fuzz_diff.py - differential fuzz oracle orchestrator (BE-SURF-04, D-056).
+
+Drives one bounded differential run:
+
+  1. emit a deterministic corpus with the Zig harness
+       zig build fuzz-corpus -Dcorpus-budget=N -- CORPUS
+  2. replay the SAME corpus file through the Zig production parsers
+       zig build fuzz-diff -Dcoverage -- CORPUS
+  3. replay the SAME corpus file through tools/refparse.py, the independent
+     Python reference parser written from the SPEC field tables alone
+  4. compare the two verdict streams record by record
+
+Any divergence is a genuine parser defect (that is the oracle working).
+Divergent records are saved under the work dir for audit, one .bin with the
+raw bytes and one .txt with both verdicts, and the orchestrator exits
+non-zero. The receipt block follows the SPEC section 11.6 shape: coverage of
+the parsing code reached plus the seed corpus description.
+
+Usage:
+  python3 tools/fuzz_diff.py [--budget N] [--corpus PATH] [--workdir DIR]
+                             [--zig PATH]
+
+Exit codes: 0 clean run, zero divergences; 1 divergences found; 2
+infrastructure failure (build error, missing corpus, broken framing).
+"""
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+
+import refparse  # noqa: E402
+
+TAG_NAMES = {
+    0x01: "envelope", 0x02: "intent", 0x03: "grant",
+    0x04: "span", 0x05: "effect", 0x06: "claim",
+}
+
+CORPUS_DESCRIPTION = (
+    "6 seeds (envelope, grant, intent, span, effect, claim from "
+    "test/vectors.json), 4 mutation operators (bit flip, byte overwrite, "
+    "truncate, saturate), 40% mutated-seed / 60% fully-random, 4096-byte "
+    "input cap, deterministic PRNG seed 0x626f6c696e61, tags 0x01-0x06, "
+    "record framing u8 tag || u16 BE len || bytes"
+)
+
+
+def run(cmd, capture_stdout=False):
+    """Run a command in the repo root; return (rc, stdout, stderr)."""
+    p = subprocess.run(cmd, cwd=REPO,
+                       stdout=subprocess.PIPE if capture_stdout else None,
+                       stderr=subprocess.PIPE, text=True)
+    return p.returncode, p.stdout or "", p.stderr or ""
+
+
+def emit_corpus(zig, budget, corpus_path):
+    rc, _, err = run([zig, "build", "fuzz-corpus",
+                      "-Dcorpus-budget=%d" % budget, "--", corpus_path])
+    if rc != 0:
+        sys.stderr.write(err)
+        return False
+    m = re.search(r"CORPUS EMITTED: (\d+) records", err)
+    if not m or int(m.group(1)) != budget:
+        sys.stderr.write("fuzz-corpus emitted wrong record count\n")
+        return False
+    return True
+
+
+def zig_diff(zig, corpus_path):
+    """Run the Zig diff binary with coverage on; return (ok, verdicts, stderr)."""
+    rc, out, err = run([zig, "build", "fuzz-diff", "-Dcoverage",
+                        "--", corpus_path], capture_stdout=True)
+    if rc != 0:
+        sys.stderr.write(err)
+        return False, [], err
+    verdicts = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 5 and parts[0] == "REC":
+            verdicts.append((int(parts[1]), int(parts[3], 16), parts[4]))
+    return True, verdicts, err
+
+
+def save_divergence(workdir, idx, tag, payload, py_verdict, zig_verdict):
+    ddir = os.path.join(workdir, "divergences")
+    os.makedirs(ddir, exist_ok=True)
+    name = "rec_%06d_tag_0x%02x_%s" % (idx, tag, TAG_NAMES.get(tag, "unknown"))
+    with open(os.path.join(ddir, name + ".bin"), "wb") as f:
+        f.write(payload)
+    with open(os.path.join(ddir, name + ".txt"), "w") as f:
+        f.write("record: %d\n" % idx)
+        f.write("tag: 0x%02x (%s)\n" % (tag, TAG_NAMES.get(tag, "unknown")))
+        f.write("length: %d bytes\n" % len(payload))
+        f.write("python reference: %s\n" % py_verdict)
+        f.write("zig production: %s\n" % ("accept" if zig_verdict == "A"
+                                          else "reject"))
+        f.write("payload_hex:\n%s\n" % payload.hex())
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--budget", type=int, default=20000,
+                    help="corpus record count (default 20000)")
+    ap.add_argument("--corpus", default=None, help="corpus file path")
+    ap.add_argument("--workdir", default=None,
+                    help="work directory (default .fuzz-diff under repo)")
+    ap.add_argument("--zig", default=os.environ.get("ZIG", "zig"),
+                    help="zig binary (default $ZIG or PATH)")
+    args = ap.parse_args()
+
+    workdir = args.workdir or os.path.join(REPO, ".fuzz-diff")
+    os.makedirs(workdir, exist_ok=True)
+    corpus_path = args.corpus or os.path.join(workdir, "corpus.bin")
+
+    print("== BE-SURF-04 differential fuzz oracle (D-056) ==")
+    print("budget: %d records" % args.budget)
+
+    # 1. corpus emit (Zig)
+    if not emit_corpus(args.zig, args.budget, corpus_path):
+        print("FAIL: corpus emit", file=sys.stderr)
+        return 2
+    print("corpus: %s (%d bytes)" % (corpus_path, os.path.getsize(corpus_path)))
+
+    # 2. Zig diff replay (production parsers, coverage on)
+    ok, zig_verdicts, zig_err = zig_diff(args.zig, corpus_path)
+    if not ok:
+        print("FAIL: zig diff replay", file=sys.stderr)
+        return 2
+    done = re.search(r"DIFF DONE: (\d+) records, (\d+) accepted, (\d+) rejected",
+                     zig_err)
+    if not done or int(done.group(1)) != args.budget:
+        print("FAIL: zig verdict stream does not match record count",
+              file=sys.stderr)
+        return 2
+
+    # 3. Python reference replay
+    with open(corpus_path, "rb") as f:
+        data = f.read()
+    py_results, framing_ok = refparse.replay_corpus(data)
+    if not framing_ok:
+        print("FAIL: corpus framing broken", file=sys.stderr)
+        return 2
+    if len(py_results) != len(zig_verdicts):
+        print("FAIL: replay count mismatch zig=%d py=%d" %
+              (len(zig_verdicts), len(py_results)), file=sys.stderr)
+        return 2
+
+    # 4. compare verdict streams, record by record
+    # Re-walk the corpus to keep each divergent record's raw bytes.
+    records = []
+    pos = 0
+    for idx, tag, _ in py_results:
+        length = int.from_bytes(data[pos + 1:pos + 3], "big")
+        records.append((idx, tag, data[pos + 3:pos + 3 + length]))
+        pos += 3 + length
+
+    divergences = 0
+    py_accepted = sum(1 for _, _, v in py_results if v.ok)
+    for (idx, tag, py_v), (z_idx, z_tag, z_verdict) in zip(py_results,
+                                                           zig_verdicts):
+        if idx != z_idx or tag != z_tag:
+            print("FAIL: record stream desync at %d" % idx, file=sys.stderr)
+            return 2
+        py_verdict = "A" if py_v.ok else "R"
+        if py_verdict != z_verdict:
+            divergences += 1
+            save_divergence(workdir, idx, tag, records[idx][2],
+                            str(py_v), z_verdict)
+            print("DIVERGENCE rec=%d tag=0x%02x (%s): python=%s zig=%s" %
+                  (idx, tag, TAG_NAMES.get(tag, "?"),
+                   py_v, z_verdict))
+
+    # 5. receipt (SPEC section 11.6 shape)
+    cov = re.search(r"COVERAGE: (\d+)/(\d+) exit points reached", zig_err)
+    print()
+    print("== receipt ==")
+    print("records: %d (budget %d)" % (len(py_results), args.budget))
+    print("zig production: %s accepted, %s rejected" %
+          (done.group(2), done.group(3)))
+    print("python reference: %d accepted, %d rejected" %
+          (py_accepted, len(py_results) - py_accepted))
+    print("divergences: %d" % divergences)
+    if cov:
+        print("coverage: %s/%s parser exit points reached" %
+              (cov.group(1), cov.group(2)))
+    else:
+        print("coverage: NOT REPORTED (diff binary built without -Dcoverage?)")
+    print("corpus: %s" % CORPUS_DESCRIPTION)
+
+    if divergences:
+        print()
+        print("VERDICT: FAIL - %d divergence(s) saved under %s/divergences" %
+              (divergences, workdir))
+        return 1
+    print()
+    print("VERDICT: PASS - production parser and reference parser agree on "
+          "every record")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
