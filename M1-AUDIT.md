@@ -544,3 +544,45 @@ claimed. The
 remaining markers now number 2: BE-SURF-04 (fuzz oracle, next per §13
 lineage) and the deferred MAY BE-MESH-03 (D-051). This supersedes the
 7-marker count in the render round addendum.
+
+## BE-SURF-04 round addendum (branch main, measured 2026-08-11)
+
+The fuzz oracle slice binds BE-SURF-04 (SPEC section 11.6, differential
+fuzzing; D-056 rules the design, D-057 rules the expansion to every parse
+entry point and the two findings it produced). One literal test binds the
+marker by name (D-027): `test "BE_SURF_04 differential replay flags an
+injected divergence and agrees on honest verdicts"` in `src/fuzz_test.zig`
+exercises the replay-and-compare machinery inside the suite (corpus
+framing, tagged routing to the parse entry points, positional verdict
+comparison), flags exactly one divergence on a doctored reference stream,
+flags zero on an honest one, and fails loudly on framing defects rather
+than emitting silent verdicts; ratchet 107 to 108 of 109, high water
+committed with the tests (3a8b0a3). The reference parser lives outside
+the Zig tree by construction (`tools/refparse.py`, written from the SPEC
+field tables alone and silent wherever the SPEC is silent, D-056 decision
+1: a reference transcribed from the code would agree by construction and
+gate nothing); `src/fuzz.zig` carries corpus-emit and diff-replay modes,
+and `tools/fuzz_diff.py` runs the bounded differential campaign, enforced
+at M4 by `tools/prumo-verify` (zero divergences required; the row prints
+coverage and corpus every run). D-057 wired all 22 parse entry points
+(the count is grep-derived from the source and corrects the plan's stale
+20), added the `extend` mutation operator because the four shrinking
+operators cannot reach trailing-byte exits, and raised the merge-gate
+budget to 20000 records (about 8 seconds). The expansion produced two
+findings, both closed in the specification rather than the code: SPEC 4.5
+gained the fragment header bound (`total` at least 1, `index` strictly
+less than `total`) that the parser enforced while the specification was
+silent, and the reference's misplacement of BE-CTRL-01's action-type
+check at the parse layer was corrected (the check lives whole at the
+verifier, `src/verify.zig`). The M4 corpus reaches 69 of the 72 exit
+points with three unreached exits named on the gate row every run
+(`data_payload_oversize`, `cert_ca_count_oversize`, `bind_cert_len_zero`,
+each a shape the corpus never constructs rather than a path that does not
+exist); the separate chaos-mode re-measure in LANGUAGE.md reads 71 of 72
+at 4,000,000 inputs. Mutation: no `TARGETS` file in `tools/mutation-test.py`
+was touched by this slice (`src/fuzz.zig` is instrumentation, excluded
+from the mutant population), so 118/118 killed at sync-slice HEAD
+`8055801` (harness v15, mutation_sync_full.log) remains the standing
+measurement and no mutation re-run was made. The
+remaining markers now number 1: the deferred MAY BE-MESH-03 (D-051).
+This supersedes the 2-marker count in the sync round addendum.
