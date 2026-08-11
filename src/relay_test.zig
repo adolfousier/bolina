@@ -242,3 +242,69 @@ test "BE_MESH_02 relay holds no key material (no session state in RelayTable)" {
     // RelayEntry = 16 (overlay_addr) + 4 (relay_index) + 4 (client_index) + 8 (expiry) = 32 bytes
     try std.testing.expectEqual(@as(usize, 32), entry_size);
 }
+
+// ---------------------------------------------------------------------------
+// Store-and-forward wiring (BE-MESH-03, D-058).
+// ---------------------------------------------------------------------------
+
+const relay_store = @import("relay_store.zig");
+
+// Literal registration identity from REG_HEX (D-027).
+const ADDR_WIRE: [relay.LEN_OVERLAY_ADDR]u8 = decodeHex("fd0102030405060708090a0b0c0d0e0f");
+const BODY_DEFERRED = "opaque-deferred-ciphertext-body";
+
+var wire_store: relay_store.Store = undefined;
+var wire_table: relay.RelayTable = undefined;
+
+test "BE_MESH_03 storeDeferred resolves through the table; unknown and stale get no service" {
+    wire_store.reset();
+    wire_table = relay.RelayTable.init();
+    _ = wire_table.insert(.{
+        .overlay_addr = ADDR_WIRE,
+        .relay_index = 10,
+        .client_index = 20, // REG_HEX literal
+        .expiry = 2000,
+    });
+    // known recipient stores, keyed by overlay_addr
+    try relay.storeDeferred(&wire_table, &wire_store, .{ .sender_index = 1, .recipient_index = 20, .timestamp = 1000 }, BODY_DEFERRED, 1000_000);
+    try std.testing.expectEqual(@as(usize, 1), wire_store.count);
+    try std.testing.expectEqual(ADDR_WIRE, wire_store.packets[0].recipient_addr);
+    // unknown index: no service, storage included (BE-MESH-04 extended)
+    try std.testing.expectError(error.UnknownRecipient, relay.storeDeferred(&wire_table, &wire_store, .{ .sender_index = 1, .recipient_index = 999, .timestamp = 1000 }, BODY_DEFERRED, 1000_000));
+    try std.testing.expectEqual(@as(usize, 1), wire_store.count);
+    // stale route: refused exactly as on the live path (300s skew)
+    try std.testing.expectError(error.StaleRoute, relay.storeDeferred(&wire_table, &wire_store, .{ .sender_index = 1, .recipient_index = 20, .timestamp = 500 }, BODY_DEFERRED, 1000_000));
+    try std.testing.expectEqual(@as(usize, 1), wire_store.count);
+}
+
+test "BE_MESH_03 drainFor rewrites recipient_index; body stays byte-for-byte; header round-trips" {
+    wire_store.reset();
+    wire_table = relay.RelayTable.init();
+    _ = wire_table.insert(.{ .overlay_addr = ADDR_WIRE, .relay_index = 10, .client_index = 20, .expiry = 2000 });
+    try relay.storeDeferred(&wire_table, &wire_store, .{ .sender_index = 7, .recipient_index = 20, .timestamp = 1000 }, BODY_DEFERRED, 1000_000);
+    // recipient re-registers with a fresh client_index; drain rewrites to it
+    var out: [4]relay.DrainedForward = undefined;
+    const n = relay.drainFor(&wire_store, ADDR_WIRE, 42, 1001_000, &out);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    // rewritten header round-trips through the real parser
+    const route = try relay.parseRelayRoute(&out[0].header);
+    try std.testing.expectEqual(@as(u32, 7), route.sender_index); // sender preserved
+    try std.testing.expectEqual(@as(u32, 42), route.recipient_index); // rewritten
+    try std.testing.expectEqual(@as(u64, 1001), route.timestamp); // fresh stamp
+    // ciphertext body untouched (BE-MESH-02 opacity)
+    try std.testing.expectEqualStrings(BODY_DEFERRED, out[0].body);
+    // queue is empty; a second drain yields nothing
+    try std.testing.expectEqual(@as(usize, 0), relay.drainFor(&wire_store, ADDR_WIRE, 42, 1002_000, &out));
+    try std.testing.expectEqual(@as(usize, 0), wire_store.count);
+}
+
+test "BE_MESH_03 writeRelayRoute mirrors parseRelayRoute and refuses small buffers" {
+    var buf: [relay.LEN_RELAY_ROUTE]u8 = undefined;
+    try relay.writeRelayRoute(&buf, .{ .sender_index = 5, .recipient_index = 9, .timestamp = 1234567 });
+    const route = try relay.parseRelayRoute(&buf);
+    try std.testing.expectEqual(@as(u32, 5), route.sender_index);
+    try std.testing.expectEqual(@as(u32, 9), route.recipient_index);
+    try std.testing.expectEqual(@as(u64, 1234567), route.timestamp);
+    var small: [relay.LEN_RELAY_ROUTE - 1]u8 = undefined;
+    try std.testing.expectError(error.BufferTooSmall, relay.writeRelayRoute(&small, .{ .sender_index = 5, .recipient_index = 9, .timestamp = 1 }));
+}

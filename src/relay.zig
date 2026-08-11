@@ -14,6 +14,7 @@ const std = @import("std");
 const parser = @import("parser.zig");
 const coverage = @import("coverage.zig");
 const verify = @import("verify.zig");
+const relay_store = @import("relay_store.zig");
 
 // ---------------------------------------------------------------------------
 // Constants (SPEC §5.2a, BE-SIG-01).
@@ -181,3 +182,75 @@ pub const ForwardError = error{
     StaleRoute,
     UnknownRecipient,
 };
+
+// ---------------------------------------------------------------------------
+// Store-and-forward wiring (BE-MESH-03, D-058, SPEC v0.3.4-draft clause).
+// Storage keys by overlay_addr because client indexes die with the session
+// and registration is one-shot per session. Drain rewrites the relay-layer
+// recipient_index at registration time; the ciphertext body passes through
+// byte-for-byte (BE-MESH-02 opacity). The rewrite touches relay routing
+// metadata only: D-058 and the SPEC clause are the written warrant.
+// ---------------------------------------------------------------------------
+
+pub const StoreDeferredError = relay_store.StoreError || error{ StaleRoute, UnknownRecipient };
+
+// storeDeferred (BE-MESH-03, D-058): store a forward whose live delivery
+// is not possible. The recipient MUST resolve through the registration
+// table: unknown indexes receive no service, storage included (D-058
+// extends BE-MESH-04 to storage). Timestamp skew is enforced exactly as on
+// the live path: stale routes are never stored.
+pub fn storeDeferred(table: *const RelayTable, store: *relay_store.Store, route: RelayRoute, body: []const u8, now_ms: u64) StoreDeferredError!void {
+    const now_s = now_ms / 1000;
+    if (route.timestamp > now_s + TIMESTAMP_SKEW or route.timestamp + TIMESTAMP_SKEW < now_s)
+        return StoreDeferredError.StaleRoute;
+    for (table.entries[0..table.count]) |e| {
+        if (e.client_index == route.recipient_index) {
+            try store.store(e.overlay_addr, route.sender_index, body, now_ms);
+            return;
+        }
+    }
+    return StoreDeferredError.UnknownRecipient;
+}
+
+pub const WriteRouteError = error{BufferTooSmall};
+
+// writeRelayRoute (D-058): serialize a type-5 route header, byte-for-byte
+// mirror of parseRelayRoute. The drain path uses it to rewrite the
+// relay-layer recipient_index; the ciphertext body is never touched here.
+pub fn writeRelayRoute(buf: []u8, route: RelayRoute) WriteRouteError!void {
+    if (buf.len < LEN_RELAY_ROUTE) return WriteRouteError.BufferTooSmall;
+    buf[0] = MSG_RELAY_ROUTE;
+    buf[1] = 0;
+    buf[2] = 0;
+    buf[3] = 0;
+    std.mem.writeInt(u32, buf[4..8], route.sender_index, .big);
+    std.mem.writeInt(u32, buf[8..12], route.recipient_index, .big);
+    std.mem.writeInt(u64, buf[12..20], route.timestamp, .big);
+}
+
+pub const DrainedForward = struct {
+    header: [LEN_RELAY_ROUTE]u8, // rewritten route header, ready to send
+    body: []const u8, // borrows engine slot storage until the next store()
+};
+
+// drainFor (BE-MESH-03, D-058): drain stored packets for a freshly
+// registered recipient in storage order, rewriting each relay-layer
+// recipient_index to the fresh client_index and stamping a fresh
+// timestamp. Returns the number of drained packets written into `out`;
+// the caller bounds the batch and forwards each packet before the next
+// store() call.
+pub fn drainFor(store: *relay_store.Store, overlay_addr: [LEN_OVERLAY_ADDR]u8, new_client_index: u32, now_ms: u64, out: []DrainedForward) usize {
+    var n: usize = 0;
+    while (n < out.len) {
+        const d = store.drainNext(overlay_addr, now_ms) orelse break;
+        var header: [LEN_RELAY_ROUTE]u8 = undefined;
+        writeRelayRoute(&header, .{
+            .sender_index = d.sender_index,
+            .recipient_index = new_client_index,
+            .timestamp = now_ms / 1000,
+        }) catch unreachable; // fixed 20-byte buffer, provably large enough
+        out[n] = .{ .header = header, .body = d.body };
+        n += 1;
+    }
+    return n;
+}
