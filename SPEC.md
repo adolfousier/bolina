@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.3.3-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-10
+**Version:** 0.3.4-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-11
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -32,6 +32,8 @@ BE-RES-05 names requires every signature to be domain-tagged (BE-SIG-01) and the
 closed; this edit supplies the row the obligation owed. No envelope wire bytes change.
 
 **Changes from v0.3.2-draft:** BE-SURF-03 subdivides the post-authentication unit into three sub-units: the wire-parser cap is ratcheted down to its measured floor of 652, session-state stays at 748, and a sync sub-unit (`src/parser/sync.zig`, cap 100 lines) is declared for the §6.4 wire formats; the cap sum stays 1500 and no unit cap is raised (D-054). `src/sync.zig` joins the non-surface list ahead of its code (D-054). §6.4 declares the BE-SYNC-04 rate budget. No envelope wire bytes change.
+
+**Changes from v0.3.3-draft:** §5.2a gains the store-and-forward mechanics clause for BE-MESH-03 (store condition, keying by `overlay_addr`, drain at registration with relay-layer `recipient_index` rewrite, declared quotas, TTL, and body-size cap); `src/relay_store.zig` joins the BE-SURF-03 non-surface list ahead of its code (D-058). No wire bytes change: the relay packet inventory stays types 5 and 6.
 
 ---
 
@@ -267,10 +269,10 @@ D-054.)
   - **Session-state sub-unit:** `src/session.zig`, `src/binding.zig`, `src/replay.zig`, `src/reassembly.zig` — cap 748 lines.
   - **Sync sub-unit:** `src/parser/sync.zig` — cap 100 lines.
 - **Non-surface:** `src/dag.zig`, `src/evidence.zig`, `src/verify.zig`, `src/ledger.zig`,
-  `src/historical.zig`, `src/intent.zig`, `src/resolver.zig`, `src/render.zig`, `src/sync.zig` —
-  state over parsed values (D-018), not reached by attacker bytes directly. intent.zig,
-  resolver.zig and render.zig are placed ahead of their code (D-052), sync.zig ahead of its code
-  by D-054.
+  `src/historical.zig`, `src/intent.zig`, `src/resolver.zig`, `src/render.zig`, `src/sync.zig`,
+  `src/relay_store.zig` — state over parsed values (D-018), not reached by attacker bytes
+  directly. intent.zig, resolver.zig and render.zig are placed ahead of their code (D-052),
+  sync.zig ahead of its code by D-054, relay_store.zig ahead of its code by D-058.
 - **Harness and entry:** `src/main.zig`, `src/tests.zig`, `src/fuzz.zig`, `src/coverage.zig`,
   `src/evidence_test_helpers.zig`, `src/cert_test_helpers.zig`, and every `*_test.zig`.
 
@@ -677,6 +679,20 @@ replay of old route headers.*
 The registration table (type 6) is bounded to 4096 entries; exceeding this bound MUST refuse
 new registrations with a silent drop. *Registrations are one-shot: a node may register with a
 relay exactly once per session. Re-registration is not supported.*
+
+**Store-and-forward (BE-MESH-03, D-058).** A relay MAY store a type-5 forward packet when the
+recipient's registration is known (an unexpired type-6 entry maps the `recipient_index` to an
+`overlay_addr`) but live-path delivery is not possible. Storage is keyed by the recipient's
+`overlay_addr`; the storage unit is the whole forward packet (route header and ciphertext body).
+Bounds are declared: at most 64 stored packets per recipient, at most 4 MiB aggregate per
+recipient, stored bodies of at most 2048 bytes, and a TTL of 72 hours from storage. Bounds are
+enforced at store time; the TTL purges lazily at store and drain against the caller's clock. A
+relay MUST NOT store for recipients it cannot identify: the no-service rule for unknown
+`recipient_index` values above extends to storage. When a stored recipient registers (a type-6
+registration accepted for its `overlay_addr`), the relay MUST drain that recipient's stored queue
+in store order, rewriting each packet's relay-layer `recipient_index` to the fresh
+`client_index`; the Noise ciphertext body is forwarded byte-for-byte unchanged (BE-MESH-02).
+Quota exhaustion drops the store, surfaces a counter, and never blocks live forwarding.
 
 #### Type 6 — Relay registration (124 bytes)
 
