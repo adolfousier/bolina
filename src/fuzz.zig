@@ -292,36 +292,63 @@ fn runDiff(init: std.process.Init) !void {
     const dir = std.Io.Dir.cwd();
     const data = try dir.readFileAlloc(io, corpus_path, a, .limited64(512 * 1024 * 1024));
 
+    // Every record is at least 3 framing bytes, so this bounds the count.
+    const cap = data.len / 3 + 1;
+    const tags = try a.alloc(u8, cap);
+    const verdicts = try a.alloc(bool, cap);
+    const n = replayVerdicts(data, tags, verdicts) catch |err| {
+        std.debug.print("CORPUS {s} during replay\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
     var obuf: [64 * 1024]u8 = undefined;
     var out = std.Io.File.stdout().writer(io, &obuf);
-    var pos: usize = 0;
-    var idx: u64 = 0;
     var accepted: u64 = 0;
     var rejected: u64 = 0;
-    while (pos < data.len) {
-        if (data.len - pos < 3) {
-            try out.flush();
-            std.debug.print("CORPUS FRAMING TRUNCATED at record {d}\n", .{idx});
-            std.process.exit(1);
-        }
-        const tag = data[pos];
-        const len = std.mem.readInt(u16, data[pos + 1 ..][0..2], .big);
-        pos += 3;
-        if (data.len - pos < len) {
-            try out.flush();
-            std.debug.print("CORPUS RECORD TRUNCATED at record {d}\n", .{idx});
-            std.process.exit(1);
-        }
-        const rec = data[pos .. pos + len];
-        pos += len;
-        const ok = parseByTag(tag, rec);
-        if (ok) accepted += 1 else rejected += 1;
-        try out.interface.print("REC {d} TAG 0x{x:0>2} {s}\n", .{ idx, tag, if (ok) "A" else "R" });
-        idx += 1;
+    for (0..n) |i| {
+        if (verdicts[i]) accepted += 1 else rejected += 1;
+        try out.interface.print("REC {d} TAG 0x{x:0>2} {s}\n", .{ i, tags[i], if (verdicts[i]) "A" else "R" });
     }
     try out.flush();
-    std.debug.print("DIFF DONE: {d} records, {d} accepted, {d} rejected\n", .{ idx, accepted, rejected });
+    std.debug.print("DIFF DONE: {d} records, {d} accepted, {d} rejected\n", .{ n, accepted, rejected });
     // SPEC section 11.6 receipt for the differential run (built with
     // -Dcoverage): exit points reached plus the corpus description.
     printCoverageReport();
+}
+
+pub const ReplayError = error{ FramingTruncated, RecordTruncated };
+
+// Walk a corpus file (D-056 framing: u8 tag || u16 BE len || bytes), route
+// every record to its tagged parse entry point, and record one verdict per
+// record (true = accept). Returns the record count. `tags` and `verdicts`
+// must hold at least data.len/3 + 1 slots. This is the single replay walk:
+// diff mode prints from it, and the BE_SURF_04 binding test exercises it.
+pub fn replayVerdicts(data: []const u8, tags: []u8, verdicts: []bool) ReplayError!usize {
+    var pos: usize = 0;
+    var idx: usize = 0;
+    while (pos < data.len) {
+        if (data.len - pos < 3) return error.FramingTruncated;
+        const tag = data[pos];
+        const len = std.mem.readInt(u16, data[pos + 1 ..][0..2], .big);
+        pos += 3;
+        if (data.len - pos < len) return error.RecordTruncated;
+        tags[idx] = tag;
+        verdicts[idx] = parseByTag(tag, data[pos .. pos + len]);
+        pos += len;
+        idx += 1;
+    }
+    return idx;
+}
+
+// v1 differential verdict (D-056 part three): positional comparison of two
+// equal-length verdict streams, production side against reference side. Any
+// mismatch is a divergence. Length mismatch is a framing/infrastructure
+// failure handled by the caller, not a verdict divergence.
+pub fn countDivergences(production: []const bool, reference: []const bool) usize {
+    std.debug.assert(production.len == reference.len);
+    var n: usize = 0;
+    for (0..production.len) |i| {
+        if (production[i] != reference[i]) n += 1;
+    }
+    return n;
 }
