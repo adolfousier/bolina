@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.3.6-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-11
+**Version:** 0.3.7-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-11
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -38,6 +38,8 @@ closed; this edit supplies the row the obligation owed. No envelope wire bytes c
 **Changes from v0.3.4-draft:** BE-SURF-03 places `src/dispatch.zig` in the non-surface list ahead of its phase-B wiring (D-059): the daemon milestone's phase A dispatch core, state over parsed values, not reached by attacker bytes directly. No wire bytes change.
 
 **Changes from v0.3.5-draft:** the daemon milestone's phase B declares three listener and session markers (§0.4): BE-EXEC-02 one listener per endpoint, BE-EXEC-03 single address family, BE-SESS-02 no half-session on failed handshake; BE-EXEC-01 stays reserved for the phase-D lifecycle falsification. BE-SURF-03 ratchets the relay sub-unit cap from 510 to its measured floor 256 and declares a listener sub-unit (`src/listener.zig`, cap 250 lines) in the pre-authentication unit; pre-authentication cap sum 990 + 256 + 250 = 1496 ≤ 1500 (PHASE-B-ESTIMATE.md). No wire bytes change.
+
+**Changes from v0.3.6-draft:** the daemon milestone's phase C declares BE-EXEC-04 (relay serving on live traffic) in §0.4: the serve-loop that classifies inbound datagrams, forwards type-5 packets through the §5.2a decision table, and drains stored packets at registration (D-060). BE-SURF-03 places `src/relay_serve.zig` in the non-surface list ahead of its code (D-060), sibling of `src/dispatch.zig`. No wire bytes change: the relay packet inventory stays types 5 and 6, and every sub-unit cap is unchanged (pre-authentication sum 990 + 256 + 246 = 1492 ≤ 1500).
 
 ---
 
@@ -115,8 +117,8 @@ interpretation happens only in the executor, which is not exposed to the network
 ### 0.4 Daemon execution discipline
 
 The daemon is the process that owns the sockets and runs the protocol. Three properties of it are
-declared here for phase B of the daemon milestone; a fourth is reserved and stated so the number
-is not silently reused.
+declared here for phase B of the daemon milestone, phase C adds the serving property, and a
+further marker is reserved and stated so the number is not silently reused.
 
 **BE-EXEC-02 (one listener per endpoint)** — The daemon MUST run at most one listener per
 (address, port) endpoint. A second attempt to bind an endpoint that already has a listener MUST be
@@ -129,6 +131,18 @@ binds, never one socket pretending to be both.
 **BE-SESS-02 (no half-session)** — A handshake that fails or is abandoned MUST leave no
 half-session behind. Partial state allocated for the attempt (indices, key material, pending
 records) MUST be cleaned before the failure returns to the network layer.
+
+**BE-EXEC-04 (relay serving on live traffic)** — The relay serve-loop MUST classify every
+datagram received on the listener socket by its leading type byte: handshake types to the
+handshake machinery, type 5 to the forward path, type 6 to the registration path; any other
+value MUST be dropped with no service. A type-5 route packet MUST NOT be forwarded unless its
+`sender_index` corresponds to a session established at the relay. Delivery follows the §5.2a
+decision table: live delivery when the recipient's registration entry exists and its UDP
+endpoint is known; deferred storage (BE-MESH-03, D-058) when the registration is known but the
+endpoint is not; no service otherwise (BE-MESH-04 extended to storage). A type-6 registration
+accepted for a recipient with stored packets MUST drain that queue in store order, rewriting
+each packet's relay-layer `recipient_index` to the fresh `client_index`, and the Noise
+ciphertext body MUST pass byte-for-byte unchanged (BE-MESH-02).
 
 *BE-EXEC-01 (daemon lifecycle: one process, no fork-per-session, bounded resources) is reserved
 for the phase-D falsification of restart semantics. It is not declared above because its
@@ -299,10 +313,11 @@ D-054.)
   - **Sync sub-unit:** `src/parser/sync.zig` — cap 100 lines.
 - **Non-surface:** `src/dag.zig`, `src/evidence.zig`, `src/verify.zig`, `src/ledger.zig`,
   `src/historical.zig`, `src/intent.zig`, `src/resolver.zig`, `src/render.zig`, `src/sync.zig`,
-  `src/relay_store.zig`, `src/dispatch.zig` — state over parsed values (D-018), not reached by
+  `src/relay_store.zig`, `src/dispatch.zig`, `src/relay_serve.zig` — state over parsed values (D-018), not reached by
   attacker bytes directly. intent.zig, resolver.zig and render.zig are placed ahead of their code
   (D-052), sync.zig ahead of its code by D-054, relay_store.zig ahead of its code by D-058,
-  dispatch.zig ahead of its phase-B wiring by D-059.
+  dispatch.zig ahead of its phase-B wiring by D-059, relay_serve.zig ahead of its phase-C wiring
+  by D-060.
 - **Harness and entry:** `src/main.zig`, `src/tests.zig`, `src/fuzz.zig`, `src/coverage.zig`,
   `src/evidence_test_helpers.zig`, `src/cert_test_helpers.zig`, and every `*_test.zig`.
 
