@@ -169,6 +169,7 @@ TARGETS = {
     "session.zig": SRC / "session.zig",
     "binding.zig": SRC / "binding.zig",
     "relay.zig": SRC / "relay.zig",
+    "relay_store.zig": SRC / "relay_store.zig",
     "ledger.zig": SRC / "ledger.zig",
     "historical.zig": SRC / "historical.zig",
     "intent.zig": SRC / "intent.zig",
@@ -370,16 +371,21 @@ def channel_properties_from_spec():
 
 # --- mesh denominator, derived from SPEC.md section 5 ----------------------
 #
-# The lighthouse-served certificate verifier (BE-MESH-01/04/05/06). Keyed from
-# the bold markers in SPEC section 5. BE-MESH-02 is keyed under the relay
-# domain below (v10); BE-MESH-03 stays deferred (store-and-forward is a MAY,
-# D-043) and BE-MESH-07 is satisfied by placement; both are excluded here and
-# named in D-037 decision 5, not silently dropped.
+# The lighthouse-served certificate verifier (BE-MESH-01/04/05/06) plus
+# store-and-forward (BE-MESH-03). Keyed from the bold markers in SPEC
+# section 5. BE-MESH-02 is keyed under the relay domain below (v10).
+# BE-MESH-03, deferred as a MAY at v10, was bound after Daniel's 2026-08-11
+# ruling (keep going, follow the spec) and enters the denominator with its
+# mutants in harness v16 (D-051 closed, D-058 ruling). BE-MESH-07 stays
+# satisfied by placement; it is excluded here and named in D-037 decision 5,
+# not silently dropped.
 
 MESH_MARKERS = [
     # (denominator key, what SPEC says, marker text that must be present)
     ("mesh-01", "BE-MESH-01 a lighthouse is availability, never authority",
      r"\*\*BE-MESH-01"),
+    ("mesh-03", "BE-MESH-03 relay MAY store forwarded ciphertext for offline recipients",
+     r"\*\*BE-MESH-03"),
     ("mesh-04", "BE-MESH-04 served cert verified under BE-ID-01 through BE-ID-04",
      r"\*\*BE-MESH-04"),
     ("mesh-05", "BE-MESH-05 served cert opens the session and confers nothing",
@@ -1030,6 +1036,51 @@ MUTANTS = [
      "revocation never consulted at use (cached verdict carried forward)",
      "    if (ctx.is_revoked(served.sig_pubkey)) return error.ServedCertRevoked;",
      "    // MUTANT: revocation never consulted at use"),
+    # --- mesh-03: store-and-forward (relay_store.zig + relay.zig wiring,
+    # SPEC 5.2a clause, D-058). Quota, body cap, TTL, storage order, opacity,
+    # drain rewrite, and BE-MESH-04-extended no-service for unknown indexes.
+    # mesh-03 quota: the per-recipient packet bound removed. The 65th-packet
+    # refusal test in relay_store_test.zig kills this.
+    ("mesh", "relay_store.zig", "CHECK-ABSENCE", "mesh-03",
+     "per-recipient packet quota never enforced",
+     "        if (recip_count >= MAX_PER_RECIPIENT or recip_bytes + body.len > MAX_BYTES_PER_RECIPIENT) {",
+     "        if (false) { // MUTANT: per-recipient quota never enforced"),
+    # mesh-03 body cap: the declared 2048-byte bound removed. The oversized
+    # body test kills this (the slot copy panics on the out-of-range slice).
+    ("mesh", "relay_store.zig", "CHECK-ABSENCE", "mesh-03",
+     "declared body cap never enforced",
+     "        if (body.len > MAX_BODY) return error.BodyTooLarge;",
+     "        // MUTANT: body cap never enforced"),
+    # mesh-03 TTL: expiry never fires. The lazy-purge test at TTL+0 kills it.
+    ("mesh", "relay_store.zig", "CHECK-ABSENCE", "mesh-03",
+     "TTL purge never expires stored packets",
+     "            if (now_ms >= p.stored_at_ms and now_ms - p.stored_at_ms >= TTL_MS) {",
+     "            if (false) { // MUTANT: TTL never expires"),
+    # mesh-03 order: drain returns newest first. The storage-order test that
+    # expects the older-clock packet first kills this.
+    ("mesh", "relay_store.zig", "WRONG-VALUE", "mesh-03",
+     "drain serves newest first instead of storage order",
+     "                if (p.stored_at_ms > self.packets[b].stored_at_ms) continue;",
+     "                if (p.stored_at_ms < self.packets[b].stored_at_ms) continue; // MUTANT: newest first"),
+    # mesh-03 opacity: drained body truncated. The byte-for-byte witness
+    # (BE-MESH-02 opacity) kills this.
+    ("mesh", "relay_store.zig", "WRONG-VALUE", "mesh-03",
+     "drained body truncated (opacity broken)",
+     "        const out = DrainedPacket{ .sender_index = p.sender_index, .body = p.body[0..p.body_len] };",
+     "        const out = DrainedPacket{ .sender_index = p.sender_index, .body = p.body[0 .. p.body_len / 2] }; // MUTANT: body truncated"),
+    # mesh-03 rewrite: drainFor stamps recipient_index with zero instead of
+    # the fresh client_index. The round-trip test expecting 42 kills this.
+    ("mesh", "relay.zig", "WRONG-FIELD", "mesh-03",
+     "drain rewrite removed (recipient_index stamped zero)",
+     "            .recipient_index = new_client_index,",
+     "            .recipient_index = 0, // MUTANT: rewrite removed"),
+    # mesh-03 no-service: unknown indexes silently accepted for storage,
+    # breaking BE-MESH-04 extended to storage by D-058. The unknown-index
+    # test expecting UnknownRecipient kills this.
+    ("mesh", "relay.zig", "CHECK-ABSENCE", "mesh-03",
+     "unknown indexes silently accepted for storage",
+     "    return StoreDeferredError.UnknownRecipient;",
+     "    // MUTANT: unknown recipients silently accepted"),
 
     # --- relay domain: the relay surface (src/relay.zig, SPEC §5.2a)
     # relay-route-format: field order swapped. The happy-path test asserts the
