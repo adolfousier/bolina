@@ -1,8 +1,13 @@
 const std = @import("std");
 
+// src/fuzz.zig mode selection (BE-SURF-04 differential oracle, D-056):
+// chaos = the bounds-check chaos fuzzer; corpus = deterministic corpus emit;
+// diff = corpus replay with one verdict per record. Each build step below
+// pins its own mode, so the shipped chaos behavior never changes.
+const FuzzMode = enum { chaos, corpus, diff };
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-
     // LANGUAGE.md O1: ReleaseSafe is the shipped build, never ReleaseFast.
     // The mode is hardcoded and deliberately not exposed through
     // b.standardOptimizeOption, so there is no ReleaseFast path in this
@@ -17,9 +22,12 @@ pub fn build(b: *std.Build) void {
     // shortens it via -Dfuzz-budget.
     const coverage_on = b.option(bool, "coverage", "Enable hand-instrumented branch coverage") orelse false;
     const fuzz_budget = b.option(u64, "fuzz-budget", "Fuzz iteration budget (default 7.3B)") orelse 7_300_000_000;
+    const corpus_budget = b.option(u64, "corpus-budget", "Differential corpus record count (default 100000)") orelse 100_000;
     const options = b.addOptions();
     options.addOption(bool, "coverage_enabled", coverage_on);
     options.addOption(u64, "fuzz_budget", fuzz_budget);
+    options.addOption(FuzzMode, "fuzz_mode", FuzzMode.chaos);
+    options.addOption(u64, "corpus_budget", corpus_budget);
     const opts_mod = options.createModule();
 
     const exe_mod = b.createModule(.{
@@ -105,4 +113,52 @@ pub fn build(b: *std.Build) void {
     // the toolchain's -ffuzz coverage has no script-readable output.
     const coverage_step = b.step("coverage", "Run fuzz with exit-point coverage on (-Dcoverage -Dfuzz-budget=N)");
     coverage_step.dependOn(&run_fuzz.step);
+
+    // Differential fuzz oracle (BE-SURF-04, D-056). The same harness built in
+    // two extra modes pinned by the fuzz_mode build option: corpus emits a
+    // deterministic corpus file (tag || u16 BE len || bytes records,
+    // per-structure seed lineage + random, same PRNG seed and 4 mutation
+    // operators as chaos); diff replays a corpus file through the tagged
+    // parse entry points and prints one verdict line per record. The
+    // independent Python reference parser (tools/refparse.py) replays the
+    // SAME file; agreement on every record is the differential verdict.
+    //   zig build fuzz-corpus [-Dcorpus-budget=N] [-- OUT_PATH]
+    //   zig build fuzz-diff [-- CORPUS_PATH]
+    const corpus_opts = b.addOptions();
+    corpus_opts.addOption(bool, "coverage_enabled", false);
+    corpus_opts.addOption(u64, "fuzz_budget", fuzz_budget);
+    corpus_opts.addOption(FuzzMode, "fuzz_mode", FuzzMode.corpus);
+    corpus_opts.addOption(u64, "corpus_budget", corpus_budget);
+    const corpus_opts_mod = corpus_opts.createModule();
+    const fuzz_corpus_mod = b.createModule(.{
+        .root_source_file = b.path("src/fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fuzz_corpus_mod.addImport("build_options", corpus_opts_mod);
+    fuzz_corpus_mod.addImport("vectors", b.createModule(.{ .root_source_file = b.path("test/vectors_module.zig") }));
+    const corpus_exe = b.addExecutable(.{ .name = "bolina-fuzz-corpus", .root_module = fuzz_corpus_mod });
+    const run_corpus = b.addRunArtifact(corpus_exe);
+    if (b.args) |args| run_corpus.addArgs(args);
+    const corpus_step = b.step("fuzz-corpus", "Emit the deterministic differential corpus (D-056)");
+    corpus_step.dependOn(&run_corpus.step);
+
+    const diff_opts = b.addOptions();
+    diff_opts.addOption(bool, "coverage_enabled", false);
+    diff_opts.addOption(u64, "fuzz_budget", fuzz_budget);
+    diff_opts.addOption(FuzzMode, "fuzz_mode", FuzzMode.diff);
+    diff_opts.addOption(u64, "corpus_budget", corpus_budget);
+    const diff_opts_mod = diff_opts.createModule();
+    const fuzz_diff_mod = b.createModule(.{
+        .root_source_file = b.path("src/fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fuzz_diff_mod.addImport("build_options", diff_opts_mod);
+    fuzz_diff_mod.addImport("vectors", b.createModule(.{ .root_source_file = b.path("test/vectors_module.zig") }));
+    const diff_exe = b.addExecutable(.{ .name = "bolina-fuzz-diff", .root_module = fuzz_diff_mod });
+    const run_diff = b.addRunArtifact(diff_exe);
+    if (b.args) |args| run_diff.addArgs(args);
+    const diff_step = b.step("fuzz-diff", "Replay a corpus file through the tagged parsers, one verdict per record (D-056)");
+    diff_step.dependOn(&run_diff.step);
 }
