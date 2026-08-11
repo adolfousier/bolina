@@ -23,3 +23,7 @@ commands = ["$HOME/srv/zig/toolchain/zig-aarch64-macos-0.16.0/zig build"]
 [[verification.task_type_commands]]
 task_type = "test"
 commands = ["$HOME/srv/zig/toolchain/zig-aarch64-macos-0.16.0/zig build test"]
+
+[[verification.task_type_commands]]
+task_type = "documentation"
+commands = ["test -z \"$(git status --porcelain)\"", "$HOME/srv/zig/toolchain/zig-aarch64-macos-0.16.0/zig build test"]
