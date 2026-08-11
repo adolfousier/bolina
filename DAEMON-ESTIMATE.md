@@ -1,0 +1,45 @@
+# DAEMON-ESTIMATE.md — the daemon milestone: from M1 binding layer to running node
+
+**Status:** estimate skeleton (scope inventory, open questions, phase sketch). No code before the estimate closes and its rulings land.
+**Date:** 2026-08-11
+**Authorization:** Daniel, 2026-08-11 12:20 UTC: build the other things in parallel.
+
+## 1. What M1 hands the daemon
+
+M1 is 109/109: every wire format, state machine, and verifier the SPEC declares is bound by code and literal tests, mutation-green across twelve domains (125/125, harness v16). `main.zig` is a 13-line DECLARED stub. Nothing listens, nothing dispatches, nothing persists. Every slice named the live wiring it deferred to this milestone:
+
+| Slice unit | Bound now | The daemon owes |
+|---|---|---|
+| noise/mac/session parsers | handshake bytes verified | a listener and the live handshake over the wire |
+| binding + channel admission | session-state verified | the envelope dispatch loop |
+| `intent.zig` + `resolver.zig` | pending-intent machine, canonical resolution | an executor calling `resolveAndAdmit` on live intents |
+| `verify.zig` Grant path | `verifyGrantThen`, single effect call site (M10) | effect execution |
+| `render.zig` | the approving view | an approval interface consuming the view |
+| `sync.zig` + `parser/sync.zig` | the backfill engine | a backfill scheduler driving store and serve |
+| `relay.zig` + `relay_store.zig` | forwarding + store-and-forward | the relay serving loop, drain on live registration |
+| `ledger.zig` + `historical.zig` | ledger rules | persistence across restarts |
+
+## 2. SPEC constraints the daemon inherits
+
+- BE-DEP-02: the daemon contains no recursive parser; every wire structure parses bounded, and opaque action bytes are hashed, never interpreted.
+- BE-BODY-01: `Intent.action` is opaque bytes.
+- BE-GRANT-04 panic discipline: in a network daemon a panic is a remote crash.
+- Section 11.5: adversarial evaluation, scored on both sides.
+- Status vocabulary (CONTRIBUTING.md section 1): slices falsify the specification; they do not construct the product.
+
+## 3. Open questions the estimate owes answers to, before phasing
+
+1. Transport: relay semantics (SPEC section 5.2, datagrams with route headers) versus a session listener; confirm the wire transport from SPEC before choosing a socket shape.
+2. Persistence backend for the ledger store (file-backed versus in-memory first): a D-ruling is owed.
+3. Clock source and the configuration surface.
+4. First binding target: the dispatch core over an in-memory transport, or the listener skeleton? Recommendation: the dispatch core first, cheapest falsification, zero network surface, exercising every bound state machine.
+5. Key material for live handshakes: D-018 forbids hardcoded secrets; a declared key path is owed with the first networked phase.
+
+## 4. Phase sketch (pending section 3)
+
+- Phase A: in-memory dispatch core. Envelope admission, intent, `resolveAndAdmit`, Grant verification, the effect call site, over the bound state machines, zero sockets. Falsifies the integration seams.
+- Phase B: listener and live session establishment, handshake over the wire.
+- Phase C: relay serving with store-and-forward drain on live registration.
+- Phase D: persistence and restart collapse semantics (intent restart collapse is bound as a state rule already; the daemon must survive it).
+
+Budget note: the daemon is non-surface by construction (state over parsed values, D-018 lineage). Its line budget is this estimate's job once phasing closes, not BE-SURF-03's.
