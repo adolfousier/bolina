@@ -26,4 +26,5 @@ comptime {
     _ = @import("fuzz_test.zig");
     _ = @import("relay_store_test.zig");
     _ = @import("dispatch_test.zig");
+    _ = @import("listener_test.zig");
 }
