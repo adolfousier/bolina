@@ -1,6 +1,6 @@
 # PHASE-C-ESTIMATE — Daemon relay serving on live traffic
 
-**Status:** ESTIMATE (pre-code, estimate-first). Phase B closeout must land green first.
+**Status:** CLOSED. Phase C shipped: `src/relay_serve.zig` (216, non-surface) + 6 live UDP tests, BE-EXEC-04 bound, harness v19 144/144 killed (receipt `logs/mutation_relay_serve_full.log`), M1 112 → 113. Design questions resolved by D-060 (parse layer = pre-auth per BE-SURF-01/BE-MESH-02; endpoint map = serve-loop glue; drain batch = 8, capped by the 64-packet/recipient quota). Phase D opens next.
 
 ## Context
 
