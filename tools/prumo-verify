@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # prumo-verify: Bolina mechanical gates (CONTRIBUTING.md section 2)
 #
-# Prints ALL NINE gates on every run. M2/M3/M4 are printed but explicitly
-# marked "not yet enforced: no code to check" until the code they target
-# exists. The gap is made visible instead of absent: CONTRIBUTING.md claims
-# seven gates, so seven rows appear even when four have nothing to check.
+# Prints ALL ELEVEN gate rows on every run. M2 alone is printed and marked
+# "not yet enforced: no code to check" until the code it targets exists.
+# The gap is made visible instead of absent: a gate with nothing to check
+# still gets a row, so the number of rows never quietly shrinks.
 #
 # Conventions enforced here:
 #   M1: SPEC.md declares BE-* items as paragraph-opening bold markers:
@@ -28,6 +28,24 @@
 #        (tools/verify-vectors.py: Ed25519/BLAKE2s/X25519) and the field-by-field
 #        byte-layout walker (tools/verify-layout.py). PENDING only when python3
 #        with cryptography is unavailable.
+#   M4: BE-SURF-04 differential fuzzing is a MERGE GATE, not a milestone
+#        (CONTRIBUTING.md line 43), so it runs on every invocation rather
+#        than on a schedule. The gate drives tools/fuzz_diff.py over a
+#        bounded corpus: the Zig harness emits a deterministic corpus, the
+#        production parsers replay it, tools/refparse.py (an independent
+#        Python parser written from the SPEC field tables alone, D-056)
+#        replays the SAME file, and the two verdict streams are compared
+#        record by record. Requirement is ZERO divergences: a divergence is
+#        a parser defect, and an infrastructure failure (build error, broken
+#        framing, stream desync) fails the gate too rather than passing
+#        quietly. The row prints the record count, the divergence count, the
+#        coverage reached over the exit-point denominator, and the corpus
+#        description, so the SPEC section 11.6 receipt is visible on every
+#        run instead of living in a log nobody opens. The budget is bounded
+#        (M4_BUDGET, default 2000 records) to keep prumo fast; the full
+#        long-budget run is a separate campaign, not this gate. PENDING only
+#        when python3 is unavailable; a PASS without the reference parser
+#        would be a false green, so it never happens.
 #   M5/M11: BE-SURF-03 splits the surface into two capped units at the
 #        authentication line. Both gates parse the four normative file lists,
 #        each unit's cap, and the sub-unit caps from SPEC.md BE-SURF-03 at
@@ -60,8 +78,10 @@
 #        new exit fails the gate until the enum grows, a dead enum member
 #        fails it the other way (CONTRIBUTING.md M9).
 #
-# Exit code: number of failing ENFORCED gates (M1, M3, M5, M6, M7, M8, M9, M10, M11).
-# Usage: run from anywhere; ZIG=/path/to/zig overrides PATH lookup.
+# Exit code: number of failing ENFORCED gates (M1, M3, M4, M5, M6, M7, M8, M9,
+# M10, M11).
+# Usage: run from anywhere; ZIG=/path/to/zig overrides PATH lookup,
+#        M4_BUDGET=N sets the differential corpus size (default 2000).
 
 set -u
 
@@ -127,9 +147,8 @@ else
     fi
 fi
 
-# ---- M2, M4: printed, not yet enforced ----
+# ---- M2: printed, not yet enforced ----
 row M2 PENDING "not yet enforced: no code to check (mutation testing, SPEC.md section 11.2)"
-row M4 PENDING "not yet enforced: no code to check (differential fuzzing, SPEC.md section 11.6)"
 
 # ---- M3: cross-implementation vectors, SPEC.md section 11.3 (ENFORCED) ----
 # The committed test/vectors.json is canonical only if two independent
@@ -169,6 +188,55 @@ else
 fi
 row M3 "$m3_verdict" "$m3_detail"
 if [ "$m3_verdict" = "FAIL" ]; then
+    FAILS=$((FAILS + 1))
+fi
+
+# ---- M4: differential fuzz oracle, SPEC.md section 11.6 / BE-SURF-04 (ENFORCED) ----
+# A merge gate, so it runs every time. tools/fuzz_diff.py emits a bounded
+# deterministic corpus, replays it through the production parsers AND through
+# the independent Python reference (tools/refparse.py), and compares the two
+# verdict streams record by record. Zero divergences required. The receipt
+# (records, divergences, coverage over the exit-point denominator, corpus
+# description) is parsed back out of the orchestrator's own output and printed
+# on the row: the numbers come from the run, never from this script.
+M4_BUDGET="${M4_BUDGET:-2000}"
+m4_verdict="PASS"
+m4_detail=""
+if ! command -v python3 >/dev/null 2>&1; then
+    m4_verdict="PENDING"; m4_detail="python3 unavailable: the independent reference parser cannot run, and a PASS without it would be a false green (SPEC.md section 11.6)"
+elif [ ! -f tools/fuzz_diff.py ] || [ ! -f tools/refparse.py ]; then
+    m4_verdict="FAIL"; m4_detail="differential oracle missing: tools/fuzz_diff.py and tools/refparse.py ARE the gate (BE-SURF-04, D-056)"
+else
+    m4_out="$(python3 tools/fuzz_diff.py --budget "$M4_BUDGET" --zig "$ZIG" 2>&1)"
+    m4_rc=$?
+    # Parse the receipt block only, so the early "corpus: <path>" progress line
+    # cannot be mistaken for the receipt's corpus description.
+    m4_receipt="$(printf '%s\n' "$m4_out" | sed -n '/^== receipt ==$/,$p')"
+    m4_records="$(printf '%s\n' "$m4_receipt" | sed -n 's/^records: \([0-9][0-9]*\).*/\1/p')"
+    m4_div="$(printf '%s\n' "$m4_receipt" | sed -n 's/^divergences: \([0-9][0-9]*\)$/\1/p')"
+    m4_cov="$(printf '%s\n' "$m4_receipt" | sed -n 's/^coverage: \(.*\)$/\1/p')"
+    m4_corpus="$(printf '%s\n' "$m4_receipt" | sed -n 's/^corpus: \(.*\)$/\1/p')"
+    if [ "$m4_rc" -eq 1 ]; then
+        m4_verdict="FAIL"
+        m4_detail="${m4_div:-unknown} divergence(s) over $m4_records records: the production parser and the independent reference disagree, saved under .fuzz-diff/divergences (BE-SURF-04)"
+    elif [ "$m4_rc" -ne 0 ]; then
+        m4_verdict="FAIL"
+        m4_detail="differential oracle infrastructure failure (rc=$m4_rc): $(printf '%s' "$m4_out" | grep -E '^FAIL:' | tail -1) (BE-SURF-04)"
+    elif [ -z "$m4_div" ] || [ -z "$m4_records" ]; then
+        m4_verdict="FAIL"
+        m4_detail="differential oracle receipt not parsed: the orchestrator's output shape changed, fix the extractor rather than trusting a green (BE-SURF-04)"
+    elif [ "$m4_div" -ne 0 ]; then
+        m4_verdict="FAIL"
+        m4_detail="$m4_div divergence(s) over $m4_records records despite rc=0: orchestrator and gate disagree (BE-SURF-04)"
+    elif [ -z "$m4_cov" ] || [ "${m4_cov#NOT REPORTED}" != "$m4_cov" ]; then
+        m4_verdict="FAIL"
+        m4_detail="coverage not reported by the differential run: the SPEC section 11.6 receipt is incomplete, so the run is not evidence (BE-SURF-04)"
+    else
+        m4_detail="0 divergences over $m4_records records; coverage $m4_cov; corpus $m4_corpus (SPEC.md section 11.6, BE-SURF-04, D-056)"
+    fi
+fi
+row M4 "$m4_verdict" "$m4_detail"
+if [ "$m4_verdict" = "FAIL" ]; then
     FAILS=$((FAILS + 1))
 fi
 
@@ -471,6 +539,6 @@ if [ "$M11_VERDICT" = "FAIL" ]; then
 fi
 
 echo
-echo "enforced gates: M1 M3 M5 M6 M7 M8 M9 M10 M11, failing: $FAILS"
-echo "not yet enforced: M2 M4, printed above, excluded from the exit code"
+echo "enforced gates: M1 M3 M4 M5 M6 M7 M8 M9 M10 M11, failing: $FAILS"
+echo "not yet enforced: M2, printed above, excluded from the exit code"
 exit "$FAILS"

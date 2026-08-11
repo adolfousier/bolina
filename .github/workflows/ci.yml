@@ -65,5 +65,5 @@ jobs:
               || echo "warn: cryptography install failed; M3 will report PENDING (graceful)"
           fi
 
-      - name: Run prumo-verify (all seven gates)
+      - name: Run prumo-verify (eleven rows, ten enforced)
         run: ./tools/prumo-verify

@@ -30,8 +30,9 @@ prints every gate on every run and returns non-zero if an enforced one fails.
 
 | Measure | Value | Gate |
 |---|---|---|
-| BE-\* items bound to a named test | 107 of 109 declared, high-water ratchet at 107 | M1, enforced |
+| BE-\* items bound to a named test | 108 of 109 declared, high-water ratchet at 108 | M1, enforced |
 | Test vectors cross-verified (Zig against Python `cryptography`) | 77 passed, 0 failed | M3, enforced |
+| Differential fuzz divergences (production parser against an independent Python reference) | 0 over 2000 records, reaching 15 of 72 parser exit points | M4, enforced |
 | Mutants killed by the test suite | 118 of 118 | M2, measured but **not** wired into the exit code |
 | Pre-authentication attack surface | 1173 of 1500 lines | M5, enforced |
 | Post-authentication attack surface | 1477 of 1500 lines | M11, enforced |
@@ -39,10 +40,16 @@ prints every gate on every run and returns non-zero if an enforced one fails.
 | Pointer-minting builtins in `src/` | 0 | M8, enforced |
 | Call sites able to reach an effect | 1, from `verifyGrantThen` | M10, enforced |
 
-Nine gates are enforced. Two are printed and excluded on purpose: **M2** (mutation testing) has a
-working harness whose result is quoted above but no wiring into the verdict, and **M4** (differential
-fuzzing) has nothing to check yet. Both gaps are visible in the tool's own output rather than
-absent from it, which is the point of printing all of them.
+Ten gates are enforced. One is printed and excluded on purpose: **M2** (mutation testing) has a
+working harness whose result is quoted above but no wiring into the verdict. That gap is visible in
+the tool's own output rather than absent from it, which is the point of printing all of them.
+
+**M4** is honest about its own reach rather than its verdict. The oracle compares the production
+parser against an independent Python reference written from the SPEC field tables alone, and zero
+divergences over the bounded corpus is a real result. But the corpus currently drives 6 of the 20
+parse entry points, so it reaches 15 of the 72 measured exit points: what the gate proves clean is
+the part it reaches, not the whole parser. Widening the corpus to every entry point is the next
+step, and the reached-count is printed on the gate row so the limit cannot be quietly forgotten.
 
 What this does **not** say: no part of the protocol has been model-checked, no adversarial
 evaluation against a real model has been run, and no external cryptographic review of the
