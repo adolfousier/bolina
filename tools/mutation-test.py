@@ -173,6 +173,7 @@ TARGETS = {
     "dispatch.zig": SRC / "dispatch.zig",
     "listener.zig": SRC / "listener.zig",
     "handshake.zig": SRC / "handshake.zig",
+    "relay_serve.zig": SRC / "relay_serve.zig",
     "ledger.zig": SRC / "ledger.zig",
     "historical.zig": SRC / "historical.zig",
     "intent.zig": SRC / "intent.zig",
@@ -462,6 +463,38 @@ def dispatch_properties():
     derived from a recorded D-059 decision (daemon-milestone code carries no
     SPEC markers)."""
     return {key for key, _what in DISPATCH_PROPS}
+
+
+# --- relay_serve denominator, derived from SPEC §0.4 BE-EXEC-04 (D-060) -----
+#
+# The serve-loop (src/relay_serve.zig) is phase-C daemon-milestone code. The
+# single bold marker BE-EXEC-04 declares five sub-obligations; the denominator
+# keys are those sub-obligations as recorded in the D-060 ruling, hardcoded
+# here with the marker's normative text as the citation. The law holds: every
+# property needs a killed mutant keyed to it, and removing a sub-obligation
+# from the marker removes its key here.
+
+RELAY_SERVE_PROPS = [
+    # (denominator key, what BE-EXEC-04 declares)
+    ("relay-serve-classify", "BE-EXEC-04: the leading type byte routes the "
+     "datagram; any other value is dropped with no service"),
+    ("relay-serve-sender-gate", "BE-EXEC-04: a type-5 route MUST NOT be "
+     "forwarded unless sender_index is an established session at the relay"),
+    ("relay-serve-decision", "BE-EXEC-04 + section 5.2a decision table: live "
+     "delivery when the recipient endpoint is known, deferred storage when the "
+     "registration is known but the endpoint is not, no service otherwise"),
+    ("relay-serve-drain", "BE-EXEC-04: a type-6 registration accepted for a "
+     "recipient with stored packets MUST drain the queue in store order, "
+     "rewriting recipient_index to the fresh client_index"),
+    ("relay-serve-opacity", "BE-EXEC-04 + BE-MESH-02: the Noise ciphertext body "
+     "MUST pass byte-for-byte unchanged through the serve path"),
+]
+
+
+def relay_serve_properties():
+    """The set of phase-C serve-loop properties the slice must prove, each
+    derived from a BE-EXEC-04 sub-obligation recorded in the D-060 ruling."""
+    return {key for key, _what in RELAY_SERVE_PROPS}
 
 
 # --- relay denominator, derived from SPEC.md §5.2/§5.2a/BE-SIG-01 -----------
@@ -1640,6 +1673,51 @@ MUTANTS = [
      "committed session swaps send and recv keys",
      "            .send_key = result.send_key,",
      "            .send_key = result.recv_key, // MUTANT: send/recv swapped"),
+    # --- relay_serve domain: the serve-loop (src/relay_serve.zig, SPEC
+    # section 0.4 BE-EXEC-04, D-060). Six mutants over the five BE-EXEC-04
+    # sub-obligations; the decision-table split gets two (forward + store).
+    # relay-serve-classify (BE-EXEC-04): the default arm drops unknown type
+    # bytes with no service. The classifier test sending a junk type and
+    # asserting .dropped kills this.
+    ("relay_serve", "relay_serve.zig", "CHECK-ABSENCE", "relay-serve-classify",
+     "unknown type byte served instead of dropped",
+     "            else => self.drop(),",
+     "            else => return .forwarded, // MUTANT: unknown type served"),
+    # relay-serve-sender-gate (BE-EXEC-04): the sender_index session gate
+     # removed. The sender-gate test forwarding without an established
+     # session and asserting .dropped kills this.
+    ("relay_serve", "relay_serve.zig", "CHECK-ABSENCE", "relay-serve-sender-gate",
+     "sender session gate removed (type 5 forwarded without a session)",
+     "        if (route.sender_index >= self.sessions.session_count) return self.drop();",
+     "        // MUTANT: sender session gate removed"),
+    # relay-serve-decision (BE-EXEC-04 + section 5.2a): live delivery arm
+     # removed, so a registered endpoint's packet is stored instead of
+     # forwarded. The T1 forward-live test asserting .forwarded kills this.
+    ("relay_serve", "relay_serve.zig", "CHECK-ABSENCE", "relay-serve-decision",
+     "live delivery arm removed (known endpoint stored instead of forwarded)",
+     "        if (self.endpoints.get(route.recipient_index)) |ep| {",
+     "        if (false) { // MUTANT: live delivery arm removed"),
+    # relay-serve-decision (BE-EXEC-04 + section 5.2a): deferred storage
+     # removed, so a known-but-offline recipient gets no service instead of
+     # storage. The T2 store half asserting .stored kills this.
+    ("relay_serve", "relay_serve.zig", "CHECK-ABSENCE", "relay-serve-decision",
+     "deferred storage removed (offline recipient gets no service)",
+     "        relay.storeDeferred(self.table, self.store, route, dgram[relay.LEN_RELAY_ROUTE..], now_ms) catch return self.drop();",
+     "        return self.drop(); // MUTANT: deferred storage removed"),
+    # relay-serve-drain (BE-EXEC-04): the registration drain zeroed, so
+     # stored packets are never delivered at late registration. The T2 drain
+     # half asserting .drained kills this.
+    ("relay_serve", "relay_serve.zig", "WRONG-VALUE", "relay-serve-drain",
+     "registration drain zeroed (stored packets never delivered)",
+     "        const n = relay.drainFor(self.store, derived, reg.client_index, now_ms, &out);",
+     "        const n: usize = 0; // MUTANT: drain zeroed"),
+    # relay-serve-opacity (BE-EXEC-04 + BE-MESH-02): the forwarded body
+     # truncated by one byte. The T1 forward-live test asserting the body
+     # arrives byte-for-byte kills this.
+    ("relay_serve", "relay_serve.zig", "WRONG-VALUE", "relay-serve-opacity",
+     "forwarded ciphertext body truncated by one byte",
+     "            if (sendto(self.fd, dgram.ptr, dgram.len, 0, &ep.sa, ep.sa_len) != want) return self.drop();",
+     "            if (sendto(self.fd, dgram.ptr, dgram.len - 1, 0, &ep.sa, ep.sa_len) != want) return self.drop(); // MUTANT: body truncated"),
 ]
 
 
@@ -1703,6 +1781,9 @@ def main():
     daemon_props = daemon_properties_from_spec()
     if not daemon_props:
         sys.exit("FATAL: no daemon properties detected (SPEC section 0.4 missing?)")
+    relay_serve_props = relay_serve_properties()
+    if not relay_serve_props:
+        sys.exit("FATAL: no relay_serve properties detected (D-060 / BE-EXEC-04 missing?)")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -1719,6 +1800,7 @@ def main():
     print(f"  refusal properties (§8.5):       {sorted(refusal_props)} ({len(refusal_props)})")
     print(f"  resolver properties (§8.4):      {sorted(resolver_props)} ({len(resolver_props)})")
     print(f"  daemon properties (§0.4):        {sorted(daemon_props)} ({len(daemon_props)})")
+    print(f"  relay_serve properties (BE-EXEC-04): {sorted(relay_serve_props)} ({len(relay_serve_props)})")
     print(f"  dispatch properties (D-059):     {sorted(dispatch_props)} ({len(dispatch_props)})")
     print(f"  render properties (§8.3):        {sorted(render_props)} ({len(render_props)})")
     print(f"  sync properties (§6.4):          {sorted(sync_props)} ({len(sync_props)})")
@@ -1750,6 +1832,10 @@ def main():
             if key not in mesh_props:
                 sys.exit(f"FATAL: mesh mutant '{name}' attacks '{key}', which "
                          "section 5 of SPEC does not declare (scope lie)")
+        elif domain == "relay_serve":
+            if key not in relay_serve_props:
+                sys.exit(f"FATAL: relay_serve mutant '{name}' attacks '{key}', which "
+                         "BE-EXEC-04 (section 0.4) does not declare (scope lie)")
         elif domain == "dispatch":
             if key not in dispatch_props:
                 sys.exit(f"FATAL: dispatch mutant '{name}' attacks '{key}', which "
@@ -1890,6 +1976,11 @@ def main():
         dmn_cov = {r["key"] for r in dmn_run if r["killed"]}
         print(f"daemon:   {len(dmn_cov)}/{len(daemon_props)} §0.4 "
               f"properties covered by killed mutants")
+    rs_run, rs_surv, rs_uncov, _ = gate_domain("relay_serve", relay_serve_props)
+    if in_scope("relay_serve"):
+        rs_cov = {r["key"] for r in rs_run if r["killed"]}
+        print(f"relay_serve: {len(rs_cov)}/{len(relay_serve_props)} BE-EXEC-04 "
+              f"properties covered by killed mutants")
     r_run, r_surv, r_uncov, _ = gate_domain("relay", relay_props)
     if in_scope("relay"):
         r_cov = {r["key"] for r in r_run if r["killed"]}
@@ -1928,7 +2019,7 @@ def main():
     total_run = [r for r in results if not r["skipped"]]
     total_killed = sum(1 for r in total_run if r["killed"])
     print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
-          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv) + len(v_surv) + len(w_surv) + len(dp_surv) + len(dmn_surv)}"
+          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv) + len(v_surv) + len(w_surv) + len(dp_surv) + len(dmn_surv) + len(rs_surv)}"
           f" survived")
     if g_surv:
         print(f"  grant SURVIVORS: {g_surv}")
@@ -1960,6 +2051,8 @@ def main():
         print(f"  dispatch SURVIVORS: {dp_surv}")
     if dmn_surv:
         print(f"  daemon SURVIVORS: {dmn_surv}")
+    if rs_surv:
+        print(f"  relay_serve SURVIVORS: {rs_surv}")
     if g_uncov:
         print(f"  UNCOVERED grant checks: {g_uncov}")
     if e_uncov:
@@ -1990,6 +2083,8 @@ def main():
         print(f"  UNCOVERED dispatch properties: {dp_uncov}")
     if dmn_uncov:
         print(f"  UNCOVERED daemon properties: {dmn_uncov}")
+    if rs_uncov:
+        print(f"  UNCOVERED relay_serve properties: {rs_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
@@ -2003,7 +2098,7 @@ def main():
           and (not i_uncov) and (not f_uncov) and (not v_uncov)
           and (not w_uncov) and (not x_uncov)
           and (not dp_surv) and (not dp_uncov)
-          and (not dmn_surv) and (not dmn_uncov) and g_cb)
+          and (not dmn_surv) and (not dmn_uncov) and (not rs_surv) and (not rs_uncov) and g_cb)
     return 0 if ok else 1
 
 
