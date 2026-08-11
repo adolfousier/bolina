@@ -48,7 +48,7 @@ the tool's own output rather than absent from it, which is the point of printing
 parser against an independent Python reference written from the SPEC field tables alone, and zero
 divergences over the bounded corpus is a real result. The corpus now drives all 22 parse entry
 points and reaches 69 of the 72 measured exit points. Three are still unreached and are named on
-the gate row every run rather than rounded away: `data_payload_oversize`, `cert_ca_count_zero`, and
+the gate row every run rather than rounded away: `data_payload_oversize`, `cert_ca_count_oversize`, and
 `bind_cert_len_zero`, each needing a shape the corpus does not construct rather than a parser path
 that does not exist. What the gate proves clean is still the part it reaches.
 
