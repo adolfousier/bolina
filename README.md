@@ -7,18 +7,46 @@ message.**
 > jamming. Náutico like the rest of the family (Prumo, Caravela, Nau, Orbit), six letters, ASCII.
 > Change it in one line if you have better.
 
-**Status:** active research. Specification draft, nothing implemented yet.
+**Status:** active research. The specification still leads the implementation, but it is no longer
+alone: the M1 milestone is built in Zig and held by mechanical gates. Everything past M1 is draft.
 
 This is a research project, and a specification written ahead of its implementation is the normal
 working mode here, not a deficiency. Unproven claims are expected — what is *not* acceptable is an
 unproven claim that reads as a proven one. Each document therefore states its epistemic status at
 the top, on a three-level scale: **DECLARED** (designed, not built), **TESTED** (measured under a
-stated method), **PROVED** (exhaustively checked). **Today all of them are DECLARED**, and
-`SPEC.md` §11 is the path by which each conformance item stops being that.
+stated method), **PROVED** (exhaustively checked). Most items are still **DECLARED**. The ones bound
+to a named test under `SPEC.md` §11.1 have moved to **TESTED**; none is **PROVED**. `SPEC.md` §11 is
+the path by which each remaining item stops being declared, and `M1-AUDIT.md` records what has
+actually been measured, by which method, and what the numbers below do not cover.
 
 Marking the state is not hedging. It is the Prumo rule — calibrated guarantees, "mechanically
 enforce" rather than "mathematically prove" — applied to the document that describes it. The
 ambition is unchanged by saying out loud which parts have been measured.
+
+## Implementation status
+
+M1 only, in Zig 0.16.0, built `ReleaseSafe` with no optimisation flag exposed. `tools/prumo-verify`
+prints every gate on every run and returns non-zero if an enforced one fails.
+
+| Measure | Value | Gate |
+|---|---|---|
+| BE-\* items bound to a named test | 107 of 109 declared, high-water ratchet at 107 | M1, enforced |
+| Test vectors cross-verified (Zig against Python `cryptography`) | 77 passed, 0 failed | M3, enforced |
+| Mutants killed by the test suite | 118 of 118 | M2, measured but **not** wired into the exit code |
+| Pre-authentication attack surface | 1173 of 1500 lines | M5, enforced |
+| Post-authentication attack surface | 1477 of 1500 lines | M11, enforced |
+| Parser exit points with a matching `Branch` member | 72 of 72, zero raw error returns | M9, enforced |
+| Pointer-minting builtins in `src/` | 0 | M8, enforced |
+| Call sites able to reach an effect | 1, from `verifyGrantThen` | M10, enforced |
+
+Nine gates are enforced. Two are printed and excluded on purpose: **M2** (mutation testing) has a
+working harness whose result is quoted above but no wiring into the verdict, and **M4** (differential
+fuzzing) has nothing to check yet. Both gaps are visible in the tool's own output rather than
+absent from it, which is the point of printing all of them.
+
+What this does **not** say: no part of the protocol has been model-checked, no adversarial
+evaluation against a real model has been run, and no external cryptographic review of the
+composition exists. See the list at the end of this file.
 
 ---
 
@@ -62,6 +90,8 @@ Bolina's answer is to stop asking the sender for the guarantee:
 | **`SPEC.md`** | The protocol. Six layers, the wire format, the state machine, and every Boundary Expectation (BE-\*) an implementation must satisfy |
 | **`THREAT-MODEL.md`** | Assets, five adversaries — starting with *the model itself* — security goals stated so they can be falsified, and the accepted risks named rather than hidden |
 | **`LANGUAGE.md`** | Decided: **Zig**, on the zero-dependency constraint. Records the four obligations that choice activates, and what would reopen it |
+| **`M1-AUDIT.md`** | What has been measured in M1 and how: the marker-by-marker keying audit, the mutation rounds, the attack-surface budget, and the addenda that correct earlier numbers |
+| **`CONTRIBUTING.md`** | The merge rules, split into mechanical (`tools/prumo-verify` refuses it) and judgement (a person decides and records why) |
 
 Read `SPEC.md` §0 and §7–§8 first; those are the parts that are not borrowed.
 
@@ -113,7 +143,10 @@ Everything else here is assembled from published work. If you find a protocol th
 
 In order, from `SPEC.md` §11:
 
-1. Red-team `SPEC.md` §8 on paper — enumerate every in-edge to `EXECUTING`.
+1. ~~Red-team `SPEC.md` §8 on paper — enumerate every in-edge to `EXECUTING`.~~ **Done**, with the
+   dispositions landed in `SPEC.md`: see `RED-TEAM-08.md` (§8, by the author) and `RED-TEAM-09.md`
+   (§7, delegated). Both are evidence class *Inference*: one reader reading a document. That seals
+   nothing on its own, which is why (2) and (3) below are unchanged by it.
 2. Model-check the state machine (TLA+ or Alloy), with BE-GRANT-01/-03/-04/-06 as invariants.
 3. Run an adversarial evaluation in which a real model tries to obtain an effect without a grant —
    including by prompt injection and by social-engineering an approver — and fails, **measured
@@ -123,8 +156,9 @@ In order, from `SPEC.md` §11:
 4. Get external cryptographic review of the *composition*. The primitives are standard; putting them
    together this way is not, and composition is where protocols fail.
 
-Until (3) produces a result, the correct description of Bolina's central guarantee is **specified**
-— not proved, not enforced, not secure.
+Until (3) produces a result, the correct description of Bolina's central guarantee is **specified,
+and mechanically gated in one implementation**: not model-checked, not evaluated against a real
+model, not externally reviewed. Not proved, and not secure.
 
 ## Authorship and credits
 
