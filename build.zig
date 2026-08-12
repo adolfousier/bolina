@@ -104,6 +104,14 @@ pub fn build(b: *std.Build) void {
     const fuzz_step = b.step("fuzz", "Build and run the parser chaos fuzzer (fixed ~1h budget)");
     fuzz_step.dependOn(&run_fuzz.step);
 
+    // Build-only step: installs the fuzz binary WITHOUT running it. The `fuzz`
+    // step above bundles a run, which fails when the target is non-native
+    // (e.g. cross-compiling x86_64-linux on an aarch64-macos host to ship the
+    // soak to a server). Use `zig build fuzz-bin -Dtarget=... -Dfuzz-budget=...`
+    // to produce a clean installable artifact at zig-out/bin/bolina-fuzz.
+    const fuzz_bin_step = b.step("fuzz-bin", "Build+install the fuzz binary without running (cross-target shipping)");
+    fuzz_bin_step.dependOn(&b.addInstallArtifact(fuzz_exe, .{}).step);
+
     // Coverage measurement (LANGUAGE.md O2 / SPEC section 11.6). The same fuzz
     // harness, but built with -Dcoverage so coverage.ENABLED is comptime true
     // and every parser exit-point counter is live. Run as
