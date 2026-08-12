@@ -14,10 +14,10 @@
 //
 // Seams the daemon supplies are injected as bare function hooks (M10
 // shape): execute_effect (single effect call site), cert_for_sender
-// (session-state lookup), on_rejected. The consumed-grant hook (BE-GRANT-01
-// stand-in) is a module check-and-set registry in phase A; the phase-B
-// executor replaces it with a durable commit. Clock is caller-supplied
-// now_ms (house pattern).
+// (session-state lookup), on_rejected. The consumed-grant hook (BE-GRANT-01)
+// is the durable ledger commit of src/grant_ledger.zig (D-061/D-062): the
+// grant_id is committed durably before the effect fires, tombstoned after it
+// returns. Clock is caller-supplied now_ms (house pattern).
 //
 // Dispatch binds no new M1 marker: it exercises the 109 already bound.
 
@@ -27,16 +27,16 @@ const session = @import("parser/session.zig");
 const intent_mod = @import("intent.zig");
 const resolver_mod = @import("resolver.zig");
 const verify = @import("verify.zig");
+const grant_ledger = @import("grant_ledger.zig");
 
 // Declared defaults (SPEC grant receipts, D-059).
 pub const T_MAX_S_DEFAULT: u64 = 3600;
 pub const T_RECV_S_DEFAULT: u64 = 300;
 
-// Phase-A seam bounds (D-059): dispatch copies intent sender and action at
-// admit time because intent.Entry carries neither; phase B sizes both from
-// the session MTU.
+// Seam bounds (D-059): dispatch copies intent sender and action at admit
+// time because intent.Entry carries neither; phase B sizes both from the
+// session MTU.
 pub const MAX_ACTION: usize = 512;
-pub const MAX_CONSUMED: usize = 256;
 
 pub const DispatchError = error{
     BadEnvelope, // structural verification refused
@@ -62,26 +62,62 @@ pub const Hooks = struct {
     on_rejected: *const fn (intent_id: []const u8) void,
 };
 
-// Consumed-grant registry (BE-GRANT-01 stand-in, D-059): check-and-set.
-// First sight of a grant_id marks it consumed and returns false; replays
-// return true. Module-level because the hook is a bare function pointer
-// (M10 shape); phase B replaces it with the durable ledger commit.
-var consumed_registry: [MAX_CONSUMED][channel.LEN_GRANT_ID]u8 = undefined;
-var consumed_len: usize = 0;
+// Consumed-grant ledger seam (BE-GRANT-01, D-062): the D-059 in-memory
+// consumed_registry stand-in replaced by the durable two-phase append log of
+// src/grant_ledger.zig (D-061). Module-level because the hook is a bare
+// function pointer (M10 shape). The daemon initializes the ledger exactly
+// once at startup via initDurableLedger and receives the recovered orphans:
+// committed-but-unpublished grants for which it publishes exactly one
+// interrupted Effect each (BE-GRANT-01a) before calling tombstoneOrphan.
+// Restart semantics (BE-GRANT-04): pending approvals live only in the
+// in-memory intent table and are never committed here, so a restart expires
+// them by construction.
+var durable_ledger: ?grant_ledger.GrantLedger = null;
 
-fn consumedHook(grant_id: []const u8) bool {
-    for (consumed_registry[0..consumed_len]) |c| {
-        if (std.mem.eql(u8, &c, grant_id)) return true;
+// Open (or create) the durable ledger at path and recover. Copies recovered
+// orphans into orphan_out and returns their count; the copy is deliberate:
+// Recovery borrows the ledger's internal buffer, and tombstoneOrphan mutates
+// the ledger, so the caller must hold its own list while it publishes the
+// interrupted Effects. ResourceExhausted if the orphan list does not fit.
+pub fn initDurableLedger(io: std.Io, path: []const u8, orphan_out: []grant_ledger.OrphanGrant) grant_ledger.LedgerError!usize {
+    var lg = try grant_ledger.GrantLedger.open(io, path);
+    const r = try lg.recover();
+    if (r.orphans.len > orphan_out.len) {
+        lg.close();
+        return error.ResourceExhausted;
     }
-    if (consumed_len < MAX_CONSUMED and grant_id.len == channel.LEN_GRANT_ID) {
-        @memcpy(&consumed_registry[consumed_len], grant_id);
-        consumed_len += 1;
-    }
-    return false;
+    @memcpy(orphan_out[0..r.orphans.len], r.orphans);
+    durable_ledger = lg;
+    return r.orphans.len;
 }
 
-pub fn resetConsumedRegistry() void {
-    consumed_len = 0;
+pub fn closeDurableLedger() void {
+    if (durable_ledger) |*lg| {
+        lg.close();
+        durable_ledger = null;
+    }
+}
+
+// The caller has published the interrupted Effect for an orphan
+// (BE-GRANT-01a) and now tombstones it so later recoveries skip it.
+pub fn tombstoneOrphan(grant_id: [channel.LEN_GRANT_ID]u8) grant_ledger.LedgerError!void {
+    if (durable_ledger) |*lg| try lg.markPublished(grant_id);
+}
+
+// Check 11 hook (D-062): durably commit-before-effect. Returns true when the
+// grant_id is ALREADY consumed (replay). No initialized ledger refuses every
+// grant: without the durable commit the effect must not run (fail-safe,
+// BE-GRANT-01). A failed commit (resource exhaustion) likewise refuses: an
+// uncommitted grant is unspent, so the effect does not run; the refusal
+// surfaces as AlreadyConsumed because the hook contract is a bool.
+fn consumedHook(grant_id: []const u8, not_after_ms: u64, now_ms: u64) bool {
+    var lg = &(durable_ledger orelse return true);
+    if (grant_id.len != channel.LEN_GRANT_ID) return true;
+    var gid: [channel.LEN_GRANT_ID]u8 = undefined;
+    @memcpy(&gid, grant_id[0..channel.LEN_GRANT_ID]);
+    if (lg.isConsumed(gid)) return true;
+    lg.commitConsumed(gid, not_after_ms, now_ms) catch return true;
+    return false;
 }
 
 const SenderRecord = struct {
@@ -178,6 +214,18 @@ pub const Dispatch = struct {
             .already_consumed = consumedHook,
         };
         try verify.verifyGrantThen(env, &grant, ctx, hooks.execute_effect);
+        // BE-GRANT-01a: the effect returned, so the grant is published. The
+        // tombstone keeps the next recovery from re-emitting it as an orphan.
+        // A failed tombstone write is fail-safe, not a dispatch failure: the
+        // grant stays consumed, and recovery re-emits interrupted for it
+        // (at-least-once), so an executed effect is never reported as an error.
+        if (durable_ledger) |*lg| {
+            if (grant.grant_id.len == channel.LEN_GRANT_ID) {
+                var gid: [channel.LEN_GRANT_ID]u8 = undefined;
+                @memcpy(&gid, grant.grant_id[0..channel.LEN_GRANT_ID]);
+                lg.markPublished(gid) catch {};
+            }
+        }
         // Phase A ordering (D-059): the EXECUTING transition lands after a
         // successful verify frame. Dispatch is single-threaded in memory, so
         // the match-to-transition frame race BE-GRANT-03a names does not

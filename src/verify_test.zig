@@ -73,18 +73,24 @@ const T_RECV_S: u64 = 300;
 // without first giving each callback double per-test storage.
 var ledger_calls: usize = 0;
 
-fn ledgerFresh(grant_id: []const u8) bool {
+fn ledgerFresh(grant_id: []const u8, not_after_ms: u64, now_ms: u64) bool {
     _ = grant_id;
+    _ = not_after_ms;
+    _ = now_ms;
     return false;
 }
 
-fn ledgerSpent(grant_id: []const u8) bool {
+fn ledgerSpent(grant_id: []const u8, not_after_ms: u64, now_ms: u64) bool {
     _ = grant_id;
+    _ = not_after_ms;
+    _ = now_ms;
     return true;
 }
 
-fn ledgerCounting(grant_id: []const u8) bool {
+fn ledgerCounting(grant_id: []const u8, not_after_ms: u64, now_ms: u64) bool {
     _ = grant_id;
+    _ = not_after_ms;
+    _ = now_ms;
     ledger_calls += 1;
     return false;
 }
@@ -96,8 +102,10 @@ fn ledgerCounting(grant_id: []const u8) bool {
 // durability of BE-GRANT-01a made load-bearing for the interrupted-effect test.
 var one_shot_consumed: bool = false;
 
-fn ledgerDurableCommit(grant_id: []const u8) bool {
+fn ledgerDurableCommit(grant_id: []const u8, not_after_ms: u64, now_ms: u64) bool {
     _ = grant_id;
+    _ = not_after_ms;
+    _ = now_ms;
     if (one_shot_consumed) return true;
     one_shot_consumed = true;
     return false;
@@ -144,7 +152,7 @@ fn grantEnvelope(grant: parser.channel.Grant) parser.channel.Envelope {
     };
 }
 
-fn baseContext(action: []const u8, hook: *const fn ([]const u8) bool) verify.GrantContext {
+fn baseContext(action: []const u8, hook: *const fn ([]const u8, u64, u64) bool) verify.GrantContext {
     return .{
         .own_pubkey = &EXECUTOR_BYTES,
         .trusted_ca_keys = cth.trustedSet(),

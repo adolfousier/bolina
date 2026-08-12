@@ -15,6 +15,7 @@ const resolver_mod = @import("resolver.zig");
 const verify = @import("verify.zig");
 const binding = @import("binding.zig");
 const cth = @import("cert_test_helpers.zig");
+const grant_ledger_mod = @import("grant_ledger.zig");
 const Ed = std.crypto.sign.Ed25519;
 
 // Literal fixtures (D-027).
@@ -72,6 +73,34 @@ const TEST_HOOKS: dispatch_mod.Hooks = .{
     .cert_for_sender = noCert,
     .on_rejected = noopRejected,
 };
+
+// Durable consumed-ledger seam state (D-062): every test that drives a grant
+// to check 11 runs the dispatch seam over a fresh ledger file under /tmp.
+// The threaded io context must outlive the ledger's borrow, so the test owns
+// the SeamLedger for its whole body.
+const SeamLedger = struct {
+    threaded: std.Io.Threaded,
+    io: std.Io,
+    path: []const u8,
+};
+
+fn initSeamLedger(comptime tag: []const u8) !SeamLedger {
+    var threaded = std.Io.Threaded.init_single_threaded;
+    const io = threaded.io();
+    const path = "/tmp/bolina_dispatch_" ++ tag ++ ".log";
+    const dir = std.Io.Dir.cwd();
+    dir.deleteFile(io, path) catch {};
+    var orphan_buf: [8]grant_ledger_mod.OrphanGrant = undefined;
+    const n = try dispatch_mod.initDurableLedger(io, path, &orphan_buf);
+    if (n != 0) return error.TestUnexpectedResult; // fresh file: no orphans
+    return .{ .threaded = threaded, .io = io, .path = path };
+}
+
+fn closeSeamLedger(sl: SeamLedger) void {
+    dispatch_mod.closeDurableLedger();
+    const dir = std.Io.Dir.cwd();
+    dir.deleteFile(sl.io, sl.path) catch {};
+}
 
 // Intent wire layout (SPEC 8.2, parseIntent): intent_id[16] | u16
 // resource_len | resource | u32 action_len | action | u16 rationale_len |
@@ -363,8 +392,9 @@ fn buildGrantWire(intent_id: [16]u8, resource: []const u8, action: []const u8) [
     return grant_body[0..n];
 }
 
-test "DAEMON_A grant happy path: effect once inside the frame, replay refused by state" {
-    dispatch_mod.resetConsumedRegistry();
+test "DAEMON_D grant happy path: effect once inside the frame, replay refused by state" {
+    const sl = try initSeamLedger("happy");
+    defer closeSeamLedger(sl);
     effect_count = 0;
     ensureGrantCerts();
     const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
@@ -399,8 +429,9 @@ test "DAEMON_A grant happy path: effect once inside the frame, replay refused by
     try std.testing.expectEqual(@as(usize, 1), effect_count);
 }
 
-test "DAEMON_A consumed registry: a reused grant_id refuses even against a fresh intent" {
-    dispatch_mod.resetConsumedRegistry();
+test "DAEMON_D durable consumed ledger: a reused grant_id refuses even against a fresh intent" {
+    const sl = try initSeamLedger("reused");
+    defer closeSeamLedger(sl);
     effect_count = 0;
     ensureGrantCerts();
     const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
@@ -426,6 +457,139 @@ test "DAEMON_A consumed registry: a reused grant_id refuses even against a fresh
     // Same grant_id against the fresh intent: the consumed registry refuses.
     try std.testing.expectError(verify.VerifyError.AlreadyConsumed, d.dispatch(grantEnvelopeSigned(buildGrantWire(G_INTENT_ID_B, canonical_b, ACTION)), hooks, GRANT_NOW_MS));
     try std.testing.expectEqual(@as(usize, 1), effect_count);
+}
+
+test "DAEMON_D durable seam: commit row and publish tombstone both on disk after the effect (BE-GRANT-01)" {
+    const sl = try initSeamLedger("witness");
+    defer closeSeamLedger(sl);
+    effect_count = 0;
+    ensureGrantCerts();
+    const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
+    var res = resolver_mod.Resolver.init(&executor_pub);
+    var canonical_a_buf: [64]u8 = undefined;
+    const canonical_a = executorCanonical(&canonical_a_buf, "logs/deploy.log");
+    try res.add(canonical_a);
+    var d = dispatch_mod.Dispatch.init(res, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+    const hooks = dispatch_mod.Hooks{ .execute_effect = &testEffect, .cert_for_sender = &grantPathCertHook, .on_rejected = &noopRejected };
+    const len_a = buildIntentBodyId(&intent_body_a, &G_INTENT_ID, canonical_a, ACTION);
+    var a_sender: [32]u8 = undefined;
+    var a_sig: [64]u8 = undefined;
+    var a_tbs: [64]u8 = undefined;
+    try std.testing.expectEqual(dispatch_mod.Outcome.intent_admitted, try d.dispatch(agentEnvelopeSigned(intent_body_a[0..len_a], &a_sender, &a_sig, &a_tbs), hooks, GRANT_NOW_MS));
+    try std.testing.expectEqual(dispatch_mod.Outcome.grant_executed, try d.dispatch(grantEnvelopeSigned(buildGrantWire(G_INTENT_ID, canonical_a, ACTION)), hooks, GRANT_NOW_MS));
+    try std.testing.expectEqual(@as(usize, 1), effect_count);
+    // The durable witness: an independent ledger view over the same file
+    // sees G_GRANT_ID consumed AND published (the tombstone landed after the
+    // effect returned), so the next recovery reports zero orphans.
+    var view = try grant_ledger_mod.GrantLedger.open(sl.io, sl.path);
+    defer view.close();
+    const r = try view.recover();
+    try std.testing.expect(view.isConsumed(G_GRANT_ID));
+    try std.testing.expectEqual(@as(usize, 0), r.orphans.len);
+}
+
+test "DAEMON_D durable seam: consumed grant survives restart, replay refused by the ledger (BE-GRANT-01)" {
+    const sl = try initSeamLedger("restart");
+    effect_count = 0;
+    ensureGrantCerts();
+    const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
+    var canonical_a_buf: [64]u8 = undefined;
+    var canonical_b_buf: [64]u8 = undefined;
+    const canonical_a = executorCanonical(&canonical_a_buf, "logs/deploy.log");
+    const canonical_b = executorCanonical(&canonical_b_buf, "logs/archive.log");
+    var a_sender: [32]u8 = undefined;
+    var a_sig: [64]u8 = undefined;
+    var a_tbs: [64]u8 = undefined;
+    // Run 1: intent A admitted, grant executes, G_GRANT_ID committed durably.
+    {
+        var res = resolver_mod.Resolver.init(&executor_pub);
+        try res.add(canonical_a);
+        var d = dispatch_mod.Dispatch.init(res, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+        const hooks = dispatch_mod.Hooks{ .execute_effect = &testEffect, .cert_for_sender = &grantPathCertHook, .on_rejected = &noopRejected };
+        const len_a = buildIntentBodyId(&intent_body_a, &G_INTENT_ID, canonical_a, ACTION);
+        try std.testing.expectEqual(dispatch_mod.Outcome.intent_admitted, try d.dispatch(agentEnvelopeSigned(intent_body_a[0..len_a], &a_sender, &a_sig, &a_tbs), hooks, GRANT_NOW_MS));
+        try std.testing.expectEqual(dispatch_mod.Outcome.grant_executed, try d.dispatch(grantEnvelopeSigned(buildGrantWire(G_INTENT_ID, canonical_a, ACTION)), hooks, GRANT_NOW_MS));
+    }
+    // Restart: close the ledger; fresh dispatch state, same durable file.
+    dispatch_mod.closeDurableLedger();
+    var orphan_buf: [8]grant_ledger_mod.OrphanGrant = undefined;
+    const n = try dispatch_mod.initDurableLedger(sl.io, sl.path, &orphan_buf);
+    try std.testing.expectEqual(@as(usize, 0), n); // published grant: no orphan
+    defer closeSeamLedger(sl);
+    // Run 2: a fresh intent B on a fresh resource, but the same grant_id.
+    // Checks 1-10 pass against intent B; the durable ledger refuses at 11.
+    var res2 = resolver_mod.Resolver.init(&executor_pub);
+    try res2.add(canonical_b);
+    var d2 = dispatch_mod.Dispatch.init(res2, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+    const hooks2 = dispatch_mod.Hooks{ .execute_effect = &testEffect, .cert_for_sender = &grantPathCertHook, .on_rejected = &noopRejected };
+    const len_b = buildIntentBodyId(&intent_body_b, &G_INTENT_ID_B, canonical_b, ACTION);
+    try std.testing.expectEqual(dispatch_mod.Outcome.intent_admitted, try d2.dispatch(agentEnvelopeSigned(intent_body_b[0..len_b], &a_sender, &a_sig, &a_tbs), hooks2, GRANT_NOW_MS));
+    try std.testing.expectError(verify.VerifyError.AlreadyConsumed, d2.dispatch(grantEnvelopeSigned(buildGrantWire(G_INTENT_ID_B, canonical_b, ACTION)), hooks2, GRANT_NOW_MS));
+    try std.testing.expectEqual(@as(usize, 1), effect_count);
+}
+
+test "DAEMON_D durable seam: pending approval EXPIRES on restart, never restored (BE-GRANT-04)" {
+    const sl = try initSeamLedger("pending");
+    ensureGrantCerts();
+    const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
+    var canonical_a_buf: [64]u8 = undefined;
+    const canonical_a = executorCanonical(&canonical_a_buf, "logs/deploy.log");
+    var a_sender: [32]u8 = undefined;
+    var a_sig: [64]u8 = undefined;
+    var a_tbs: [64]u8 = undefined;
+    // Run 1: the intent is admitted; the pending approval lives ONLY in the
+    // in-memory table. No grant arrives, so nothing is committed to the log.
+    {
+        var res = resolver_mod.Resolver.init(&executor_pub);
+        try res.add(canonical_a);
+        var d = dispatch_mod.Dispatch.init(res, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+        const hooks = dispatch_mod.Hooks{ .execute_effect = &testEffect, .cert_for_sender = &grantPathCertHook, .on_rejected = &noopRejected };
+        const len_a = buildIntentBodyId(&intent_body_a, &G_INTENT_ID, canonical_a, ACTION);
+        try std.testing.expectEqual(dispatch_mod.Outcome.intent_admitted, try d.dispatch(agentEnvelopeSigned(intent_body_a[0..len_a], &a_sender, &a_sig, &a_tbs), hooks, GRANT_NOW_MS));
+    }
+    // Restart: fresh dispatch state, recovered (empty) durable log.
+    dispatch_mod.closeDurableLedger();
+    var orphan_buf: [8]grant_ledger_mod.OrphanGrant = undefined;
+    const n = try dispatch_mod.initDurableLedger(sl.io, sl.path, &orphan_buf);
+    try std.testing.expectEqual(@as(usize, 0), n);
+    defer closeSeamLedger(sl);
+    // Run 2: the grant for intent A refuses at the intent match: the pending
+    // approval was EXPIRED by the restart, not restored (BE-GRANT-04). The
+    // durable ledger carries no pending row by design.
+    var res2 = resolver_mod.Resolver.init(&executor_pub);
+    try res2.add(canonical_a);
+    var d2 = dispatch_mod.Dispatch.init(res2, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+    const hooks2 = dispatch_mod.Hooks{ .execute_effect = &testEffect, .cert_for_sender = &grantPathCertHook, .on_rejected = &noopRejected };
+    try std.testing.expectError(dispatch_mod.DispatchError.NoPendingIntent, d2.dispatch(grantEnvelopeSigned(buildGrantWire(G_INTENT_ID, canonical_a, ACTION)), hooks2, GRANT_NOW_MS));
+}
+
+test "DAEMON_D durable seam: crash residue surfaces one orphan; tombstone retires it (BE-GRANT-01a)" {
+    // Construct the crash residue directly (D-061 ruling 2): a commit row for
+    // G_GRANT_ID whose published tombstone never landed (a crash between the
+    // commit fsync and the effect publish).
+    var threaded = std.Io.Threaded.init_single_threaded;
+    const io = threaded.io();
+    const path = "/tmp/bolina_dispatch_orphan.log";
+    const dir = std.Io.Dir.cwd();
+    dir.deleteFile(io, path) catch {};
+    {
+        var lg = try grant_ledger_mod.GrantLedger.open(io, path);
+        try lg.commitConsumed(G_GRANT_ID, GRANT_NOW_MS + 3_600_000, GRANT_NOW_MS);
+        lg.close();
+    }
+    // Startup: recover surfaces exactly one orphan, grant_id intact.
+    var orphan_buf: [8]grant_ledger_mod.OrphanGrant = undefined;
+    const n = try dispatch_mod.initDurableLedger(io, path, &orphan_buf);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqual(G_GRANT_ID, orphan_buf[0].grant_id);
+    // The caller publishes the interrupted Effect, then tombstones the orphan.
+    try dispatch_mod.tombstoneOrphan(G_GRANT_ID);
+    // Next restart: recovery is a no-op for that orphan.
+    dispatch_mod.closeDurableLedger();
+    const n2 = try dispatch_mod.initDurableLedger(io, path, &orphan_buf);
+    try std.testing.expectEqual(@as(usize, 0), n2);
+    dispatch_mod.closeDurableLedger();
+    dir.deleteFile(io, path) catch {};
 }
 
 // ---------------------------------------------------------------------------

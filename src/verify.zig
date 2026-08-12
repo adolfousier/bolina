@@ -162,9 +162,12 @@ pub const GrantContext = struct {
     t_recv_s: u64, // default 300
     // Check 11 (BE-GRANT-01): the consumed-grant ledger hook. Returns true if
     // the grant_id is ALREADY consumed. This is the only check that performs
-    // I/O, and it runs last. The slice supplies an in-memory stand-in; a real
-    // executor commits the grant_id durably before the effect is attempted.
-    already_consumed: *const fn (grant_id: []const u8) bool,
+    // I/O, and it runs last; the real executor commits the grant_id durably
+    // before the effect is attempted. The durable commit row carries the
+    // grant's not_after (D-061 ruling 1 row format) and the prune clock is the
+    // verify clock, so the hook receives grant_id, not_after_ms, and now_ms
+    // together (D-062).
+    already_consumed: *const fn (grant_id: []const u8, not_after_ms: u64, now_ms: u64) bool,
 };
 
 // ---------------------------------------------------------------------------
@@ -234,7 +237,9 @@ pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.ch
     try checkExpiry(grant.not_after, ctx.now_ms, ctx.first_receipt_ms, ctx.t_max_s, ctx.t_recv_s);
 
     // 11. grant_id is not already consumed (BE-GRANT-01). Only I/O step; last.
-    if (ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed;
+    //     The hook carries not_after and the verify clock for the durable
+    //     commit row and its prune (D-062).
+    if (ctx.already_consumed(grant.grant_id, grant.not_after, ctx.now_ms)) return error.AlreadyConsumed;
 
     // The effect runs inside this frame on the verified grant (BE-GRANT-03b).
     // The ledger commit above is durable before this call, so a failed effect
