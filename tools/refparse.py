@@ -66,6 +66,7 @@ MAX_CLAIM_TEXT = 1024          # Claim.text (SPEC 7.2)
 MAX_SUBJECT = 256              # Claim.subject (SPEC 7.2)
 MAX_NOTE = 1024                # Refusal.note, "<= 1 KiB" (SPEC 8.5)
 MAX_GENESIS_NAME = 64          # ControlGenesis.name, "<= 64" (SPEC 6.1b)
+MAX_CA_COUNT = 16              # ControlGenesis.ca_count, grammar floor 1, "<= 16" (SPEC 6.1b; channel_id derives from ca_key_0, so 0 is malformed)
 MAX_CERT_NAME = 64             # Cert.name, "<= 64 bytes" (SPEC 3.1)
 MAX_GROUPS = 16                # Cert.group_count, "<= 16" (SPEC 3.1)
 MIN_CA_SIGS = 1                # Cert.ca_sig_count, "1..4" (SPEC 3.1)
@@ -386,6 +387,10 @@ def _control_genesis(c, buf):
     member_group = c.take(8)
     admin_group = c.take(8)
     ca_count = c.u8()
+    if ca_count == 0:
+        raise _Reject("genesis_ca_count_zero")
+    if ca_count > MAX_CA_COUNT:
+        raise _Reject("genesis_ca_count_oversize")
     ca_keys = c.take(ca_count * 32)
     for i in range(1, ca_count):
         if ca_keys[i * 32:(i + 1) * 32] <= ca_keys[(i - 1) * 32:i * 32]:
