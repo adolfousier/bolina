@@ -82,7 +82,10 @@ jobs:
           ZIGDIR="$HOME/zig-toolchain/zig-x86_64-linux-${{ steps.pin.outputs.version }}"
           mkdir -p "$HOME/zig-toolchain"
           tar -xJf /tmp/zig.tar.xz -C "$HOME/zig-toolchain"
+          # GITHUB_PATH takes effect in subsequent steps; export for THIS step
+          # so the version check below resolves zig immediately.
           echo "$ZIGDIR" >> "$GITHUB_PATH"
+          export PATH="$ZIGDIR:$PATH"
           test "$(zig version)" = "${{ steps.pin.outputs.version }}"
 
       - name: Chaos fuzz (${{ matrix.seed_label }}, coverage on)
