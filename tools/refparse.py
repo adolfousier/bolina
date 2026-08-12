@@ -709,10 +709,14 @@ def parse_cert(buf):
 # Ed25519 signature ... over the Noise handshake hash h") but gives no field
 # table; the encoding follows from SPEC 2.2 alone: a variable-length field is a
 # u16 length plus bytes, a signature is a fixed 64 bytes, trailing bytes are a
-# parse failure. SPEC states no minimum for cert_len, so none is enforced.
+# parse failure. BE-TR-01 (SPEC 4.1) mandates each side send its certificate;
+# a cert_len of zero presents no certificate to bind against, so it is a parse
+# failure (bind_cert_len_zero), matching the production parser.
 
 def _binding_message(c, buf):
     cert_len = c.u16()
+    if cert_len == 0:
+        raise _Reject("bind_cert_len_zero")
     cert = c.take(cert_len)
     sig = c.take(64)
     if c.pos != len(buf):
