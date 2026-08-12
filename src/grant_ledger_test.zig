@@ -283,3 +283,72 @@ test "BE_GRANT_01 idempotent commit: re-committing a spent grant is a no-op" {
     try std.testing.expectEqual(before, lg.consumed_len); // not added twice
     try std.testing.expect(lg.isConsumed(GID_A));
 }
+
+// BE-GRANT-01 regression: pruneExpired MUST be crash-safe. The old scheme
+// truncated the live file in place (setLength(0) -> write -> sync), so a crash
+// between the truncate and the survivor write left an empty log and recover()
+// rebuilt an empty consumed set, un-spending a still-valid grant. The fix is an
+// atomic rewrite (write-temp -> fsync-temp -> rename): the live path always
+// points at a complete log, never an empty one. This test exercises the fix's
+// two new guarantees against a faithfully constructed crash-residue:
+//   (a) a crash during the temp-write phase leaves the OLD live log intact, so
+//       a live committed grant survives (the invariant);
+//   (b) a stale .tmp left by an aborted prune is cleaned up on the next prune
+//       and does not corrupt the live log.
+test "BE_GRANT_01 crash during prune: atomic rewrite leaves the live log intact and cleans a stale temp" {
+    var ctx = IoCtx.init();
+    ctx.io = ctx.threaded.io();
+    const io = ctx.io;
+    const dir = std.Io.Dir.cwd();
+
+    const path_buf = tempPath("crashprune");
+    const path = cstr(&path_buf);
+    // Build the temp path the engine uses (path ++ ".tmp").
+    var tmp_buf: [128]u8 = undefined;
+    @memcpy(tmp_buf[0..path.len], path);
+    tmp_buf[path.len] = '.';
+    tmp_buf[path.len + 1] = 't';
+    tmp_buf[path.len + 2] = 'm';
+    tmp_buf[path.len + 3] = 'p';
+    const tmp_path = tmp_buf[0 .. path.len + 4];
+    {
+        // GID_A live (far future), GID_B expired (will be pruned), both published.
+        var lg = try freshLedger(io, path_buf);
+        try lg.commitConsumed(GID_A, FAR_FUTURE_MS, NOW_MS);
+        try lg.commitConsumed(GID_B, NOW_MS + 1000, NOW_MS);
+        try lg.markPublished(GID_A);
+        try lg.markPublished(GID_B);
+        lg.close();
+        // Hand-construct the residue of a crash during the NEW scheme's
+        // temp-write phase: the live log is still the OLD complete log (rename
+        // never happened) and a stale partial .tmp sits beside it.
+        const tf = dir.createFile(io, tmp_path, .{ .read = true, .truncate = true }) catch return error.TestUnexpectedResult;
+        const garbage = [_]u8{ 0x01, 0xDE, 0xAD, 0xBE, 0xEF };
+        tf.writePositionalAll(io, &garbage, 0) catch return error.TestUnexpectedResult;
+        tf.sync(io) catch return error.TestUnexpectedResult;
+        tf.close(io);
+    }
+    // Restart from the crash-residue: live log intact, stale temp present.
+    var lg = gl.GrantLedger.open(io, path) catch return error.TestUnexpectedResult;
+    defer lg.close();
+    _ = try lg.recover();
+    // Invariant (a): the live committed grant survived the interrupted prune.
+    try std.testing.expect(lg.isConsumed(GID_A));
+    // Run the prune the crash interrupted: it must drop the expired grant,
+    // keep the live one, and clean the stale temp via atomic rename.
+    try lg.pruneExpired(NOW_MS + 2000);
+    try std.testing.expect(lg.isConsumed(GID_A)); // live grant kept
+    try std.testing.expect(!lg.isConsumed(GID_B)); // expired grant dropped
+    // The stale temp MUST be gone (rename reused it, or cleanup removed it).
+    const still = dir.statFile(io, tmp_path, .{});
+    try std.testing.expectError(error.FileNotFound, still);
+    // Survives restart: the live grant is still consumed from the new log.
+    lg.close();
+    var lg2 = gl.GrantLedger.open(io, path) catch return error.TestUnexpectedResult;
+    defer lg2.close();
+    _ = try lg2.recover();
+    try std.testing.expect(lg2.isConsumed(GID_A));
+    try std.testing.expect(!lg2.isConsumed(GID_B));
+    dir.deleteFile(io, path) catch {};
+    dir.deleteFile(io, tmp_path) catch {};
+}

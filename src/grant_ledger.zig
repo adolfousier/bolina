@@ -93,6 +93,10 @@ pub const GrantLedger = struct {
     io: std.Io,
     file: std.Io.File,
     eof: u64,
+    // Absolute path of the log, captured at open so pruneExpired can do an
+    // atomic crash-safe rewrite via write-temp -> fsync -> rename (see below).
+    path_buf: [128]u8 = [_]u8{0} ** 128,
+    path_len: u8 = 0,
     consumed: [MAX_LIVE][GRANT_ID_LEN]u8 = undefined,
     consumed_len: usize = 0,
     revoked: [MAX_LIVE][SIG_PUBKEY_LEN]u8 = undefined,
@@ -112,7 +116,11 @@ pub const GrantLedger = struct {
         const dir = std.Io.Dir.cwd();
         const f = dir.createFile(io, path, .{ .read = true, .truncate = false }) catch return error.DiskError;
         const len = f.length(io) catch return error.DiskError;
-        return .{ .io = io, .file = f, .eof = len };
+        if (path.len > 128) return error.BadLog;
+        var lg = GrantLedger{ .io = io, .file = f, .eof = len };
+        @memcpy(lg.path_buf[0..path.len], path);
+        lg.path_len = @intCast(path.len);
+        return lg;
     }
 
     // recover (BE-GRANT-01a, D-061): single forward scan. Rebuilds consumed,
@@ -305,13 +313,45 @@ pub const GrantLedger = struct {
                 break;
             }
         }
-        // Rewrite the live file: truncate to zero, write survivors, fsync.
-        self.file.setLength(self.io, 0) catch return error.DiskError;
-        self.eof = 0;
+        // Crash-safe atomic rewrite (BE-GRANT-01): the OLD scheme was
+        // setLength(0) -> write -> sync on the live file, which is NOT atomic.
+        // A crash between setLength(0) and the survivor write left an empty log,
+        // so recover() rebuilt an empty consumed set and a still-valid grant was
+        // un-spent -> the effect re-executed. The fix is write-temp -> fsync-temp
+        // -> atomic rename(temp, live): POSIX rename is atomic within a directory,
+        // so the live path always points at either the previous complete log or
+        // the new complete log, never an empty one. A crash during temp-write
+        // leaves the old log untouched; a crash during rename leaves old or new.
+        const live_path = self.path_buf[0..self.path_len];
+        if (self.path_len + 4 > 128) return error.BadLog; // ".tmp" suffix must fit
+        var tmp_buf: [128]u8 = undefined;
+        @memcpy(tmp_buf[0..self.path_len], live_path);
+        tmp_buf[self.path_len] = '.';
+        tmp_buf[self.path_len + 1] = 't';
+        tmp_buf[self.path_len + 2] = 'm';
+        tmp_buf[self.path_len + 3] = 'p';
+        const tmp_path = tmp_buf[0 .. self.path_len + 4];
+        const dir = std.Io.Dir.cwd();
+        // Clean any stale temp from a prior aborted prune, then create fresh.
+        dir.deleteFile(self.io, tmp_path) catch {};
+        const tf = dir.createFile(self.io, tmp_path, .{ .read = true, .truncate = true }) catch return error.DiskError;
         if (out_len > 0) {
-            self.file.writePositionalAll(self.io, out[0..out_len], 0) catch return error.DiskError;
-            self.eof = out_len;
+            tf.writePositionalAll(self.io, out[0..out_len], 0) catch {
+                tf.close(self.io);
+                return error.DiskError;
+            };
         }
+        tf.sync(self.io) catch {
+            tf.close(self.io);
+            return error.DiskError;
+        };
+        tf.close(self.io);
+        // Atomic swap: rename temp -> live. The old inode is unlinked; close
+        // the stale handle and reopen the live path.
+        dir.rename(tmp_path, dir, live_path, self.io) catch return error.DiskError;
+        self.file.close(self.io);
+        self.file = dir.openFile(self.io, live_path, .{ .mode = .read_write }) catch return error.DiskError;
+        self.eof = out_len;
         self.file.sync(self.io) catch return error.DiskError;
         // Rebuild the in-memory consumed set from survivors.
         self.consumed_len = live_len;
