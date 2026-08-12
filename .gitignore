@@ -8,3 +8,6 @@ __pycache__/
 
 # run receipts (mutation/gauntlet logs): referenced by closeouts, kept locally, never committed
 /logs/
+
+# differential fuzz corpus (D-056): regenerable deterministic artifact, ~1MB/100k records, never committed
+/fuzz_corpus.bin
