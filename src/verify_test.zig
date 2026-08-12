@@ -167,6 +167,7 @@ fn baseContext(action: []const u8, hook: *const fn ([]const u8, u64, u64) bool) 
         .t_max_s = T_MAX_S,
         .t_recv_s = T_RECV_S,
         .already_consumed = hook,
+        .is_revoked = &revokedNo,
     };
 }
 

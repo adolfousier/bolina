@@ -120,6 +120,21 @@ fn consumedHook(grant_id: []const u8, not_after_ms: u64, now_ms: u64) bool {
     return false;
 }
 
+// Checks 3/4 hook (F4 / BE-REV-02): consult the durable revocation set at the
+// grant checkpoint, where capability turns into effect. The principle is
+// "revoked as of this use, not of cache fill" (verify.zig:454): the grant path
+// is the use, so revocation is re-checked here, not just at mesh establish.
+// Returns true when the sig_pubkey is durably revoked. No initialized ledger
+// refuses every grant (fail-safe): without the revocation set loaded, no grant
+// may turn into an effect.
+fn isRevokedHook(sig_pubkey: []const u8) bool {
+    var lg = &(durable_ledger orelse return true);
+    if (sig_pubkey.len != grant_ledger.SIG_PUBKEY_LEN) return true;
+    var key: [grant_ledger.SIG_PUBKEY_LEN]u8 = undefined;
+    @memcpy(&key, sig_pubkey[0..grant_ledger.SIG_PUBKEY_LEN]);
+    return lg.isRevoked(key);
+}
+
 const SenderRecord = struct {
     intent_id: [channel.LEN_INTENT_ID]u8,
     sender: [32]u8,
@@ -212,6 +227,7 @@ pub const Dispatch = struct {
             .t_max_s = T_MAX_S_DEFAULT,
             .t_recv_s = T_RECV_S_DEFAULT,
             .already_consumed = consumedHook,
+            .is_revoked = isRevokedHook,
         };
         try verify.verifyGrantThen(env, &grant, ctx, hooks.execute_effect);
         // BE-GRANT-01a: the effect returned, so the grant is published. The

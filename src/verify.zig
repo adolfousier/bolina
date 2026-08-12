@@ -56,6 +56,8 @@ pub const VerifyError = error{
     MalformedKey, // a pubkey is not a valid curve point (cannot verify at all)
     BadApproverCert, // BE-GRANT-03 check 3: approver cert invalid, wrong role, or not the grant's approver
     BadSubjectCert, // BE-GRANT-03 check 4: subject cert invalid, wrong role, or not the grant's subject
+    ApproverRevoked, // BE-REV-02 / F4 check 3: approver's sig_pubkey is durably revoked
+    SubjectRevoked, // BE-REV-02 / F4 check 4: subject's sig_pubkey is durably revoked
     WrongExecutor, // BE-GRANT-03 check 5: executor != this executor's key
     WrongSubject, // BE-GRANT-03 check 6: subject != pending intent's sender
     NoMatchingIntent, // BE-GRANT-03 check 7: intent_id matches no pending intent
@@ -168,6 +170,12 @@ pub const GrantContext = struct {
     // verify clock, so the hook receives grant_id, not_after_ms, and now_ms
     // together (D-062).
     already_consumed: *const fn (grant_id: []const u8, not_after_ms: u64, now_ms: u64) bool,
+    // Checks 3/4 (BE-REV-02 / F4): the durable revocation hook, consulted at
+    // use, not at cache fill (verify.zig:454 principle). The grant path is the
+    // checkpoint where capability turns into effect, so revocation is
+    // re-checked here against the approver (check 3) and the subject (check 4).
+    // Backed by grant_ledger.isRevoked (D-063 durable revocation set).
+    is_revoked: *const fn (sig_pubkey: []const u8) bool,
 };
 
 // ---------------------------------------------------------------------------
@@ -209,12 +217,17 @@ pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.ch
     binding.validateCert(ctx.approver_cert, ctx.trusted_ca_keys, ctx.now_ms) catch return error.BadApproverCert;
     if ((ctx.approver_cert.role_bits & binding.ROLE_APPROVER) == 0) return error.BadApproverCert;
     if (!std.mem.eql(u8, ctx.approver_cert.sig_pubkey, grant.approver)) return error.BadApproverCert;
+    // F4 / BE-REV-02: the approver's signing key is durably revoked. Checked at
+    // use (this is the capability->effect checkpoint), not at session fill.
+    if (ctx.is_revoked(ctx.approver_cert.sig_pubkey)) return error.ApproverRevoked;
 
     // 4. Subject certificate valid NOW and carries the agent role. Its identity
     //    key is the subject the grant authorizes.
     binding.validateCert(ctx.subject_cert, ctx.trusted_ca_keys, ctx.now_ms) catch return error.BadSubjectCert;
     if ((ctx.subject_cert.role_bits & binding.ROLE_AGENT) == 0) return error.BadSubjectCert;
     if (!std.mem.eql(u8, ctx.subject_cert.sig_pubkey, grant.subject)) return error.BadSubjectCert;
+    // F4 / BE-REV-02: the subject's signing key is durably revoked.
+    if (ctx.is_revoked(ctx.subject_cert.sig_pubkey)) return error.SubjectRevoked;
 
     // 5. Grant.executor equals this executor's own sig_pubkey.
     if (!std.mem.eql(u8, grant.executor, ctx.own_pubkey)) return error.WrongExecutor;

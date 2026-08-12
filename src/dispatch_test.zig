@@ -710,14 +710,14 @@ test "DAEMON_A bad envelope signature refused at the structural gate" {
 // the authority->effect checkpoint (the comment at verify.zig:454 says
 // revocation is consulted "as of this use, not of cache fill"; the grant
 // path IS a use, yet it does not consult). This test pins the CURRENT
-// behavior so the Phase-B wiring lands visibly: when is_revoked is added to
-// GrantContext and consulted at checks 3-4 (backed by grant_ledger.isRevoked
-// durably), the grant_executed assertion below MUST flip to expecting an
-// ApproverRevoked/SubjectRevoked refusal. It guards against silent
-// regression of that wiring and lifts F4 from DECLARED to TESTED.
+// behavior. The Phase-B wiring HAS landed (D-063): is_revoked is now a
+// GrantContext field, consulted at checks 3-4 and backed by
+// grant_ledger.isRevoked durably. The grant below is now REFUSED with
+// ApproverRevoked. This test guards against silent regression (removal of
+// the is_revoked seam) and lifts F4 from DECLARED to TESTED.
 // ---------------------------------------------------------------------------
 
-test "F4 regression guard: revoked-approver grant EXECUTES, BE-REV-02 unwired in the grant path" {
+test "F4 regression guard: revoked-approver grant REFUSED, BE-REV-02 wired at checks 3-4" {
     var threaded = std.Io.Threaded.init_single_threaded;
     const io = threaded.io();
     const path = "/tmp/bolina_dispatch_f4.log";
@@ -743,7 +743,7 @@ test "F4 regression guard: revoked-approver grant EXECUTES, BE-REV-02 unwired in
         try std.testing.expect(view.isRevoked(approver_pub));
     }
     // Drive the grant happy path with the standard fixtures: the approver
-    // whose key is durably revoked signs the grant. Today the effect FIRES.
+    // whose key is durably revoked signs the grant. Now the grant is REFUSED.
     effect_count = 0;
     ensureGrantCerts();
     const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
@@ -759,8 +759,8 @@ test "F4 regression guard: revoked-approver grant EXECUTES, BE-REV-02 unwired in
     var a_tbs: [64]u8 = undefined;
     try std.testing.expectEqual(dispatch_mod.Outcome.intent_admitted, try d.dispatch(agentEnvelopeSigned(intent_body_a[0..len_a], &a_sender, &a_sig, &a_tbs), hooks, GRANT_NOW_MS));
     const grant_wire = buildGrantWire(G_INTENT_ID, canonical, ACTION);
-    try std.testing.expectEqual(dispatch_mod.Outcome.grant_executed, try d.dispatch(grantEnvelopeSigned(grant_wire), hooks, GRANT_NOW_MS));
-    try std.testing.expectEqual(@as(usize, 1), effect_count); // F4: revoked approver, effect still fires
+    try std.testing.expectError(verify.VerifyError.ApproverRevoked, d.dispatch(grantEnvelopeSigned(grant_wire), hooks, GRANT_NOW_MS));
+    try std.testing.expectEqual(@as(usize, 0), effect_count); // F4: revoked approver, effect refused
     dispatch_mod.closeDurableLedger();
     dir.deleteFile(io, path) catch {};
 }
