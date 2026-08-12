@@ -32,7 +32,7 @@ prints every gate on every run and returns non-zero if an enforced one fails.
 |---|---|---|
 | BE-\* items bound to a named test | 114 of 114 declared, high-water ratchet at 114 | M1, enforced |
 | Test vectors cross-verified (Zig against Python `cryptography`) | 77 passed, 0 failed | M3, enforced |
-| Differential fuzz divergences (production parser against an independent Python reference) | 0 over 20000 records, reaching 69 of 72 parser exit points | M4, enforced |
+| Differential fuzz divergences (production parser against an independent Python reference) | 0 divergences, 72 of 72 parser exit points reached (gate 20,000; extended 1,000,000) | M4, enforced |
 | Mutants killed by the test suite | 151 of 151 | M2, measured but **not** wired into the exit code |
 | Pre-authentication attack surface | 1492 of 1500 lines | M5, enforced |
 | Post-authentication attack surface | 1477 of 1500 lines | M11, enforced |
@@ -46,18 +46,26 @@ the tool's own output rather than absent from it, which is the point of printing
 
 **M4** is honest about its own reach rather than its verdict. The oracle compares the production
 parser against an independent Python reference written from the SPEC field tables alone, and zero
-divergences over the bounded corpus is a real result. The corpus now drives all 22 parse entry
-points and reaches 69 of the 72 measured exit points. Three are still unreached and are named on
-the gate row every run rather than rounded away: `data_payload_oversize`, `cert_ca_count_oversize`, and
-`bind_cert_len_zero`, each needing a shape the corpus does not construct rather than a parser path
-that does not exist. What the gate proves clean is still the part it reaches.
+divergences is a real result. The corpus drives all 22 parse entry points and, since the phase-D
+boundary-seed work, reaches all 72 measured exit points at any corpus size: four length- and
+ordering-field exits that uniform mutation could not construct (`bind_cert_len_zero`,
+`data_payload_oversize`, `cert_group_oversize`, `cert_ca_order`) are now each driven by a
+synthesized seed at the boundary, emitted verbatim then as a mutated lineage. An extended
+1,000,000-record run — 50× the enforced gate — held at zero divergences after the three
+reference-parser omissions it surfaced were fixed.
 
 Widening it to 22 entry points is also what made the oracle earn its keep: it reported 579
 divergences where the reference accepted a fragment header the parser rejected, and the finding was
 that the parser had been enforcing a bound `SPEC.md` §4.5 never stated. The sentence now lives in
 the specification (D-057). A second class, 25 divergences on `Control.action_type`, turned out to
 be the reference putting a verifier rule at the parse layer; BE-CTRL-01 is enforced in
-`src/verify.zig` with a test binding it, so the reference was corrected instead.
+`src/verify.zig` with a test binding it, so the reference was corrected instead. The phase-D run
+found three more reference omissions of the same class — a ControlGenesis with `ca_count=0`, a
+binding with `cert_len=0`, and an oversized control body — each a SPEC floor the production parser
+enforces and the reference had missed; all three are fixed. A fourth finding was not in the parser
+at all: `pruneExpired` rewrote the consumed-grant log in place, and a crash mid-rewrite could empty
+it, un-spending a committed grant (BE-GRANT-01). It is now crash-safe by atomic rename (D-063),
+found by the crash-injection test the model-checking brief (§11.4) predicted.
 
 What this does **not** say: no part of the protocol has been model-checked, no adversarial
 evaluation against a real model has been run, and no external cryptographic review of the
