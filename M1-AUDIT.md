@@ -616,3 +616,55 @@ remaining markers now number zero. This supersedes the 1-marker count in the
 BE-SURF-04 round addendum. M1 is complete; the daemon milestone (main.zig,
 13-line stub) is the next declared territory, estimate first
 (DAEMON-ESTIMATE.md).
+
+## Daemon milestone addendum (branch main, measured 2026-08-11..12)
+
+The mesh-03 addendum closed with "M1 is complete; the daemon milestone is the
+next declared territory". The daemon milestone (phases B, C, D) declared and
+bound five further markers, ratcheting M1 from 109 to 114 of 114, high water
+committed with the binding tests at each phase:
+
+| Phase | Markers bound | Ratchet | Estimate / decision |
+|---|---|---|---|
+| B (listener + handshake) | BE-EXEC-02, BE-EXEC-03, BE-SESS-02 | 109 -> 112 | PHASE-B-ESTIMATE.md |
+| C (relay serving on live traffic) | BE-EXEC-04 | 112 -> 113 | PHASE-C-ESTIMATE.md, D-060 |
+| D (daemon lifecycle + durable ledger) | BE-EXEC-01 | 113 -> 114 | PHASE-D-ESTIMATE.md, D-061 |
+
+Phase D implemented the durable consumed-grant ledger (`src/grant_ledger.zig`,
+non-surface per D-061): a hand-rolled two-phase append log over `std.fs` with
+fsync barrier, committing a consumed grant before the effect and surfacing a
+committed-but-unpublished grant as an `interrupted` Effect on restart
+(BE-GRANT-01/01a, idempotent); revocation persists (BE-REV-02). The dispatch
+check-11 seam was widened to commit before the effect (D-062). The DAG hash
+ledger `src/ledger.zig` (BE-LEDGER-02/03) is untouched and distinct.
+
+The differential oracle (BE-SURF-04 differential half, section 11.6) was
+strengthened past the 69-of-72 state recorded in the BE-SURF-04 round
+addendum. Four boundary seeds now drive all 72 parser exit points to coverage
+at any corpus size (`bind_cert_len_zero`, `data_payload_oversize`,
+`cert_group_oversize`, `cert_ca_order`), each a length- or ordering-field exit
+uniform mutation cannot construct. The enforced M4 gate reads 0 divergences
+over 20068 records, 72/72 exit points. An extended 1,000,000-record run held
+at 0 divergences after the four findings it surfaced were fixed: three
+reference-parser bound omissions (ControlGenesis `ca_count=0` 60191ca, binding
+`cert_len=0` 08595d3, control-body oversize 224ab6b) and one production
+crash-safety defect — `pruneExpired` rewrote the consumed log in place and a
+crash mid-rewrite could empty it, un-spending a committed grant (BE-GRANT-01);
+now crash-safe by atomic rename, D-063, becc23d. The crash-injection test that
+found it was predicted by the model-checking brief issued for section 11.4.
+
+Mutation harness v20 adds the grant_ledger domain (seven mutants) and
+re-anchors three mutants the widened check-11 seam rewrote; the full suite
+reads 151/151 killed, zero survivors, seventeen domains, zero residue
+(logs/mutation_phase_d_full.log).
+
+Honest state at this closeout. M1 is 114 of 114 declared markers bound, high
+water 114. The differential component of BE-SURF-04 is evidenced at scale.
+Three conformance items remain unsealed and are not described otherwise: the
+continuous 24-hour soak of section 11.6 is deferred for want of dedicated
+compute (owner workstations and production servers are out of scope by owner
+ruling; the path is a dedicated runner or GitHub Actions, which the public
+repo qualifies for at no cost); section 11.4 model checking is in progress
+with an external contributor (brief issued); section 11.5 adversarial
+evaluation against a real model has not been run. Per section 11.8 the draft
+is closed, not sealed, and these three items are the gap between the two.
