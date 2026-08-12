@@ -391,7 +391,7 @@ fn runDiff(init: std.process.Init) !void {
     const corpus_path: []const u8 = (try arg1(init, a)) orelse "fuzz_corpus.bin";
     const io: std.Io = init.io;
     const dir = std.Io.Dir.cwd();
-    const data = try dir.readFileAlloc(io, corpus_path, a, .limited64(512 * 1024 * 1024));
+    const data = try dir.readFileAlloc(io, corpus_path, a, .limited64(4 * 1024 * 1024 * 1024));
 
     // Every record is at least 3 framing bytes, so this bounds the count.
     const cap = data.len / 3 + 1;
