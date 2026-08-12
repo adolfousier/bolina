@@ -1,0 +1,128 @@
+name: soak
+
+# Continuous differential + chaos fuzzing on dedicated compute (SPEC.md section 11.6,
+# BE-SURF-04). This is the path that respects the owner's soak-deferral ruling:
+# the owner's workstations (heat) and production servers (disruption) are out of
+# scope, so the soak runs on GitHub Actions, which is neither.
+#
+# Trigger: nightly schedule + manual dispatch. It does NOT run on every push (a
+# long soak on push would burn CI minutes and stall the fast prumo gate). The
+# prumo job in ci.yml already runs the M4 differential at 20068 records on every
+# push as the regression gate; this workflow is the sustained / scaled component.
+#
+# GHA caps a single ubuntu-latest job at 6 hours. The chaos fuzzer rate on the
+# x86_64-linux runner is not measured (2.0M inputs/s was measured on the
+# aarch64-macos dev host), so the per-job budget is conservative (14.4B inputs,
+# ~2h at 2M/s) with a 330-minute job timeout as a hard guard. The matrix runs
+# independent seeds; the nightly schedule plus the matrix accumulate the section
+# 11.6 ">= 24 hours" requirement across runs and seeds rather than in one
+# uninterrupted job, which GHA cannot host. Each job reports coverage reached
+# and the seed used; a panic or a differential divergence fails the run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      budget:
+        description: "Chaos fuzz budget (inputs) per matrix seed"
+        required: false
+        default: "14400000000"
+      differential_budget:
+        description: "Differential corpus records per matrix seed"
+        required: false
+        default: "5000000"
+  # schedule:
+  #   # 03:00 UTC daily. COMMENTED until the owner flips the soak from deferred
+  #   # to active (SPEC.md section 11.6). Uncomment to run the full matrix
+  #   # nightly on dedicated GitHub Actions compute.
+  #   - cron: "0 3 * * *"
+
+jobs:
+  soak:
+    name: soak (${{ matrix.seed_label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - seed: "0x626f6c696e61"
+            seed_label: "bolina"
+          - seed: "42"
+            seed_label: "s42"
+          - seed: "1337"
+            seed_label: "s1337"
+          - seed: "999999"
+            seed_label: "s999999"
+          - seed: "3735928559"
+            seed_label: "deadbeef"
+    env:
+      BUDGET: ${{ github.event.inputs.budget || '14400000000' }}
+      DIFF_BUDGET: ${{ github.event.inputs.differential_budget || '5000000' }}
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Read the pinned toolchain manifest
+        id: pin
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          m = json.load(open("tools/toolchain.json"))
+          t = m["targets"]["x86_64-linux"]
+          print(f"url={t['url']}")
+          print(f"sha256={t['sha256']}")
+          print(f"version={m['version']}")
+          PY
+
+      - name: Download and verify the pinned Zig release (O4)
+        run: |
+          curl -fsSL -o /tmp/zig.tar.xz "${{ steps.pin.outputs.url }}"
+          echo "${{ steps.pin.outputs.sha256 }}  /tmp/zig.tar.xz" | sha256sum -c -
+          ZIGDIR="$HOME/zig-toolchain/zig-x86_64-linux-${{ steps.pin.outputs.version }}"
+          mkdir -p "$HOME/zig-toolchain"
+          tar -xJf /tmp/zig.tar.xz -C "$HOME/zig-toolchain"
+          echo "$ZIGDIR" >> "$GITHUB_PATH"
+          test "$(zig version)" = "${{ steps.pin.outputs.version }}"
+
+      - name: Chaos fuzz (${{ matrix.seed_label }}, coverage on)
+        id: chaos
+        run: |
+          set -o pipefail
+          # ReleaseSafe + -Dcoverage: panics are real bounds gaps, coverage is
+          # live. A non-zero exit (panic) fails the job. Budget is conservative
+          # for the unmeasured x86_64-linux runner rate.
+          zig build fuzz -Dcoverage -Dfuzz-seed=${{ matrix.seed }} -Dfuzz-budget="$BUDGET" 2>&1 | tee chaos.log
+          # Surface the summary line + coverage lines into the step output.
+          grep "FUZZ DONE" chaos.log || true
+          grep "^COVERAGE" chaos.log || true
+
+      - name: Differential fuzz (${{ matrix.seed_label }})
+        run: |
+          # BE-SURF-04 differential oracle (D-056): production parser vs the
+          # independent Python reference, agreement on every record. A divergence
+          # is a real parser defect and fails the job.
+          python3 tools/fuzz_diff.py --budget "$DIFF_BUDGET" --seed ${{ matrix.seed }} 2>&1 | tee differential.log
+
+      - name: Soak receipt
+        if: always()
+        run: |
+          {
+            echo "## Soak receipt (${{ matrix.seed_label }})"
+            echo ""
+            echo "seed: ${{ matrix.seed }} (label ${{ matrix.seed_label }})"
+            echo ""
+            echo "**Chaos**"
+            echo ""
+            echo '```'
+            grep -E "FUZZ DONE|^COVERAGE|progress:" chaos.log || echo "(no chaos output)"
+            echo '```'
+            echo ""
+            echo "**Differential**"
+            echo ""
+            echo '```'
+            grep -E "divergences|coverage:|VERDICT|python reference|production parser" differential.log || echo "(no differential output)"
+            echo '```'
+            echo ""
+            echo "evidence: GitHub Actions run $GITHUB_RUN_ID, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_STEP_SUMMARY"
