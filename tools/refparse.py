@@ -58,6 +58,7 @@ import struct
 MAX_MESSAGE = 1 << 20          # 1 MiB reassembled message ceiling (BE-TR-05)
 MAX_HEADER = 512               # envelope overhead (BE-TR-05)
 MAX_BODY = MAX_MESSAGE - MAX_HEADER   # Envelope.body_len bound (SPEC 6.2)
+MAX_CONTROL_BODY = 1024        # Control.body_len bound (BE-TR-05, SPEC 6.1c)
 MAX_PARENTS = 4                # Envelope.parent_count bound (SPEC 6.2)
 MAX_RESOURCE = 256             # Intent/Grant/Span resource_id (SPEC 6.3/7.1/8.1)
 MAX_ACTION = 256 * 1024        # Intent.action, opaque (SPEC 6.3)
@@ -424,8 +425,7 @@ def _control(c, buf):
     version = c.u8()                       # parsed, not rejected (D-022)
     action_type = c.u8()                   # BE-CTRL-01 is a verifier check
     subject = c.take(32)
-    body_len = c.u16()
-    body = c.take(body_len)
+    body = c.field16(MAX_CONTROL_BODY, "control_body_oversize")
     if c.pos != len(buf):
         raise _Reject("control_trailing")
     return {
