@@ -44,8 +44,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Seeds MUST be decimal: zig's -D build-option parser rejects hex CLI
+        # strings like 0x... ("Expected -Dfuzz-seed to be an integer"). The
+        # build.zig default 0x626f6c696e61 is a Zig source literal, not a CLI
+        # string, so it is fine there but not here. 0x626f6c696e61 = 108230699740769.
         include:
-          - seed: "0x626f6c696e61"
+          - seed: "108230699740769"
             seed_label: "bolina"
           - seed: "42"
             seed_label: "s42"
