@@ -1,6 +1,6 @@
 # PHASE-D-ESTIMATE - Daemon persistence + restart semantics (lifecycle milestone)
 
-**Status:** ESTIMATE (pre-code, estimate-first). Phase C landed green: harness v19 144/144 killed (receipt `logs/mutation_relay_serve_full.log`), 0 survivors. This estimate touches no `src/`; it is analysis only. No Phase D code is written until this estimate's design questions are resolved.
+**Status:** CLOSED 2026-08-12. Phase D landed green: durable `grant_ledger.zig` (two-phase append log, fsync barrier, orphan recovery BE-GRANT-01a, pruneExpired BE-EXEC-01) wired into the dispatch check-11 seam (D-062), BE-EXEC-01 bound (M1 114/114), harness v20 grant_ledger domain 7/7, full suite 151/151 killed (receipt `logs/mutation_phase_d_full.log`), 0 survivors. The four design questions (§2 check-11 as the sole I/O point, two-phase on-disk format, direct-file-state crash-injection, fsync observability) were resolved in D-061 before code; this estimate's scope was delivered as scoped.
 
 ## Context
 
