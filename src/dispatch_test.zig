@@ -702,3 +702,65 @@ test "DAEMON_A bad envelope signature refused at the structural gate" {
     try std.testing.expectError(dispatch_mod.DispatchError.BadEnvelope, d.dispatch(env, hooks, GRANT_NOW_MS));
     try std.testing.expectEqual(@as(usize, 0), d.intents.len);
 }
+
+// ---------------------------------------------------------------------------
+// F4 regression guard (RED-TEAM-10, adjudicated GAP not layering): the grant
+// execution path does not consult revocation. GrantContext (verify.zig) has
+// no is_revoked seam, so a key durably revoked in the ledger is ignored at
+// the authority->effect checkpoint (the comment at verify.zig:454 says
+// revocation is consulted "as of this use, not of cache fill"; the grant
+// path IS a use, yet it does not consult). This test pins the CURRENT
+// behavior so the Phase-B wiring lands visibly: when is_revoked is added to
+// GrantContext and consulted at checks 3-4 (backed by grant_ledger.isRevoked
+// durably), the grant_executed assertion below MUST flip to expecting an
+// ApproverRevoked/SubjectRevoked refusal. It guards against silent
+// regression of that wiring and lifts F4 from DECLARED to TESTED.
+// ---------------------------------------------------------------------------
+
+test "F4 regression guard: revoked-approver grant EXECUTES, BE-REV-02 unwired in the grant path" {
+    var threaded = std.Io.Threaded.init_single_threaded;
+    const io = threaded.io();
+    const path = "/tmp/bolina_dispatch_f4.log";
+    const dir = std.Io.Dir.cwd();
+    dir.deleteFile(io, path) catch {};
+    const approver_pub = cth.pubkeyOf(APPROVER_PREFIX);
+    // Pre-seed the durable ledger with the approver revocation, THEN open
+    // the dispatch active ledger over it so recover() loads the revoked key
+    // into the active cache. The ledger demonstrably HOLDS the revocation.
+    {
+        var lg = try grant_ledger_mod.GrantLedger.open(io, path);
+        try lg.commitRevocation(approver_pub, cth.PRIVILEGED_CERT_NOT_AFTER);
+        lg.close();
+    }
+    var orphan_buf: [8]grant_ledger_mod.OrphanGrant = undefined;
+    const n = try dispatch_mod.initDurableLedger(io, path, &orphan_buf);
+    try std.testing.expectEqual(@as(usize, 0), n); // a revoke row is not an orphan
+    // Witness: the durable revocation is recorded and recoverable.
+    {
+        var view = try grant_ledger_mod.GrantLedger.open(io, path);
+        defer view.close();
+        _ = try view.recover();
+        try std.testing.expect(view.isRevoked(approver_pub));
+    }
+    // Drive the grant happy path with the standard fixtures: the approver
+    // whose key is durably revoked signs the grant. Today the effect FIRES.
+    effect_count = 0;
+    ensureGrantCerts();
+    const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
+    var res = resolver_mod.Resolver.init(&executor_pub);
+    var f4_canonical_buf: [64]u8 = undefined;
+    const canonical = executorCanonical(&f4_canonical_buf, "logs/deploy.log");
+    try res.add(canonical);
+    var d = dispatch_mod.Dispatch.init(res, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+    const hooks = dispatch_mod.Hooks{ .execute_effect = &testEffect, .cert_for_sender = &grantPathCertHook, .on_rejected = &noopRejected };
+    const len_a = buildIntentBodyId(&intent_body_a, &G_INTENT_ID, canonical, ACTION);
+    var a_sender: [32]u8 = undefined;
+    var a_sig: [64]u8 = undefined;
+    var a_tbs: [64]u8 = undefined;
+    try std.testing.expectEqual(dispatch_mod.Outcome.intent_admitted, try d.dispatch(agentEnvelopeSigned(intent_body_a[0..len_a], &a_sender, &a_sig, &a_tbs), hooks, GRANT_NOW_MS));
+    const grant_wire = buildGrantWire(G_INTENT_ID, canonical, ACTION);
+    try std.testing.expectEqual(dispatch_mod.Outcome.grant_executed, try d.dispatch(grantEnvelopeSigned(grant_wire), hooks, GRANT_NOW_MS));
+    try std.testing.expectEqual(@as(usize, 1), effect_count); // F4: revoked approver, effect still fires
+    dispatch_mod.closeDurableLedger();
+    dir.deleteFile(io, path) catch {};
+}
