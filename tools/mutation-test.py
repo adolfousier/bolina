@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # mutation-test.py
 #
-# Mutation harness v15 for the Grant verifier, the attestation layer, the
+# Mutation harness v20 for the Grant verifier, the attestation layer, the
 # transport DoS gate, the session phase, the channel layer, the mesh identity
 # boundary, the relay surface, the ledger/history surface, the
-# pending-intent/refusal surface, the resolver/render surface AND the
-# backfill/sync surface (LANGUAGE.md section 4 metric; SPEC.md
-# section 11.2).
+# pending-intent/refusal surface, the resolver/render surface, the
+# backfill/sync surface AND the durable grant-ledger/crash-recovery surface
+# (LANGUAGE.md section 4 metric; SPEC.md section 11.2).
 # cargo-mutants does not exist for Zig, so this applies one mutant at a time to
 # a source file, rebuilds, runs the full test suite, and records whether the
 # suite kills it.
@@ -171,6 +171,7 @@ TARGETS = {
     "relay.zig": SRC / "relay.zig",
     "relay_store.zig": SRC / "relay_store.zig",
     "dispatch.zig": SRC / "dispatch.zig",
+    "grant_ledger.zig": SRC / "grant_ledger.zig",
     "listener.zig": SRC / "listener.zig",
     "handshake.zig": SRC / "handshake.zig",
     "relay_serve.zig": SRC / "relay_serve.zig",
@@ -497,6 +498,37 @@ def relay_serve_properties():
     return {key for key, _what in RELAY_SERVE_PROPS}
 
 
+# --- grant_ledger denominator, derived from SPEC BE-GRANT-01/01a, BE-GRANT-04,
+# BE-REV-02, BE-EXEC-01 (D-061). The durable consumed-grant + revocation
+# append log (src/grant_ledger.zig, non-surface). Hardcoded keys with the
+# normative citation; the law holds: every property needs a killed mutant
+# keyed to it.
+
+GRANT_LEDGER_PROPS = [
+    # (denominator key, what the SPEC declares)
+    ("grant-ledger-commit", "BE-GRANT-01: the consumed-grant commit row is "
+     "appended and fsynced before the effect may run (durable before effect)"),
+    ("grant-ledger-single-shot", "BE-GRANT-01: a spent grant_id is refused on "
+     "replay (isConsumed is the single-shot gate)"),
+    ("grant-ledger-orphan", "BE-GRANT-01a: a committed grant whose published "
+     "tombstone never landed surfaces as exactly one orphan at recovery"),
+    ("grant-ledger-at-least-once", "BE-GRANT-01a: an un-tombstoned orphan "
+     "re-emits on every recovery until tombstoned (fail-safe at-least-once)"),
+    ("grant-ledger-revoke", "BE-REV-02: a CA-signed revocation is durable and "
+     "survives restart"),
+    ("grant-ledger-prune", "BE-EXEC-01: pruneExpired drops consumed grants "
+     "past their validity window, keeping live ones (bounded live set)"),
+    ("grant-ledger-partial", "robustness: a partial trailing record (crash "
+     "mid-write before fsync) is discarded, never read as a grant"),
+]
+
+
+def grant_ledger_properties():
+    """The set of durable-ledger properties the slice must prove, each derived
+    from a SPEC obligation recorded in the D-061 ruling."""
+    return {key for key, _what in GRANT_LEDGER_PROPS}
+
+
 # --- relay denominator, derived from SPEC.md §5.2/§5.2a/BE-SIG-01 -----------
 #
 # The relay surface (src/relay.zig): BE-MESH-02 forwarding under D-043's
@@ -821,8 +853,8 @@ MUTANTS = [
      "if (now_ms >= first_receipt_ms + t_recv_ms) return error.Expired; // MUTANT"),
     ("grant", "verify.zig", "WRONG-LOGIC", 11,
      "check 11 ledger condition inverted (consumed -> !consumed)",
-     "if (ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed;",
-     "if (!ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed; // MUTANT"),
+     "if (ctx.already_consumed(grant.grant_id, grant.not_after, ctx.now_ms)) return error.AlreadyConsumed;",
+     "if (!ctx.already_consumed(grant.grant_id, grant.not_after, ctx.now_ms)) return error.AlreadyConsumed; // MUTANT"),
     # BE-GRANT-03b callback: the effect MUST NOT run before a check passes.
     ("grant", "verify.zig", "CALLBACK-ABSENCE", "03b",
      "effect never invoked despite a valid grant",
@@ -834,8 +866,8 @@ MUTANTS = [
      "execute(grant); // MUTANT callback before expiry\n    try checkExpiry(grant.not_after, ctx.now_ms, ctx.first_receipt_ms, ctx.t_max_s, ctx.t_recv_s);"),
     ("grant", "verify.zig", "CALLBACK-BEFORE-LEDGER", 11,
      "callback invoked before the ledger check",
-     "if (ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed;",
-     "execute(grant); // MUTANT callback before ledger\n    if (ctx.already_consumed(grant.grant_id)) return error.AlreadyConsumed;"),
+     "if (ctx.already_consumed(grant.grant_id, grant.not_after, ctx.now_ms)) return error.AlreadyConsumed;",
+     "execute(grant); // MUTANT callback before ledger\n    if (ctx.already_consumed(grant.grant_id, grant.not_after, ctx.now_ms)) return error.AlreadyConsumed;"),
 
     # --- evidence domain: the attestation layer (src/evidence.zig, src/dag.zig)
     # Ceiling integers (table 7.2/7.4). BE_EVID_02/15 assert the exact Q8 value;
@@ -1151,9 +1183,42 @@ MUTANTS = [
      "        try self.intents.beginExecuting(idx);",
      "        // MUTANT: EXECUTING transition skipped"),
     ("dispatch", "dispatch.zig", "CHECK-ABSENCE", "dispatch-consumed-commit",
-     "grant_id never committed to the consumed registry",
-     "    if (consumed_len < MAX_CONSUMED and grant_id.len == channel.LEN_GRANT_ID) {\n        @memcpy(&consumed_registry[consumed_len], grant_id);\n        consumed_len += 1;\n    }",
-     "    // MUTANT: grant_id never committed"),
+     "grant_id never durably committed to the consumed ledger (D-062 seam)",
+     "    lg.commitConsumed(gid, not_after_ms, now_ms) catch return true;",
+     "    // MUTANT: grant_id never durably committed (commit skipped)"),
+    # --- grant_ledger domain: the durable consumed-grant + revocation append
+    # log (src/grant_ledger.zig, D-061). Each mutant attacks one SPEC
+    # obligation (BE-GRANT-01/01a, BE-REV-02, BE-EXEC-01) and is killed by a
+    # literal binding test in grant_ledger_test.zig. Anchors are the exact
+    # source text; the runner restores every target before each mutant.
+    ("grant_ledger", "grant_ledger.zig", "CHECK-ABSENCE", "grant-ledger-commit",
+     "BE-GRANT-01: commit row never appended (no durable commit before effect)",
+     "        try self.appendSync(&row);\n        @memcpy(&self.consumed[self.consumed_len], &grant_id);\n        self.consumed_len += 1;",
+     "        // MUTANT: commit row never appended (no durable commit before effect)\n        @memcpy(&self.consumed[self.consumed_len], &grant_id);\n        self.consumed_len += 1;"),
+    ("grant_ledger", "grant_ledger.zig", "WRONG-VALUE", "grant-ledger-single-shot",
+     "BE-GRANT-01: isConsumed always false (single-shot replay gate disabled)",
+     "        return self.consumedIndex(grant_id) != null;",
+     "        return false; // MUTANT: single-shot replay gate disabled"),
+    ("grant_ledger", "grant_ledger.zig", "WRONG-LOGIC", "grant-ledger-orphan",
+     "BE-GRANT-01a: orphan detection inverted (orphans never surfaced)",
+     "            if (!seen_pub) {",
+     "            if (seen_pub) { // MUTANT: orphan detection inverted"),
+    ("grant_ledger", "grant_ledger.zig", "CHECK-ABSENCE", "grant-ledger-at-least-once",
+     "BE-GRANT-01a: orphan_len not reset, orphans do not re-emit correctly",
+     "        self.published_len = 0;\n        self.orphan_len = 0;",
+     "        self.published_len = 0;\n        // MUTANT: orphan_len not reset, orphans accumulate across recovers"),
+    ("grant_ledger", "grant_ledger.zig", "CHECK-ABSENCE", "grant-ledger-revoke",
+     "BE-REV-02: revoke row never appended (revocation not durable)",
+     "        try self.appendSync(&row);\n        @memcpy(&self.revoked[self.revoked_len], &sig_pubkey);\n        self.revoked_len += 1;",
+     "        // MUTANT: revoke row never appended (revocation not durable)\n        @memcpy(&self.revoked[self.revoked_len], &sig_pubkey);\n        self.revoked_len += 1;"),
+    ("grant_ledger", "grant_ledger.zig", "WRONG-VALUE", "grant-ledger-prune",
+     "BE-EXEC-01: expired consumed grants never pruned (all kept live)",
+     "                if (expiry >= now_ms) {",
+     "                if (true) { // MUTANT: expired grants never pruned"),
+    ("grant_ledger", "grant_ledger.zig", "WRONG-VALUE", "grant-ledger-partial",
+     "partial trailing commit row accepted as a full grant (length guard dropped)",
+     "            if (tag == TAG_COMMIT and i + COMMIT_LEN <= n) {",
+     "            if (tag == TAG_COMMIT) { // MUTANT: partial commit rows accepted (length guard dropped)"),
     # --- mesh-03: store-and-forward (relay_store.zig + relay.zig wiring,
     # SPEC 5.2a clause, D-058). Quota, body cap, TTL, storage order, opacity,
     # drain rewrite, and BE-MESH-04-extended no-service for unknown indexes.
@@ -1783,7 +1848,10 @@ def main():
         sys.exit("FATAL: no daemon properties detected (SPEC section 0.4 missing?)")
     relay_serve_props = relay_serve_properties()
     if not relay_serve_props:
-        sys.exit("FATAL: no relay_serve properties detected (D-060 / BE-EXEC-04 missing?)")
+        sys.exit("FATAL: no relay_serve properties detected (D-060 missing?)")
+    grant_ledger_props = grant_ledger_properties()
+    if not grant_ledger_props:
+        sys.exit("FATAL: no grant_ledger properties detected (D-061 missing?)")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -1802,6 +1870,7 @@ def main():
     print(f"  daemon properties (§0.4):        {sorted(daemon_props)} ({len(daemon_props)})")
     print(f"  relay_serve properties (BE-EXEC-04): {sorted(relay_serve_props)} ({len(relay_serve_props)})")
     print(f"  dispatch properties (D-059):     {sorted(dispatch_props)} ({len(dispatch_props)})")
+    print(f"  grant_ledger properties (D-061): {sorted(grant_ledger_props)} ({len(grant_ledger_props)})")
     print(f"  render properties (§8.3):        {sorted(render_props)} ({len(render_props)})")
     print(f"  sync properties (§6.4):          {sorted(sync_props)} ({len(sync_props)})")
     print()
@@ -1840,6 +1909,10 @@ def main():
             if key not in dispatch_props:
                 sys.exit(f"FATAL: dispatch mutant '{name}' attacks '{key}', which "
                          "the D-059 ruling does not record (scope lie)")
+        elif domain == "grant_ledger":
+            if key not in grant_ledger_props:
+                sys.exit(f"FATAL: grant_ledger mutant '{name}' attacks '{key}', which "
+                         "the D-061 ruling does not record (scope lie)")
         elif domain == "daemon":
             if key not in daemon_props:
                 sys.exit(f"FATAL: daemon mutant '{name}' attacks '{key}', which "
@@ -1981,6 +2054,11 @@ def main():
         rs_cov = {r["key"] for r in rs_run if r["killed"]}
         print(f"relay_serve: {len(rs_cov)}/{len(relay_serve_props)} BE-EXEC-04 "
               f"properties covered by killed mutants")
+    gl_run, gl_surv, gl_uncov, _ = gate_domain("grant_ledger", grant_ledger_props)
+    if in_scope("grant_ledger"):
+        gl_cov = {r["key"] for r in gl_run if r["killed"]}
+        print(f"grant_ledger: {len(gl_cov)}/{len(grant_ledger_props)} D-061 "
+              f"properties covered by killed mutants")
     r_run, r_surv, r_uncov, _ = gate_domain("relay", relay_props)
     if in_scope("relay"):
         r_cov = {r["key"] for r in r_run if r["killed"]}
@@ -2085,6 +2163,8 @@ def main():
         print(f"  UNCOVERED daemon properties: {dmn_uncov}")
     if rs_uncov:
         print(f"  UNCOVERED relay_serve properties: {rs_uncov}")
+    if gl_uncov:
+        print(f"  UNCOVERED grant_ledger properties: {gl_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
@@ -2098,7 +2178,8 @@ def main():
           and (not i_uncov) and (not f_uncov) and (not v_uncov)
           and (not w_uncov) and (not x_uncov)
           and (not dp_surv) and (not dp_uncov)
-          and (not dmn_surv) and (not dmn_uncov) and (not rs_surv) and (not rs_uncov) and g_cb)
+          and (not dmn_surv) and (not dmn_uncov) and (not rs_surv) and (not rs_uncov)
+          and (not gl_surv) and (not gl_uncov) and g_cb)
     return 0 if ok else 1
 
 
