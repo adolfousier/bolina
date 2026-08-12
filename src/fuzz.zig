@@ -108,6 +108,51 @@ const SEED_CERT = [_]u8{ 2, 0 } ++ // version, role_bits
     [_]u8{0} ** 96 ++ // pair 0: key 0x00.., sig
     [_]u8{1} ++ [_]u8{0} ** 95; // pair 1: key 0x01.. (ascending), sig
 
+// Boundary seeds for the two length-field exits that generic mutation
+// rarely reaches. The 5 mutation operators act on arbitrary bytes, so
+// hitting a specific big-endian length field at an exact boundary value
+// (cert_len = 0, or payload = 1385) is low-probability: across 1M records
+// both exits stayed unreached. These seeds sit AT the boundary so their
+// mutation lineage explores the exit itself plus its neighborhood
+// (cert_len 0,1,2,... ; payload 1383,1384,1385,1386), guaranteeing the
+// exits are exercised every corpus run. Same precedent as SEED_CERT:
+// synthesize a seed to reach an exit that uniform mutation cannot.
+
+// Binding message with cert_len = 0 (u16be). Reaches bind_cert_len_zero;
+// the regular binding seed embeds a real certificate, so its cert_len is
+// large and zeroing both length bytes needs two coincidental saturates.
+const SEED_BIND_CERT_ZERO = [_]u8{0} ** 2 ++ [_]u8{0} ** 64; // cert_len=0 + 64-byte sig
+
+// Data header with a 1385-byte payload, one past the 1384 BE-TR-05 ceiling
+// (16-byte transport header + 1385). Reaches data_payload_oversize; the
+// regular data seed is 32 bytes and extend adds at most 8, so mutation can
+// never cross the 1400-byte total that the exit requires.
+const SEED_DATA_OVERSIZE = [_]u8{4} ++ [_]u8{0} ** 3 ++ // msg_type=4, reserved
+    [_]u8{0} ** 4 ++ [_]u8{0} ** 8 ++ // receiver_index, counter
+    [_]u8{0} ** 1385; // payload: 1385 > 1384 ceiling
+
+// Cert boundary seed for cert_group_oversize: group_count = 17, one past
+// MAX_GROUPS(16). Minimal valid prefix up to the group_count byte; the parser
+// rejects before reading group_ids, so no trailing bytes are needed.
+const SEED_CERT_GROUP_OVER = [_]u8{ 2, 0 } ++ // version, role_bits
+    [_]u8{0} ** 32 ++ [_]u8{0} ** 32 ++ // sig_pubkey, kex_pubkey
+    [_]u8{0} ** 8 ++ [_]u8{0} ** 8 ++ // not_before, not_after
+    [_]u8{ 0, 0 } ++ // name_len = 0
+    [_]u8{17}; // group_count = 17 > MAX_GROUPS(16)
+
+// Cert boundary seed for cert_ca_order: two CA keys in DESCENDING order
+// (pair 0 = 0x01.., pair 1 = 0x00..). SPEC 3.1 requires strictly ascending
+// keys; a mutation of the ascending SEED_CERT rarely inverts the byte-order
+// relation between two 32-byte keys, so the exit stays unreached at small
+// budgets. Both parsers agree this is Malformed.
+const SEED_CERT_CA_ORDER = [_]u8{ 2, 0 } ++ // version, role_bits
+    [_]u8{0} ** 32 ++ [_]u8{0} ** 32 ++ // sig_pubkey, kex_pubkey
+    [_]u8{0} ** 8 ++ [_]u8{0} ** 8 ++ // not_before, not_after
+    [_]u8{ 0, 0 } ++ [_]u8{0} ++ // name_len=0, group_count=0
+    [_]u8{2} ++ // ca_sig_count = 2
+    [_]u8{1} ++ [_]u8{0} ** 95 ++ // pair 0: key 0x01.. (descending first), sig
+    [_]u8{0} ** 96;
+
 fn decodeHex(a: std.mem.Allocator, hex: []const u8) ![]u8 {
     const out = try a.alloc(u8, hex.len / 2);
     var i: usize = 0;
@@ -335,7 +380,7 @@ fn printCoverageReport() void {
             }
         }
     }
-    std.debug.print("COVERAGE: corpus = 22 seeds, one per parse entry point (envelope, intent, grant, span, effect, claim, refusal from test/vectors.json; cert synthesized with a two-signature CA list; binding built from the real vectors cert; genesis, control, handshake initiation/response, cookie reply, data header, relay route/registration, fragment header, lookup request/response, sync request/response synthesized from their SPEC field tables), 5 mutation operators (bit flip, byte overwrite, truncate, saturate, extend), 40% mutated-seed / 60% fully-random, 4096-byte input cap\n", .{});
+    std.debug.print("COVERAGE: corpus = 22 seeds, one per parse entry point (envelope, intent, grant, span, effect, claim, refusal from test/vectors.json; cert synthesized with a two-signature CA list; binding built from the real vectors cert; genesis, control, handshake initiation/response, cookie reply, data header, relay route/registration, fragment header, lookup request/response, sync request/response synthesized from their SPEC field tables), 5 mutation operators (bit flip, byte overwrite, truncate, saturate, extend), 40% mutated-seed / 60% fully-random, 4096-byte input cap; plus 4 boundary seeds (bind cert_len=0, data payload 1385, cert group_count 17, cert descending CA keys) each emitted verbatim then as a 16-record mutated lineage to reach the length/ordering-field exits generic mutation cannot\n", .{});
 }
 
 // Corpus-emit mode (D-056 part two). Writes tagged records round-robin over
@@ -363,6 +408,32 @@ fn runCorpus(init: std.process.Init) !void {
     var wbuf: [64 * 1024]u8 = undefined;
     var writer = file.writer(io, &wbuf);
 
+    // Boundary-seed phase: guarantee the two length-field exits generic
+    // mutation rarely reaches (bind_cert_len_zero, data_payload_oversize)
+    // are exercised every corpus. Each boundary seed is emitted verbatim
+    // (certain hit of the target exit) plus a 16-record mutated lineage
+    // (neighborhood exploration), on the same PRNG stream and mutate().
+    const BSEEDS = [_]struct { tag: u8, bytes: []const u8 }{
+        .{ .tag = TAG_BINDING, .bytes = &SEED_BIND_CERT_ZERO },
+        .{ .tag = TAG_DATA_HEADER, .bytes = &SEED_DATA_OVERSIZE },
+        .{ .tag = TAG_CERT, .bytes = &SEED_CERT_GROUP_OVER },
+        .{ .tag = TAG_CERT, .bytes = &SEED_CERT_CA_ORDER },
+    };
+    var bheader: [3]u8 = undefined;
+    for (BSEEDS) |bs| {
+        bheader[0] = bs.tag;
+        std.mem.writeInt(u16, bheader[1..3], @intCast(bs.bytes.len), .big);
+        try writer.interface.writeAll(&bheader);
+        try writer.interface.writeAll(bs.bytes);
+        var mj: u8 = 0;
+        while (mj < 16) : (mj += 1) {
+            const m = mutate(rnd, bs.bytes, &buf);
+            bheader[0] = bs.tag;
+            std.mem.writeInt(u16, bheader[1..3], @intCast(m.len), .big);
+            try writer.interface.writeAll(&bheader);
+            try writer.interface.writeAll(m);
+        }
+    }
     var header: [3]u8 = undefined;
     var iter: u64 = 0;
     while (iter < budget) : (iter += 1) {
@@ -374,7 +445,8 @@ fn runCorpus(init: std.process.Init) !void {
         try writer.interface.writeAll(input);
     }
     try writer.flush();
-    std.debug.print("CORPUS EMITTED: {d} records to {s} (seed 0x626f6c696e61)\n", .{ iter, out_path });
+    const boundary_records: u64 = @as(u64, BSEEDS.len) * 17; // 1 verbatim + 16-record lineage each
+    std.debug.print("CORPUS EMITTED: {d} records ({d} boundary + {d} random) to {s} (seed 0x626f6c696e61)\n", .{ iter + boundary_records, boundary_records, iter, out_path });
 }
 
 // Diff-replay mode (D-056 part three). Reads the corpus file, routes each

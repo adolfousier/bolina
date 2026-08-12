@@ -60,7 +60,11 @@ CORPUS_DESCRIPTION = (
     "field tables), 5 mutation operators (bit flip, byte overwrite, "
     "truncate, saturate, extend), 40% mutated-seed / 60% fully-random, 4096-byte "
     "input cap, deterministic PRNG seed 0x626f6c696e61, tags 0x01-0x16, "
-    "record framing u8 tag || u16 BE len || bytes"
+    "record framing u8 tag || u16 BE len || bytes, plus 4 boundary seeds "
+    "(bind cert_len=0, data payload 1385, cert group_count 17, cert "
+    "descending CA keys) each emitted verbatim then as a 16-record mutated "
+    "lineage to reach the length/ordering-field exits generic mutation "
+    "cannot"
 )
 
 
@@ -79,7 +83,7 @@ def emit_corpus(zig, budget, corpus_path):
         sys.stderr.write(err)
         return False
     m = re.search(r"CORPUS EMITTED: (\d+) records", err)
-    if not m or int(m.group(1)) != budget:
+    if not m or int(m.group(1)) < budget:
         sys.stderr.write("fuzz-corpus emitted wrong record count\n")
         return False
     return True
@@ -147,21 +151,27 @@ def main():
         return 2
     done = re.search(r"DIFF DONE: (\d+) records, (\d+) accepted, (\d+) rejected",
                      zig_err)
-    if not done or int(done.group(1)) != args.budget:
-        print("FAIL: zig verdict stream does not match record count",
-              file=sys.stderr)
+    if not done:
+        print("FAIL: zig diff produced no DIFF DONE line", file=sys.stderr)
         return 2
 
-    # 3. Python reference replay
+    # 3. Python reference replay. The corpus carries a deterministic
+    # boundary-seed prefix beyond the random budget, so integrity is checked
+    # against the actual corpus framing count, not against --budget.
     with open(corpus_path, "rb") as f:
         data = f.read()
     py_results, framing_ok = refparse.replay_corpus(data)
     if not framing_ok:
         print("FAIL: corpus framing broken", file=sys.stderr)
         return 2
-    if len(py_results) != len(zig_verdicts):
-        print("FAIL: replay count mismatch zig=%d py=%d" %
-              (len(zig_verdicts), len(py_results)), file=sys.stderr)
+    n_records = len(py_results)
+    if int(done.group(1)) != n_records:
+        print("FAIL: zig replay count %s != corpus record count %d" %
+              (done.group(1), n_records), file=sys.stderr)
+        return 2
+    if n_records != len(zig_verdicts):
+        print("FAIL: zig verdict lines %d != corpus record count %d" %
+              (len(zig_verdicts), n_records), file=sys.stderr)
         return 2
 
     # 4. compare verdict streams, record by record
