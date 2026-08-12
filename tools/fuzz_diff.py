@@ -59,7 +59,8 @@ CORPUS_DESCRIPTION = (
     "request/response, sync request/response synthesized from their SPEC "
     "field tables), 5 mutation operators (bit flip, byte overwrite, "
     "truncate, saturate, extend), 40% mutated-seed / 60% fully-random, 4096-byte "
-    "input cap, deterministic PRNG seed 0x626f6c696e61, tags 0x01-0x16, "
+    "input cap, deterministic PRNG seed (configurable via --seed, default "
+    "0x626f6c696e61 'bolina'), tags 0x01-0x16, "
     "record framing u8 tag || u16 BE len || bytes, plus 4 boundary seeds "
     "(bind cert_len=0, data payload 1385, cert group_count 17, cert "
     "descending CA keys) each emitted verbatim then as a 16-record mutated "
@@ -76,9 +77,13 @@ def run(cmd, capture_stdout=False):
     return p.returncode, p.stdout or "", p.stderr or ""
 
 
-def emit_corpus(zig, budget, corpus_path):
-    rc, _, err = run([zig, "build", "fuzz-corpus",
-                      "-Dcorpus-budget=%d" % budget, "--", corpus_path])
+def emit_corpus(zig, budget, corpus_path, seed):
+    cmd = [zig, "build", "fuzz-corpus",
+                      "-Dcorpus-budget=%d" % budget]
+    if seed is not None:
+        cmd.append("-Dfuzz-seed=%d" % seed)
+    cmd += ["--", corpus_path]
+    rc, _, err = run(cmd)
     if rc != 0:
         sys.stderr.write(err)
         return False
@@ -124,6 +129,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--budget", type=int, default=20000,
                     help="corpus record count (default 20000)")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="PRNG seed for corpus emit (default 0x626f6c696e61 'bolina'); different seeds expand coverage without repeating records")
     ap.add_argument("--corpus", default=None, help="corpus file path")
     ap.add_argument("--workdir", default=None,
                     help="work directory (default .fuzz-diff under repo)")
@@ -137,9 +144,11 @@ def main():
 
     print("== BE-SURF-04 differential fuzz oracle (D-056) ==")
     print("budget: %d records" % args.budget)
+    if args.seed is not None:
+        print("seed: 0x%x" % args.seed)
 
     # 1. corpus emit (Zig)
-    if not emit_corpus(args.zig, args.budget, corpus_path):
+    if not emit_corpus(args.zig, args.budget, corpus_path, args.seed):
         print("FAIL: corpus emit", file=sys.stderr)
         return 2
     print("corpus: %s (%d bytes)" % (corpus_path, os.path.getsize(corpus_path)))

@@ -23,11 +23,13 @@ pub fn build(b: *std.Build) void {
     const coverage_on = b.option(bool, "coverage", "Enable hand-instrumented branch coverage") orelse false;
     const fuzz_budget = b.option(u64, "fuzz-budget", "Fuzz iteration budget (default 7.3B)") orelse 7_300_000_000;
     const corpus_budget = b.option(u64, "corpus-budget", "Differential corpus record count (default 100000)") orelse 100_000;
+    const fuzz_seed = b.option(u64, "fuzz-seed", "PRNG seed for chaos fuzz and corpus emit (default 0x626f6c696e61 'bolina')") orelse 0x626f6c696e61;
     const options = b.addOptions();
     options.addOption(bool, "coverage_enabled", coverage_on);
     options.addOption(u64, "fuzz_budget", fuzz_budget);
     options.addOption(FuzzMode, "fuzz_mode", FuzzMode.chaos);
     options.addOption(u64, "corpus_budget", corpus_budget);
+    options.addOption(u64, "fuzz_seed", fuzz_seed);
     const opts_mod = options.createModule();
 
     const exe_mod = b.createModule(.{
@@ -137,6 +139,7 @@ pub fn build(b: *std.Build) void {
     corpus_opts.addOption(u64, "fuzz_budget", fuzz_budget);
     corpus_opts.addOption(FuzzMode, "fuzz_mode", FuzzMode.corpus);
     corpus_opts.addOption(u64, "corpus_budget", corpus_budget);
+    corpus_opts.addOption(u64, "fuzz_seed", fuzz_seed);
     const corpus_opts_mod = corpus_opts.createModule();
     const fuzz_corpus_mod = b.createModule(.{
         .root_source_file = b.path("src/fuzz.zig"),

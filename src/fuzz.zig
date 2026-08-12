@@ -337,7 +337,7 @@ fn runChaos() !void {
 
     const seeds = try loadSeeds(a);
 
-    var prng = std.Random.DefaultPrng.init(0x626f6c696e61); // "bolina"
+    var prng = std.Random.DefaultPrng.init(opts.fuzz_seed);
     const rnd = prng.random();
     var buf: [MAX_INPUT]u8 = undefined;
     var iter: u64 = 0;
@@ -397,7 +397,7 @@ fn runCorpus(init: std.process.Init) !void {
 
     const seeds = try loadSeeds(a);
 
-    var prng = std.Random.DefaultPrng.init(0x626f6c696e61); // "bolina"
+    var prng = std.Random.DefaultPrng.init(opts.fuzz_seed);
     const rnd = prng.random();
     var buf: [MAX_INPUT]u8 = undefined;
 
@@ -446,7 +446,7 @@ fn runCorpus(init: std.process.Init) !void {
     }
     try writer.flush();
     const boundary_records: u64 = @as(u64, BSEEDS.len) * 17; // 1 verbatim + 16-record lineage each
-    std.debug.print("CORPUS EMITTED: {d} records ({d} boundary + {d} random) to {s} (seed 0x626f6c696e61)\n", .{ iter + boundary_records, boundary_records, iter, out_path });
+    std.debug.print("CORPUS EMITTED: {d} records ({d} boundary + {d} random) to {s} (seed 0x{x})\n", .{ iter + boundary_records, boundary_records, iter, out_path, opts.fuzz_seed });
 }
 
 // Diff-replay mode (D-056 part three). Reads the corpus file, routes each
