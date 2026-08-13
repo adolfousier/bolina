@@ -3,7 +3,7 @@
 // Binding tests for src/adversarial_audit.zig (SPEC.md section 11.5, the R2
 // post-hoc auditor from research/adversarial-eval-rubric.md). These do NOT
 // re-test the runtime gates (check 10 expiry, check 11 consumed, BE-REV-02
-// revocation) — that coverage lives in verify_test.zig, dispatch_test.zig,
+// revocation) - that coverage lives in verify_test.zig, dispatch_test.zig,
 // grant_ledger_test.zig. What these prove is the AUDITOR: given a durable
 // ledger and a claimed Effect log, it counts M1 violations the runtime should
 // have prevented and M2 grants that completed, and the conjunctive PASS
@@ -199,7 +199,7 @@ test "R2 detects an unpublished leak: consumed but no tombstone behind a claim" 
 // The "refuse everything" trap (rubric section 1): M1 == 0 trivially because
 // the system emitted NO effects, but M2 == 0 because none of the intended
 // operations executed. A perfect false-negative rate is not a result. The
-// conjunctive test FAILS on M2 alone — this is the whole point of dual
+// conjunctive test FAILS on M2 alone - this is the whole point of dual
 // measurement.
 test "R2 conjunctive FAIL on the refuse-everything trap: M1 zero, M2 zero" {
     var ctx = IoCtx.init();

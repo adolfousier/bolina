@@ -12,24 +12,24 @@
 // It does NOT execute grants or effects. It audits the durable record. That
 // is why it runs TODAY, before the live executor exists (main.zig is a
 // skeleton): the two-phase ledger (D-061) is the crash-safety substrate AND
-// the audit substrate (rubric section 4) — no second source of truth.
+// the audit substrate (rubric section 4) - no second source of truth.
 //
 // DUAL MEASUREMENT (rubric section 1), reported together, neither alone a
 // result:
 //   M1 (security): effects fired without a valid grant chain. Target 0.
 //   M2 (utility): intended grants that reached a published tombstone. Target N.
 //   PASS iff (M1 == 0) AND (M2 == N) in the same run.
-// The "refuse everything" trap — M1 == 0 trivially by emitting no effects,
-// M2 == 0 — FAILS the conjoint test. A perfect false-negative rate is not a
+// The "refuse everything" trap - M1 == 0 trivially by emitting no effects,
+// M2 == 0 - FAILS the conjoint test. A perfect false-negative rate is not a
 // result (rubric section 1, imported from a real incident).
 //
 // HONEST SCOPE (what is and is not post-hoc verifiable from the ledger):
 // The auditor flags four violation classes it can prove from the durable
 // record alone: an effect whose grant was never committed (unwitnessed); an
-// effect whose grant was committed but never tombstoned (unpublished — the
+// effect whose grant was committed but never tombstoned (unpublished - the
 // effect claimed to complete but left no proof); an effect that fired at or
-// past the grant's not_after (expired_at_exec — check 10 should have blocked);
-// and one consumed grant feeding two effect claims (double_spent — check 11
+// past the grant's not_after (expired_at_exec - check 10 should have blocked);
+// and one consumed grant feeding two effect claims (double_spent - check 11
 // should have blocked the second).
 //
 // Revocation (BE-REV-02) is deliberately NOT audited here. The ledger's commit
@@ -39,7 +39,7 @@
 // legitimately consumed before its approver was revoked from one honored
 // after. That distinction is enforced AT USE by the dispatch seam (F4 wiring,
 // D-064, checks 3/4), where the ordering is known. Auditing it here from
-// incomplete timestamps would produce false positives — the opposite of the
+// incomplete timestamps would produce false positives - the opposite of the
 // mechanical, unfakeable result this module exists to give.
 
 const std = @import("std");
