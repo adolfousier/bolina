@@ -326,11 +326,15 @@ D-054.)
   - **Sync sub-unit:** `src/parser/sync.zig` — cap 100 lines.
 - **Non-surface:** `src/dag.zig`, `src/evidence.zig`, `src/verify.zig`, `src/ledger.zig`,
   `src/historical.zig`, `src/intent.zig`, `src/resolver.zig`, `src/render.zig`, `src/sync.zig`,
-  `src/relay_store.zig`, `src/dispatch.zig`, `src/relay_serve.zig`, `src/grant_ledger.zig` — state over parsed values (D-018), not reached by
+  `src/relay_store.zig`, `src/dispatch.zig`, `src/relay_serve.zig`, `src/grant_ledger.zig`,
+  `src/adversarial_audit.zig` — state over parsed values (D-018), not reached by
   attacker bytes directly. intent.zig, resolver.zig and render.zig are placed ahead of their code
   (D-052), sync.zig ahead of its code by D-054, relay_store.zig ahead of its code by D-058,
   dispatch.zig ahead of its phase-B wiring by D-059, relay_serve.zig ahead of its phase-C wiring
-  by D-060, grant_ledger.zig ahead of its phase-D wiring by D-061.
+  by D-060, grant_ledger.zig ahead of its phase-D wiring by D-061, adversarial_audit.zig placed
+  post-creation as the §11.5 R2 post-hoc effect-log auditor (D-066): it reads the durable grant
+  ledger's consumed/published/revoked sets to score M1 (effects without a valid grant chain) and
+  M2 (intended grants that reached a tombstone), never touching the wire.
 - **Harness and entry:** `src/main.zig`, `src/tests.zig`, `src/fuzz.zig`, `src/coverage.zig`,
   `src/evidence_test_helpers.zig`, `src/cert_test_helpers.zig`, and every `*_test.zig`.
 

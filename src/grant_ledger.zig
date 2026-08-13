@@ -233,6 +233,15 @@ pub const GrantLedger = struct {
         return self.consumedIndex(grant_id) != null;
     }
 
+    // isPublished (BE-GRANT-01, post-effect witness): a consumed grant whose
+    // markPublished tombstone landed. The post-hoc auditor (adversarial_audit,
+    // SPEC section 11.5 R2) distinguishes an executed effect (consumed AND
+    // published) from an interrupted one (consumed, not published) with this;
+    // the in-flight seam (dispatch) uses it to detect orphan leakage.
+    pub fn isPublished(self: *GrantLedger, grant_id: [GRANT_ID_LEN]u8) bool {
+        return self.publishedIndex(grant_id) != null;
+    }
+
     // commitRevocation (BE-REV-02): record a CA-signed revocation durably. A
     // revoked key stays revoked for the certificate's remaining life; revoke
     // rows are never pruned.
