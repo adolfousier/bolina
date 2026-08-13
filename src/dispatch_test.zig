@@ -764,3 +764,83 @@ test "F4 regression guard: revoked-approver grant REFUSED, BE-REV-02 wired at ch
     dispatch_mod.closeDurableLedger();
     dir.deleteFile(io, path) catch {};
 }
+
+// ---------------------------------------------------------------------------
+// F4 subject guard (RED-TEAM-10 closeout, D-064 check 4): the grant path
+// consults revocation for the SUBJECT too, not only the approver. A durably
+// revoked subject cannot turn a grant into an effect: verify refuses with
+// SubjectRevoked at check 4, after the approver checks pass. Literal binding
+// test (D-027) for the check-4 half of the F4 wiring.
+// ---------------------------------------------------------------------------
+
+test "F4 subject guard: revoked-subject grant REFUSED, BE-REV-02 wired at check 4" {
+    var threaded = std.Io.Threaded.init_single_threaded;
+    const io = threaded.io();
+    const path = "/tmp/bolina_dispatch_f4_subject.log";
+    const dir = std.Io.Dir.cwd();
+    dir.deleteFile(io, path) catch {};
+    const subject_pub = cth.pubkeyOf(AGENT_PREFIX);
+    // Pre-seed the durable ledger with the subject revocation, THEN open the
+    // dispatch active ledger over it so recover() loads the revoked key into
+    // the active cache. The approver stays unrevoked, so checks 1-3 pass and
+    // check 4 is the refusal point.
+    {
+        var lg = try grant_ledger_mod.GrantLedger.open(io, path);
+        try lg.commitRevocation(subject_pub, cth.PRIVILEGED_CERT_NOT_AFTER);
+        lg.close();
+    }
+    var orphan_buf: [8]grant_ledger_mod.OrphanGrant = undefined;
+    const n = try dispatch_mod.initDurableLedger(io, path, &orphan_buf);
+    try std.testing.expectEqual(@as(usize, 0), n); // a revoke row is not an orphan
+    effect_count = 0;
+    ensureGrantCerts();
+    const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
+    var res = resolver_mod.Resolver.init(&executor_pub);
+    var f4s_canonical_buf: [64]u8 = undefined;
+    const canonical = executorCanonical(&f4s_canonical_buf, "logs/deploy.log");
+    try res.add(canonical);
+    var d = dispatch_mod.Dispatch.init(res, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+    const hooks = dispatch_mod.Hooks{ .execute_effect = &testEffect, .cert_for_sender = &grantPathCertHook, .on_rejected = &noopRejected };
+    const len_a = buildIntentBodyId(&intent_body_a, &G_INTENT_ID_B, canonical, ACTION);
+    var a_sender: [32]u8 = undefined;
+    var a_sig: [64]u8 = undefined;
+    var a_tbs: [64]u8 = undefined;
+    try std.testing.expectEqual(dispatch_mod.Outcome.intent_admitted, try d.dispatch(agentEnvelopeSigned(intent_body_a[0..len_a], &a_sender, &a_sig, &a_tbs), hooks, GRANT_NOW_MS));
+    const grant_wire = buildGrantWire(G_INTENT_ID_B, canonical, ACTION);
+    try std.testing.expectError(verify.VerifyError.SubjectRevoked, d.dispatch(grantEnvelopeSigned(grant_wire), hooks, GRANT_NOW_MS));
+    try std.testing.expectEqual(@as(usize, 0), effect_count); // F4: revoked subject, effect refused
+    dispatch_mod.closeDurableLedger();
+    dir.deleteFile(io, path) catch {};
+}
+
+// ---------------------------------------------------------------------------
+// F4 fail-safe (RED-TEAM-10 closeout, D-064 ruling 1): with NO durable ledger
+// initialized, the grant checkpoint refuses every grant. The revocation set is
+// part of the durable authority state; without it loaded, no grant may turn
+// into an effect. isRevokedHook returns true (revoked) when the module slot is
+// null, and check 3 fires before check 11's consumed-grant fail-safe (D-064
+// ruling 3 ordering), so the refusal surfaces as ApproverRevoked. Literal
+// binding test (D-027).
+// ---------------------------------------------------------------------------
+
+test "F4 fail-safe: no durable ledger, grant REFUSED before the effect (D-064 ruling 1)" {
+    dispatch_mod.closeDurableLedger(); // module slot null regardless of prior tests
+    effect_count = 0;
+    ensureGrantCerts();
+    const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
+    var res = resolver_mod.Resolver.init(&executor_pub);
+    var f4f_canonical_buf: [64]u8 = undefined;
+    const canonical = executorCanonical(&f4f_canonical_buf, "logs/deploy.log");
+    try res.add(canonical);
+    var d = dispatch_mod.Dispatch.init(res, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+    const hooks = dispatch_mod.Hooks{ .execute_effect = &testEffect, .cert_for_sender = &grantPathCertHook, .on_rejected = &noopRejected };
+    const len_a = buildIntentBodyId(&intent_body_a, &G_INTENT_ID_B, canonical, ACTION);
+    var a_sender: [32]u8 = undefined;
+    var a_sig: [64]u8 = undefined;
+    var a_tbs: [64]u8 = undefined;
+    // Intent admission does not touch the ledger; it succeeds.
+    try std.testing.expectEqual(dispatch_mod.Outcome.intent_admitted, try d.dispatch(agentEnvelopeSigned(intent_body_a[0..len_a], &a_sender, &a_sig, &a_tbs), hooks, GRANT_NOW_MS));
+    const grant_wire = buildGrantWire(G_INTENT_ID_B, canonical, ACTION);
+    try std.testing.expectError(verify.VerifyError.ApproverRevoked, d.dispatch(grantEnvelopeSigned(grant_wire), hooks, GRANT_NOW_MS));
+    try std.testing.expectEqual(@as(usize, 0), effect_count); // no ledger: fail-safe refusal, effect never runs
+}
