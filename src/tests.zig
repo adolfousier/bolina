@@ -31,4 +31,5 @@ comptime {
     _ = @import("relay_serve_test.zig");
     _ = @import("grant_ledger_test.zig");
     _ = @import("adversarial_audit_test.zig");
+    _ = @import("adversarial_live_test.zig");
 }
