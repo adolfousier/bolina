@@ -529,6 +529,37 @@ def grant_ledger_properties():
     return {key for key, _what in GRANT_LEDGER_PROPS}
 
 
+# --- grant_revocation denominator, derived from the D-064 ruling ------------
+#
+# The F4 wiring (RED-TEAM-10): revocation consulted at the grant checkpoint,
+# checks 3-4 of verifyGrantThen backed by dispatch.isRevokedHook over the
+# durable grant_ledger revocation set (BE-REV-02 enforced at the capability->
+# effect seam, not merely stored). The seam code carries no new SPEC marker
+# (D-064: no M1 changes), so its denominator keys derive from the recorded
+# D-064 rulings, hardcoded here with the ruling as the cited text. The law
+# still holds: every property needs a killed mutant keyed to it.
+
+GRANT_REVOCATION_PROPS = [
+    # (denominator key, what D-064 records)
+    ("f4-approver-check", "D-064 fix (3): check 3 consults "
+     "is_revoked(approver_cert.sig_pubkey) -> ApproverRevoked at the "
+     "capability->effect checkpoint (verify.zig 'as of this use')"),
+    ("f4-subject-check", "D-064 fix (4): check 4 consults "
+     "is_revoked(subject_cert.sig_pubkey) -> SubjectRevoked, declared fresh "
+     "in VerifyError (ruling 2)"),
+    ("f4-failsafe", "D-064 ruling 1: isRevokedHook returns true (refuse) when "
+     "no durable ledger is initialized; the revocation set is part of the "
+     "durable authority state, so without it loaded no grant may turn into "
+     "an effect"),
+]
+
+
+def grant_revocation_properties():
+    """The set of F4-seam properties the slice must prove, each derived from a
+    ruling recorded in the D-064 decision entry."""
+    return {key for key, _what in GRANT_REVOCATION_PROPS}
+
+
 # --- relay denominator, derived from SPEC.md §5.2/§5.2a/BE-SIG-01 -----------
 #
 # The relay surface (src/relay.zig): BE-MESH-02 forwarding under D-043's
@@ -1219,6 +1250,28 @@ MUTANTS = [
      "partial trailing commit row accepted as a full grant (length guard dropped)",
      "            if (tag == TAG_COMMIT and i + COMMIT_LEN <= n) {",
      "            if (tag == TAG_COMMIT) { // MUTANT: partial commit rows accepted (length guard dropped)"),
+    # --- grant_revocation domain: the F4 seam (verify.zig checks 3-4 +
+    # dispatch.isRevokedHook, D-064, RED-TEAM-10). Revocation consulted at the
+    # grant checkpoint, where capability turns into effect. Each mutant attacks
+    # one D-064 ruling and is killed by a literal binding test in
+    # dispatch_test.zig (the F4 regression guard, the F4 subject guard, and the
+    # F4 fail-safe test). Anchors are the exact source text.
+    ("grant_revocation", "verify.zig", "CHECK-ABSENCE", "f4-approver-check",
+     "F4 check 3 removed: approver revocation never consulted at the grant checkpoint",
+     "    if (ctx.is_revoked(ctx.approver_cert.sig_pubkey)) return error.ApproverRevoked;",
+     "    // MUTANT: F4 check 3 removed, approver revocation never consulted at the grant checkpoint"),
+    ("grant_revocation", "verify.zig", "WRONG-LOGIC", "f4-approver-check",
+     "F4 check 3 inverted: unrevoked approvers refused, revoked approvers accepted",
+     "    if (ctx.is_revoked(ctx.approver_cert.sig_pubkey)) return error.ApproverRevoked;",
+     "    if (!ctx.is_revoked(ctx.approver_cert.sig_pubkey)) return error.ApproverRevoked; // MUTANT: check 3 inverted"),
+    ("grant_revocation", "verify.zig", "CHECK-ABSENCE", "f4-subject-check",
+     "F4 check 4 removed: subject revocation never consulted at the grant checkpoint",
+     "    if (ctx.is_revoked(ctx.subject_cert.sig_pubkey)) return error.SubjectRevoked;",
+     "    // MUTANT: F4 check 4 removed, subject revocation never consulted at the grant checkpoint"),
+    ("grant_revocation", "dispatch.zig", "WRONG-VALUE", "f4-failsafe",
+     "F4 fail-safe flipped: no durable ledger treated as unrevoked (grants pass checks 3-4)",
+     "fn isRevokedHook(sig_pubkey: []const u8) bool {\n    var lg = &(durable_ledger orelse return true);",
+     "fn isRevokedHook(sig_pubkey: []const u8) bool {\n    var lg = &(durable_ledger orelse return false); // MUTANT: fail-safe flipped"),
     # --- mesh-03: store-and-forward (relay_store.zig + relay.zig wiring,
     # SPEC 5.2a clause, D-058). Quota, body cap, TTL, storage order, opacity,
     # drain rewrite, and BE-MESH-04-extended no-service for unknown indexes.
@@ -1852,6 +1905,9 @@ def main():
     grant_ledger_props = grant_ledger_properties()
     if not grant_ledger_props:
         sys.exit("FATAL: no grant_ledger properties detected (D-061 missing?)")
+    grant_revocation_props = grant_revocation_properties()
+    if not grant_revocation_props:
+        sys.exit("FATAL: no grant_revocation properties detected (D-064 missing?)")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -1871,6 +1927,7 @@ def main():
     print(f"  relay_serve properties (BE-EXEC-04): {sorted(relay_serve_props)} ({len(relay_serve_props)})")
     print(f"  dispatch properties (D-059):     {sorted(dispatch_props)} ({len(dispatch_props)})")
     print(f"  grant_ledger properties (D-061): {sorted(grant_ledger_props)} ({len(grant_ledger_props)})")
+    print(f"  grant_revocation properties (D-064): {sorted(grant_revocation_props)} ({len(grant_revocation_props)})")
     print(f"  render properties (§8.3):        {sorted(render_props)} ({len(render_props)})")
     print(f"  sync properties (§6.4):          {sorted(sync_props)} ({len(sync_props)})")
     print()
@@ -1913,6 +1970,10 @@ def main():
             if key not in grant_ledger_props:
                 sys.exit(f"FATAL: grant_ledger mutant '{name}' attacks '{key}', which "
                          "the D-061 ruling does not record (scope lie)")
+        elif domain == "grant_revocation":
+            if key not in grant_revocation_props:
+                sys.exit(f"FATAL: grant_revocation mutant '{name}' attacks '{key}', which "
+                         "the D-064 ruling does not record (scope lie)")
         elif domain == "daemon":
             if key not in daemon_props:
                 sys.exit(f"FATAL: daemon mutant '{name}' attacks '{key}', which "
@@ -2059,6 +2120,11 @@ def main():
         gl_cov = {r["key"] for r in gl_run if r["killed"]}
         print(f"grant_ledger: {len(gl_cov)}/{len(grant_ledger_props)} D-061 "
               f"properties covered by killed mutants")
+    gr_run, gr_surv, gr_uncov, _ = gate_domain("grant_revocation", grant_revocation_props)
+    if in_scope("grant_revocation"):
+        gr_cov = {r["key"] for r in gr_run if r["killed"]}
+        print(f"grant_revocation: {len(gr_cov)}/{len(grant_revocation_props)} D-064 "
+              f"properties covered by killed mutants")
     r_run, r_surv, r_uncov, _ = gate_domain("relay", relay_props)
     if in_scope("relay"):
         r_cov = {r["key"] for r in r_run if r["killed"]}
@@ -2097,7 +2163,7 @@ def main():
     total_run = [r for r in results if not r["skipped"]]
     total_killed = sum(1 for r in total_run if r["killed"])
     print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
-          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv) + len(v_surv) + len(w_surv) + len(dp_surv) + len(dmn_surv) + len(rs_surv)}"
+          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv) + len(v_surv) + len(w_surv) + len(dp_surv) + len(dmn_surv) + len(rs_surv) + len(gr_surv)}"
           f" survived")
     if g_surv:
         print(f"  grant SURVIVORS: {g_surv}")
@@ -2131,6 +2197,8 @@ def main():
         print(f"  daemon SURVIVORS: {dmn_surv}")
     if rs_surv:
         print(f"  relay_serve SURVIVORS: {rs_surv}")
+    if gr_surv:
+        print(f"  grant_revocation SURVIVORS: {gr_surv}")
     if g_uncov:
         print(f"  UNCOVERED grant checks: {g_uncov}")
     if e_uncov:
@@ -2165,6 +2233,8 @@ def main():
         print(f"  UNCOVERED relay_serve properties: {rs_uncov}")
     if gl_uncov:
         print(f"  UNCOVERED grant_ledger properties: {gl_uncov}")
+    if gr_uncov:
+        print(f"  UNCOVERED grant_revocation properties: {gr_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
@@ -2179,9 +2249,12 @@ def main():
           and (not w_uncov) and (not x_uncov)
           and (not dp_surv) and (not dp_uncov)
           and (not dmn_surv) and (not dmn_uncov) and (not rs_surv) and (not rs_uncov)
-          and (not gl_surv) and (not gl_uncov) and g_cb)
+          and (not gl_surv) and (not gl_uncov)
+          and (not gr_surv) and (not gr_uncov) and g_cb)
     return 0 if ok else 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
