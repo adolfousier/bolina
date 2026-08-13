@@ -668,3 +668,65 @@ repo qualifies for at no cost); section 11.4 model checking is in progress
 with an external contributor (brief issued); section 11.5 adversarial
 evaluation against a real model has not been run. Per section 11.8 the draft
 is closed, not sealed, and these three items are the gap between the two.
+
+## RED-TEAM-10 round addendum (2026-08-13)
+
+RED-TEAM-10 was an adversarial review of the implementation, cross-validated
+across two independent lanes, run after the Phase D closeout seal. It is a
+review of the code as built, distinct from the §11.5 adversarial evaluation
+against a real model, which remains un-run.
+
+The review's differential half extended the oracle from the 20,068-record
+merge gate to 1,000,000 records and surfaced the four findings already
+recorded in the Phase D addendum (three reference-parser bound omissions,
+60191ca / 08595d3 / 224ab6b, and one production crash-safety defect in
+`pruneExpired`, D-063, becc23d). The review's implementation half adjudicated
+one new finding the Phase D closeout did not carry:
+
+The review's composition half adjudicated three runtime guarantees that sit
+on the un-wired side of the daemon milestone (`main.zig` is a 13-line stub,
+so no live transport loop calls any of them): F1, the 120-second rekey
+trigger is a dead gate (`dueForRekey` and `rotate` in `session.zig` have no
+non-test caller, BE-TR-02 unenforced in any running binary); F2, mac2/cookie
+verification is inactive on the live path (`handshake.zig` answers every
+initiation with a zero cookie, so BE-TR-04a's spoofed-source-flood defence
+is absent until the phase-C under-load wiring); F3, `bindSession` never
+asserts `participant_static == cert.kex_pubkey`, leaving the cert's kex key
+decorative on the responder path (identity binding holds by transitivity;
+this is a hardening, not a hole). All three are wiring deferrals, not crypto
+defects: the units compose correctly, are unit-tested, and each needs a live
+caller (the daemon transport loop for F1, the under-load cookie path for F2,
+one assertion when `bindSession` is wired for F3). This round closes F4
+first as the most security-relevant of the four; F1-F3 ride their own
+milestones.
+
+**F4 — revocation was dead code at the effect checkpoint (GAP, not
+layering).** `GrantContext` had no `is_revoked` seam while `ChannelContext`
+and `MeshContext` both did; the durable revocation set built in Phase D was
+never consulted on the grant path, the one checkpoint where capability turns
+into effect. This inverts the principle verify.zig already states ("as of this
+use, not of cache fill"). Fixed by D-064: `is_revoked` added to `GrantContext`
+and consulted at checks 3-4 (`ApproverRevoked`/`SubjectRevoked`, both declared
+fresh in `VerifyError` per ruling 2), backed by `dispatch.isRevokedHook` over
+the durable ledger with the same fail-safe shape as `consumedHook` (no ledger
+-> refuse). Regression guard c64cd02, wiring d9cff4e.
+
+Two witnesses landed after the wiring (dd55d1c): the F4 subject guard (durably
+revoked subject refused at check 4, effect never fired) and the F4 fail-safe
+test (no durable ledger -> grant refused with `ApproverRevoked` before check
+11, pinning D-064 ruling 1 and ruling 3 ordering together). Before these, the
+subject-revoked and no-ledger paths had zero test coverage.
+
+Mutation harness v21 (bd00e6d, D-065) keys the seam: the `grant_revocation`
+domain derives three properties from the D-064 rulings (f4-approver-check,
+f4-subject-check, f4-failsafe) and attacks them with four mutants over
+`src/verify.zig` and `src/dispatch.zig`. The denominator reads 155 mutants
+over eighteen domains; the full suite at HEAD bd00e6d reads 155/155 killed,
+zero survivors, zero residue (receipt `logs/mutation_f4_full.log`).
+
+No M1 marker changes this round: BE-REV-02 was already declared (114/114, high
+water 114) and is now mechanically defended at the effect checkpoint rather
+than merely implemented. The three unsealed conformance items from the Phase D
+closeout are unchanged: the 24-hour soak is deferred for want of dedicated
+compute, §11.4 model checking is in progress with an external contributor, and
+§11.5 adversarial evaluation against a real model has not been run.

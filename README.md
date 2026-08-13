@@ -33,7 +33,7 @@ prints every gate on every run and returns non-zero if an enforced one fails.
 | BE-\* items bound to a named test | 114 of 114 declared, high-water ratchet at 114 | M1, enforced |
 | Test vectors cross-verified (Zig against Python `cryptography`) | 77 passed, 0 failed | M3, enforced |
 | Differential fuzz divergences (production parser against an independent Python reference) | 0 divergences, 72 of 72 parser exit points reached (gate 20,000; extended 1,000,000) | M4, enforced |
-| Mutants killed by the test suite | 151 of 151 | M2, measured but **not** wired into the exit code |
+| Mutants killed by the test suite | 155 of 155 | M2, measured but **not** wired into the exit code |
 | Pre-authentication attack surface | 1492 of 1500 lines | M5, enforced |
 | Post-authentication attack surface | 1477 of 1500 lines | M11, enforced |
 | Parser exit points with a matching `Branch` member | 72 of 72, zero raw error returns | M9, enforced |
