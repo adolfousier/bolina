@@ -1210,3 +1210,15 @@ Owner decision (Daniel, this session, "Ativa"). The soak component of §11.6 was
 **Ruling 3 — activation is not a seal.** §11.6 stays unsealed until runs have produced evidence. The differential half is already evidenced at scale (5 seeds x 1,000,000 records, 0 divergences, 72/72 parser exits). The soak half is now generating evidence rather than waiting for compute. BE-SURF-04 binding (M1 114 -> 115) remains gated on that evidence, not on this commit. The v0.3.8-draft changelog entry describing the soak as deferred is left as written: it is a historical record of that draft, superseded here rather than rewritten.
 
 Reversible: re-comment the five schedule lines. What would reopen this ruling: a green-run cost or duration the owner objects to, a requirement for literal 24-hour continuity, or a change to the seed matrix or budgets.
+
+## D-071 — 2026-08-14 — soak runs are serialized per ref: a concurrency group is added to .github/workflows/soak.yml
+
+Owner decision (Daniel, this session, "siga"). Activating the nightly schedule (D-070) created a trigger overlap that did not exist while the workflow was dispatch-only: a manual dispatch can now collide with the 03:00 UTC schedule and put two full matrices on the runner pool at once. The collision was observed, not hypothesized: a duplicated `workflow_dispatch` this session started runs 31802185739 and 31802228103 thirty-five seconds apart, ten concurrent jobs.
+
+**Ruling 1 — the contention cost is measured, not assumed.** Chaos rate is taken from the delta between the fuzzer's 250M and 500M progress marks, which is pure fuzz time with build and checkout excluded. A job running alone reached 2.19M inputs/s (run 31802185739, seed s999999, 114.04 s for 250M). With five jobs concurrent the same measurement gives 1.44M to 1.70M inputs/s (run 31802228103, worst seed s1337). At 1.44M/s the 14,400,000,000-input nightly budget projects to about 167 minutes of chaos plus about 12 minutes of differential, against the 330-minute timeout guard. That is roughly 1.8x margin with one matrix in flight; a second concurrent matrix erodes it toward the guard.
+
+**Ruling 2 — queue, never cancel.** `cancel-in-progress` is false. A soak run that is already producing evidence must not be killed by a newer trigger; the newer run waits. The inverse setting would let a casual manual dispatch destroy hours of accumulated §11.6 evidence, which is the opposite of what D-070 activated the schedule for.
+
+**Ruling 3 — the group key is the ref.** `soak-${{ github.ref }}` serializes runs on a branch while leaving different refs independent, so a soak on a feature branch does not queue behind main. This is the whole change: eleven added lines in the workflow, no production code, no test code, no SPEC surface, no M1 markers, no change to triggers, matrix, budgets or timeout. `actionlint` passes on the edited file.
+
+Reversible: delete the concurrency block. What would reopen this ruling: a measured runner rate that removes the contention concern, a move to self-hosted or dedicated runners where the pool is not shared, or an owner requirement that manual dispatches preempt rather than queue.

@@ -37,6 +37,17 @@ on:
     # stay out of scope.
     - cron: "0 3 * * *"
 
+# Serialize soak runs on a ref. Without this, a manual dispatch that overlaps the
+# nightly schedule puts two full matrices (10 jobs) on the runner pool at once;
+# measured contention drops the per-job chaos rate from 2.19M inputs/s (single
+# job) to 1.44M inputs/s (5 concurrent), which pushes the 14.4B budget from
+# ~110 min toward the 330-minute timeout guard. cancel-in-progress is false on
+# purpose: a queued run must wait, never kill a soak that is already producing
+# evidence.
+concurrency:
+  group: soak-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   soak:
     name: soak (${{ matrix.seed_label }})
