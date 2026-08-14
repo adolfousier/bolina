@@ -1856,6 +1856,22 @@ measurement and is useless. A criterion written around one error rate can be sat
 compliance with its own text by an implementation that does nothing.* This is the single most
 important conformance item and the one most easily faked.
 
+*Scoping (D-069). The post-hoc auditor M1 (`adversarial_audit.zig`) is blind to a social-engineered
+grant by design: such a grant's chain is real (true approver signature, valid cert chain, intent match,
+consumed with tombstone), so M1 counts zero. M1 is therefore scoped to forged and stolen grants only.
+The semantic vector is bounded by the structural floor that survives even a fully-tricked human
+approver, and that floor is tested adversarially for the first time in `adversarial_semantic_test.zig`:
+I1 binding, the effect runs only on the resource and action the approver signed (verify checks 8 and 9);
+I2 rationale non-influence, BE-BODY-03, the rationale field never enters the authorization decision;
+I4 role containment, only ROLE_APPROVER may mint a grant (verify check 3). M3, a new harness-level
+metric, holds when the executed effect carries the action digest and resource of the signed grant rather
+than something swapped in; it is measured in the harness, not the post-hoc auditor, because the ledger
+stores the grant id, not the action text, so executed-versus-signed cannot be reconstructed after the
+fact. Residual, owner-scoped: Cert carries role bits and group ids but no resource scope, so an
+approver's blast radius is bounded by role, not by resource; closing that means changing the wire format
+and is deferred. Per THREAT-MODEL §4.1, the remaining human-factor mitigation (approval rate limits,
+mandatory read delays) is operational, not cryptographic, and is not deterministically auto-tested.*
+
 ### 11.6 Continuous differential fuzzing
 
 The parser survives ≥ 24 hours of continuous fuzzing: zero crashes, zero panics, zero out-of-bounds
