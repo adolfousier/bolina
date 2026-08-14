@@ -30,11 +30,12 @@ on:
         description: "Differential corpus records per matrix seed"
         required: false
         default: "5000000"
-  # schedule:
-  #   # 03:00 UTC daily. COMMENTED until the owner flips the soak from deferred
-  #   # to active (SPEC.md section 11.6). Uncomment to run the full matrix
-  #   # nightly on dedicated GitHub Actions compute.
-  #   - cron: "0 3 * * *"
+  schedule:
+    # 03:00 UTC daily. ACTIVE: the owner flipped the soak from deferred to
+    # active (SPEC.md section 11.6). The full matrix runs nightly on dedicated
+    # GitHub Actions compute; the owner's workstations and production servers
+    # stay out of scope.
+    - cron: "0 3 * * *"
 
 jobs:
   soak:
