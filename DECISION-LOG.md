@@ -1238,3 +1238,17 @@ Owner decision (Daniel, this session, "siga"). SPEC §11.4 requires a TLA+ or Al
 **What this is NOT.** Not the model, and not a claim about §11.4. The model is the author's lane and this workflow makes no statement about whether §8 is provable or proved; §11.4 stays open until a model exists and TLC passes on it. No production code, no test code, no SPEC surface, no M1 markers: one new workflow file. `actionlint` passes on it and it contains zero em-dashes.
 
 Reversible: delete the workflow file. What would reopen this ruling: the author choosing Alloy over TLA+ (D-07 defers that choice, and Alloy needs a different tool and a different pin), a model that needs more than 120 minutes or 6 GB, or a decision to run the checker on dedicated compute instead.
+
+## D-073 - 2026-08-14 - the mutation harness refuses to start on a poisoned baseline or on arguments
+
+Two runs were contaminated in one session, and a third receipt (155/155, 2026-08-13) is now suspect for the same reason. The mechanism is exact: the harness snapshots every target file into `ORIGINALS` at import time and restores from that snapshot between mutants. If the tree already carries residue from a killed run, the residue is inside the snapshot, every mutant is applied on top of an already-broken baseline, the test suite fails for the wrong reason, and every mutant is reported KILLED. The run looks perfect and proves nothing. The harness comment at the restore loop already named this failure mode ("a false KILLED from an accumulated mutant, not from the one under test") but nothing enforced it.
+
+The residue itself came from a second defect: the harness never parsed argv. `python3 tools/mutation-test.py --help` did not print help, it started a full in-place mutation run whose output went to a pipe that had already closed. The tree was left mutated with no receipt and no visible error.
+
+**Ruling 1 - a snapshot containing `MUTANT` aborts the run.** After `ORIGINALS` is read, any target whose text contains the mutant tag causes exit 2 with the offending file names and the restore command. Detection is on the snapshot, not on the live tree, because the snapshot is what poisons the results; a check on the live tree would pass mid-cycle and fail at the same instant for a legitimate reason. The tag is the residue signature, so this does not block running the suite over uncommitted work in progress, which is a legitimate use.
+
+**Ruling 2 - any argument aborts the run.** The harness is configured through the environment (`MUTATION_DOMAIN`), never through argv, so an argument is always a mistake by the caller. Exit 2 with the arguments echoed back beats silently starting a fifty-minute in-place run. Both guards are refusals, never repairs: the harness does not restore the tree for the caller, because a harness that silently rewrites `src/` is how a real edit gets destroyed.
+
+**What this is NOT.** No change to any mutant, denominator, domain gate or restore path, so no effect on what the suite measures. No production code, no test code, no SPEC surface, no M1 markers. Both guards were exercised: `--help` and an injected residue tag each exit 2 without starting a run, and the clean tree passes 380/380.
+
+Reversible: delete the two guard blocks. What would reopen this ruling: the harness gaining a real command-line interface, in which case argv parsing replaces the refusal, or a mutant class that legitimately writes the tag into a target's committed text.

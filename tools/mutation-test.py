@@ -185,6 +185,30 @@ TARGETS = {
 }
 ORIGINALS = {name: path.read_text() for name, path in TARGETS.items()}
 
+# A snapshot taken over residue from a killed run poisons every subsequent
+# result: the mutant under test is applied on top of an already-broken
+# baseline, the suite fails for the wrong reason, and every mutant is reported
+# KILLED trivially. The run looks perfect and means nothing. Refuse to start.
+_POISONED = sorted(n for n, t in ORIGINALS.items() if "MUTANT" in t)
+if _POISONED:
+    sys.stderr.write(
+        "refusing to run: mutant residue in the baseline snapshot: "
+        + ", ".join(_POISONED)
+        + "\nrestore the tree first (git checkout HEAD -- src/), then re-run.\n"
+    )
+    sys.exit(2)
+
+# Any argument is a mistake, and a silent one: this harness never parsed argv,
+# so `--help` used to start a full in-place mutation run whose output went to a
+# pipe nobody was reading. That is how residue got into the tree.
+if len(sys.argv) > 1:
+    sys.stderr.write(
+        "refusing to run: this harness takes no arguments (got: "
+        + " ".join(sys.argv[1:])
+        + ").\nconfigure it through the environment (MUTATION_DOMAIN=<domain>).\n"
+    )
+    sys.exit(2)
+
 
 # --- grant denominator, derived from SPEC.md section 8 --------------------
 
