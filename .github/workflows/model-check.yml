@@ -1,0 +1,148 @@
+name: model-check
+
+# TLC model checking of the SPEC section 8 grant state machine (SPEC.md section
+# 11.4, BE-GRANT-01/-03/-04/-06). Until a model exists and passes, section 8's
+# guarantees are tested, not proved, and the SPEC requires them to be described
+# that way.
+#
+# This workflow exists so the model author does not need a local JVM. The
+# maintainer's workstation has no Java and installing one there is out of scope
+# (the same compute ruling that put the soak on GitHub Actions), so TLC runs
+# here: pinned tool, verified hash, receipt in the job summary.
+#
+# Trigger: pull requests that touch model/, pushes to main that touch model/,
+# and manual dispatch with an explicit spec/config pair. It deliberately does
+# NOT run on every push: a state-space exploration is not a fast gate, and
+# ci.yml already carries the per-push regression gates.
+
+on:
+  workflow_dispatch:
+    inputs:
+      spec:
+        description: "TLA+ spec to check (path from repo root)"
+        required: false
+        default: "model/Bolina.tla"
+      config:
+        description: "TLC config for that spec"
+        required: false
+        default: "model/Bolina.cfg"
+      workers:
+        description: "TLC worker threads ('auto' uses every core)"
+        required: false
+        default: "auto"
+  pull_request:
+    paths:
+      - "model/**"
+      - ".github/workflows/model-check.yml"
+  push:
+    branches: [main]
+    paths:
+      - "model/**"
+
+# Serialize per ref. cancel-in-progress is true here, unlike the soak: a model
+# check is a verdict on one revision of the model, not evidence accumulated over
+# time, so a newer commit supersedes an in-flight run and there is nothing to
+# lose by killing it.
+concurrency:
+  group: model-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tlc:
+    name: TLC
+    runs-on: ubuntu-latest
+    # State explosion is the expected failure mode of an unconstrained model.
+    # A bounded job turns "the model never terminates" into a fast, readable
+    # signal instead of a six-hour GHA ceiling hit.
+    timeout-minutes: 120
+
+    env:
+      TLA_VERSION: "v1.7.4"
+      TLA_URL: "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar"
+      TLA_SHA256: "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
+      SPEC_PATH: ${{ github.event.inputs.spec || 'model/Bolina.tla' }}
+      CONFIG_PATH: ${{ github.event.inputs.config || 'model/Bolina.cfg' }}
+      TLC_WORKERS: ${{ github.event.inputs.workers || 'auto' }}
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up the JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Download and verify the pinned TLA+ tools (O4)
+        run: |
+          curl -fsSL -o /tmp/tla2tools.jar "$TLA_URL"
+          echo "$TLA_SHA256  /tmp/tla2tools.jar" | sha256sum -c -
+
+      - name: Check that the spec and config exist
+        run: |
+          missing=0
+          for f in "$SPEC_PATH" "$CONFIG_PATH"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::model-check: '$f' not found in the repository"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "The section 11.4 model lives under model/ as a .tla spec plus a" >&2
+            echo "matching .cfg. Add both, or dispatch this workflow with explicit" >&2
+            echo "spec/config inputs pointing at where they live." >&2
+            exit 1
+          fi
+
+      - name: Run TLC
+        id: tlc
+        run: |
+          set -o pipefail
+          # -Xmx is conservative for the 16 GB standard runner: TLC dies with an
+          # OOM kill rather than a readable error when the heap is sized to the
+          # box. -cleanup drops the states directory so a rerun starts fresh.
+          # TLC exits non-zero on an invariant violation or a deadlock, which is
+          # exactly the failure this job is here to surface.
+          java -Xmx6g -XX:+UseParallelGC \
+            -cp /tmp/tla2tools.jar tlc2.TLC \
+            -workers "$TLC_WORKERS" \
+            -cleanup \
+            -config "$CONFIG_PATH" \
+            "$SPEC_PATH" 2>&1 | tee tlc.log
+
+      - name: Upload the TLC log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tlc-log-${{ github.run_id }}
+          path: tlc.log
+          if-no-files-found: warn
+
+      - name: Model check receipt
+        if: always()
+        run: |
+          {
+            echo "## Model check receipt"
+            echo ""
+            echo "spec: \`$SPEC_PATH\`"
+            echo ""
+            echo "config: \`$CONFIG_PATH\`"
+            echo ""
+            echo "tool: TLA+ tools $TLA_VERSION (sha256 verified)"
+            echo ""
+            echo "**Result**"
+            echo ""
+            echo '```'
+            if [ -f tlc.log ]; then
+              grep -E "Model checking completed|states generated|distinct states|depth of the|Invariant .* is violated|Temporal properties were violated|Error:|Deadlock reached|Finished in" tlc.log || tail -20 tlc.log
+            else
+              echo "(TLC produced no log: the run failed before it started)"
+            fi
+            echo '```'
+            echo ""
+            echo "The full log, including any counterexample trace, is attached as the"
+            echo "tlc-log-$GITHUB_RUN_ID artifact."
+            echo ""
+            echo "evidence: GitHub Actions run $GITHUB_RUN_ID, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_STEP_SUMMARY"
