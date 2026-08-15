@@ -58,6 +58,14 @@ TAG_NAMES = {
 REPLAY_BYTE_CAP = 4 * 1024 * 1024 * 1024
 BYTES_PER_RECORD = 1274.6
 
+# The Zig replay reads the whole corpus under .limited64(4 GiB) and allocates a
+# tag byte and a verdict bool per three corpus bytes on top, so the corpus size
+# is the binding constraint on --budget, not the record count itself. 1274.6
+# bytes/record is measured, not estimated: 255,004,304 bytes for 200,068 records
+# and 6,379,201,306 for 5,000,068 agree to four figures (D-074).
+REPLAY_BYTE_CAP = 4 * 1024 * 1024 * 1024
+BYTES_PER_RECORD = 1274.6
+
 CORPUS_DESCRIPTION = (
     "22 seeds, one per parse entry point (envelope, intent, grant, span, "
     "effect, claim, refusal from test/vectors.json; cert synthesized with a "

@@ -766,3 +766,39 @@ the nightly, which has contributed nothing on that half yet. §11.6 stays
 unsealed. The soak-deferred language in the Phase D and RED-TEAM-10 closeouts
 above is left as written: it was accurate at those closeouts and is superseded
 here, not rewritten.
+
+## First nightly soak addendum (2026-08-15)
+
+The §11.6 soak schedule activated by D-070 fired for the first time at 03:44
+UTC on 2026-08-15 (GitHub Actions run 31862614634, HEAD `6dfebcb`). This
+addendum records what that run actually evidences, because the run's own
+verdict overstates it: all five matrix jobs concluded success, and the
+differential half of all five failed.
+
+**Chaos half: real evidence, first night.** Every seed (bolina, s42, s1337,
+s999999, deadbeef) reports `FUZZ DONE: 14400000000 inputs (316800000000 parser
+calls), 0 panics` and `COVERAGE: 72/72 exit points reached`, with no unreached
+exit points. Job durations were 2h48m for four seeds and 3h03m for s1337,
+about 14.6 hours of accumulated chaos fuzzing in one night against the §11.6
+">= 24 hours" figure, which per D-070 ruling 2 accumulates across seeds and
+nights rather than running uninterrupted.
+
+**Differential half: zero nightly evidence to date.** Every seed died in the
+Zig replay with `error: StreamTooLong`, and the orchestrator exited 2
+(`FAIL: zig diff replay`). The 5,000,000-record default emitted a 6,379,201,306
+byte corpus against the replay's 4 GiB read cap, so the differential never ran
+on any seed on any night. The failure was invisible because the step piped into
+`tee` without `pipefail`, so bash reported `tee`'s status. Both defects are
+fixed under D-074: `pipefail` on the step, the budget lowered to a measured
+1,000,000 records (verified end to end at 1,000,068 records, 0 divergences,
+72/72 coverage before the change was committed), and an explicit oversize
+refusal in `tools/fuzz_diff.py` that names the cap and the offending budget
+instead of surfacing a bare `StreamTooLong`.
+
+**Marker state is unchanged.** M1 reads 114 of 114 declared markers bound, high
+water 114, missing 0. BE-SURF-04's differential component remains evidenced at
+the scale RED-TEAM-10 established (1,000,000 records, 0 divergences), not by
+the nightly, which has contributed nothing on that half yet. §11.6 stays
+unsealed. The soak-deferred language in the Phase D and RED-TEAM-10 closeouts
+above is left as written: it was accurate at those closeouts and is superseded
+here, not rewritten.
