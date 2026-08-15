@@ -22,10 +22,6 @@ name: soak
 # Both fuzz steps set pipefail. Piping into tee without it hands bash tee's exit
 # status, which is how the first nightly run reported five green jobs while the
 # differential half failed on every one of them (D-074).
-#
-# Both fuzz steps set pipefail. Piping into tee without it hands bash tee's exit
-# status, which is how the first nightly run reported five green jobs while the
-# differential half failed on every one of them (D-074).
 
 on:
   workflow_dispatch:
