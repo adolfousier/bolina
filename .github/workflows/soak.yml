@@ -18,6 +18,10 @@ name: soak
 # 11.6 ">= 24 hours" requirement across runs and seeds rather than in one
 # uninterrupted job, which GHA cannot host. Each job reports coverage reached
 # and the seed used; a panic or a differential divergence fails the run.
+#
+# Both fuzz steps set pipefail. Piping into tee without it hands bash tee's exit
+# status, which is how the first nightly run reported five green jobs while the
+# differential half failed on every one of them (D-074).
 
 on:
   workflow_dispatch:
@@ -29,7 +33,7 @@ on:
       differential_budget:
         description: "Differential corpus records per matrix seed"
         required: false
-        default: "5000000"
+        default: "1000000"
   schedule:
     # 03:00 UTC daily. ACTIVE: the owner flipped the soak from deferred to
     # active (SPEC.md section 11.6). The full matrix runs nightly on dedicated
@@ -73,7 +77,16 @@ jobs:
             seed_label: "deadbeef"
     env:
       BUDGET: ${{ github.event.inputs.budget || '14400000000' }}
-      DIFF_BUDGET: ${{ github.event.inputs.differential_budget || '5000000' }}
+      # 1,000,000 records per seed, five seeds, is the differential scale the
+      # oracle is evidenced at. The corpus is a measured 1274.6 bytes/record, so
+      # a record budget is a memory budget: both replays hold the whole corpus
+      # (the Zig side reads it under a 4 GiB cap plus two byte-per-3-bytes
+      # arrays, the Python side holds it plus a per-record verdict and payload
+      # list). 1M costs 1.27 GB of corpus and a measured 372 MB Python peak at
+      # 100k scaled linearly; the previous 5,000,000 default emitted a 6.37 GB
+      # corpus that exceeded the reader cap on every seed and never once ran
+      # (D-074).
+      DIFF_BUDGET: ${{ github.event.inputs.differential_budget || '1000000' }}
 
     steps:
       - name: Check out the repository
@@ -118,9 +131,13 @@ jobs:
 
       - name: Differential fuzz (${{ matrix.seed_label }})
         run: |
+          set -o pipefail
           # BE-SURF-04 differential oracle (D-056): production parser vs the
           # independent Python reference, agreement on every record. A divergence
-          # is a real parser defect and fails the job.
+          # is a real parser defect and fails the job. pipefail is load-bearing:
+          # without it bash reports tee's status, so a non-zero orchestrator exit
+          # is swallowed and the job reports success on a differential that never
+          # ran (D-074).
           python3 tools/fuzz_diff.py --budget "$DIFF_BUDGET" --seed ${{ matrix.seed }} 2>&1 | tee differential.log
 
       - name: Soak receipt
