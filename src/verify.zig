@@ -198,7 +198,17 @@ pub const GrantContext = struct {
 // retry (Daniel, round 4).
 // ---------------------------------------------------------------------------
 
-pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.channel.Grant, ctx: GrantContext, execute: *const fn (parser.channel.Grant) void) VerifyError!void {
+// EffectOutcome (conformance brief section 9.1): the publication
+// boundary needs an evidence source. The executor reports whether the
+// capability actually fired; a refused effect leaves the durable commit
+// row (check 11 already passed) unpublished by design, an orphan under
+// BE-GRANT-01a.
+pub const EffectOutcome = enum {
+    fired,
+    refused,
+};
+
+pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.channel.Grant, ctx: GrantContext, execute: *const fn (parser.channel.Grant) EffectOutcome) VerifyError!EffectOutcome {
     const grant = grant_ptr.*;
     if (grant_trace.enabled) grant_trace.emit(.begin_verify, grant_trace.NO_PC, grant.grant_id, ctx.now_ms);
     // 0. Grant.version must be 2 (RED-TEAM-08 F6: the field is read, not ignored).
@@ -273,8 +283,15 @@ pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.ch
     // single invocation is the only reach path to the effect in the tree, which
     // the call-graph wall M10 makes load-bearing.
     if (grant_trace.enabled) grant_trace.emit(.effect_start, grant_trace.NO_PC, grant.grant_id, ctx.now_ms);
-    execute(grant);
-    if (grant_trace.enabled) grant_trace.emit(.effect_return, grant_trace.NO_PC, grant.grant_id, ctx.now_ms);
+    const outcome = execute(grant);
+    if (grant_trace.enabled) {
+        if (outcome == .refused) {
+            grant_trace.emit(.effect_refused, grant_trace.NO_PC, grant.grant_id, ctx.now_ms);
+        } else {
+            grant_trace.emit(.effect_return, grant_trace.NO_PC, grant.grant_id, ctx.now_ms);
+        }
+    }
+    return outcome;
 }
 
 // ---------------------------------------------------------------------------

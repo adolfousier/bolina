@@ -84,9 +84,10 @@ fn noopRejected(intent_id: []const u8) void {
 // prove the effect fired exactly where the invariant says it may.
 var effect_count: usize = 0;
 
-fn testEffect(grant: channel.Grant) void {
+fn testEffect(grant: channel.Grant) verify.EffectOutcome {
     effect_count += 1;
     _ = grant;
+    return .fired;
 }
 
 // Canonical executor resource (BE-RES-06 fp grammar) for a given leaf path.

@@ -1309,3 +1309,18 @@ The D-076 re-run of the mutation suite against `74cb53a` returned 154/154 killed
 
 Reversible: revert the single mutant definition edit in tools/mutation-test.py. What would reopen this ruling: another instrumentation or refactor pass over grant_ledger.zig moving statements inside commitConsumed.
 
+## D-078 - 2026-08-16 - section 9.1 publication boundary: execute_effect returns an outcome, the refused path is a durable unpublished orphan
+
+The conformance pilot's section 9.1 decision (owner-approved in the v0.3.9 conclusion plan): the `execute_effect` hook changes from `void` to returning `verify.EffectOutcome` (.fired / .refused), because PublishOutcome, FinishExecuted and RecoverPublishInterrupted need an evidence source at the publication boundary (brief section 9.1). The section 9.2 decision goes the other way and is NOT taken here: tombstone-failure semantics stay D-061 at-least-once, unchanged.
+
+**Ruling 1 - the refused path never publishes.** `dispatchGrant` returns `Outcome.effect_refused` when the executor declines: `markPublished` and `beginExecuting` are skipped. Publishing a grant whose effect never fired would be false evidence under the D-067 correspondence rule. The check-11 commit row stands, so the spent capability refuses any replay (AlreadyConsumed): the artifact is exactly the orphan BE-GRANT-01a already defines, not a new state. The plain witness asserts the independent ledger view: consumed yes, published no, one orphan on recovery, replay refused, effect count zero.
+
+**Ruling 2 - the v1 contract carries the outcome on the tag.** `bolina.grant-trace.v1` gains `effect_refused = 11`, emitted instead of `effect_return` when the executor declines. The Event struct stays fixed-width: no projector exists yet (Huebrz's Phase A is the first consumer), so this is a pre-publication extension, zero migration. A trace ending in effect_refused must never be followed by mark_published or record_executing_witness; the trace test asserts the 16-event prefix (intent, verify 0..10, commit, effect_start, effect_refused) with nothing after.
+
+**Ruling 3 - the mutation receipt is stale by design, again.** verify.zig, dispatch.zig and the four test files are TARGETS files; the suite re-runs under the D-073 baseline guard before any receipt is cited (D-077 anchor discipline applies: the effect call site gained lines, anchors that span it were checked).
+
+Migration surface: 2 production files (enum + signature + publication branch + conditional emit), 5 callback definitions across 4 test files (return .fired), 9 bare `try verifyGrantThen` call sites now discard the returned outcome (their tests already witness the effect via effect_calls), 1 new tag + contract comment, 2 new tests (plain + trace). Default build 382/386 (4 trace tests skip-gated), -Dtrace=true 385/386 (1 skip: the silent-by-default witness), fmt clean, zero em-dashes, prumo 0 failing.
+
+Reversible: revert to the void hook, drop the branch, the tag and the two tests. What would reopen this ruling: the pilot's Phase B binding PublishOutcome/RecoverPublishInterrupted to the durable recovery path, which may need additional events rather than reinterpretation of these two.
+
+

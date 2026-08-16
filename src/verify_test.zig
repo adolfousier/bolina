@@ -122,9 +122,10 @@ fn ledgerDurableCommit(grant_id: []const u8, not_after_ms: u64, now_ms: u64) boo
 var effect_calls: usize = 0;
 var effect_grant_id: []const u8 = &[_]u8{};
 
-fn recordEffect(grant: parser.channel.Grant) void {
+fn recordEffect(grant: parser.channel.Grant) verify.EffectOutcome {
     effect_calls += 1;
     effect_grant_id = grant.grant_id;
+    return .fired;
 }
 
 fn resetEffect() void {
@@ -190,7 +191,7 @@ test "BE_GRANT_03 canonical grant verifies end to end" {
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
     resetEffect();
-    try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
+    _ = try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
     // The effect ran exactly once, on the grant the routine verified, by value.
     try std.testing.expectEqual(@as(usize, 1), effect_calls);
     try std.testing.expectEqualSlices(u8, grant.grant_id, effect_grant_id);
@@ -324,7 +325,7 @@ test "BE_GRANT_05 not_after minus 1ms is accepted (boundary deny)" {
     // first_receipt is far enough inside T_recv that the receipt bound still
     // holds at this now_ms, so the only boundary in play is not_after.
     resetEffect();
-    try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
+    _ = try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
     try std.testing.expectEqual(@as(usize, 1), effect_calls);
 }
 
@@ -343,7 +344,7 @@ test "BE_GRANT_05 not_after exactly T_max from receipt is accepted (boundary)" {
     ctx.first_receipt_ms = grant.not_after - (T_MAX_S * 1000);
     ctx.now_ms = ctx.first_receipt_ms + 150_000; // 150s, inside T_recv (300s)
     resetEffect();
-    try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
+    _ = try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
     try std.testing.expectEqual(@as(usize, 1), effect_calls);
 }
 
@@ -358,7 +359,7 @@ test "BE_GRANT_05 now exactly T_recv since receipt is accepted (boundary)" {
     ctx.first_receipt_ms = grant.not_after - (T_MAX_S * 1000 / 2);
     ctx.now_ms = ctx.first_receipt_ms + (T_RECV_S * 1000);
     resetEffect();
-    try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
+    _ = try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
     try std.testing.expectEqual(@as(usize, 1), effect_calls);
 }
 
@@ -394,7 +395,7 @@ test "BE_GRANT_01 ledger hook runs last, after expiry" {
     ledger_calls = 0;
     resetEffect();
     const ok_ctx = baseContext(ACTION, &ledgerCounting);
-    try verify.verifyGrantThen(env, &grant, ok_ctx, &recordEffect);
+    _ = try verify.verifyGrantThen(env, &grant, ok_ctx, &recordEffect);
     try std.testing.expectEqual(@as(usize, 1), ledger_calls);
     try std.testing.expectEqual(@as(usize, 1), effect_calls);
 }
@@ -428,7 +429,7 @@ test "BE_GRANT_01a interrupted effect leaves grant_id spent, never retried" {
     // (hook flips fresh -> consumed), and the effect is attempted once.
     one_shot_consumed = false;
     resetEffect();
-    try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
+    _ = try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
     try std.testing.expectEqual(@as(usize, 1), effect_calls);
     try std.testing.expect(one_shot_consumed);
 
@@ -452,7 +453,7 @@ test "BE_GRANT_03b valid grant runs the effect exactly once with matching fields
     const env = grantEnvelope(grant);
     const ctx = baseContext(ACTION, &ledgerFresh);
     resetEffect();
-    try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
+    _ = try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
     try std.testing.expectEqual(@as(usize, 1), effect_calls);
     // The grant reached the effect by value: its fields are the routine's, not
     // a storable handle the caller can keep and mutate.
@@ -968,14 +969,14 @@ test "BE_ENV_01 envelope ts is not a security input" {
     var env_zero = grantEnvelope(grant);
     env_zero.ts = 0;
     resetEffect();
-    try verify.verifyGrantThen(env_zero, &grant, ctx, &recordEffect);
+    _ = try verify.verifyGrantThen(env_zero, &grant, ctx, &recordEffect);
     try std.testing.expectEqual(@as(usize, 1), effect_calls);
 
     // ts = maxInt: same grant, same outcome. ts gates nothing.
     var env_far = grantEnvelope(grant);
     env_far.ts = std.math.maxInt(u64);
     resetEffect();
-    try verify.verifyGrantThen(env_far, &grant, ctx, &recordEffect);
+    _ = try verify.verifyGrantThen(env_far, &grant, ctx, &recordEffect);
     try std.testing.expectEqual(@as(usize, 1), effect_calls);
 }
 

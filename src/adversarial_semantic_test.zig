@@ -105,11 +105,12 @@ var m3_action_digest: [DIGEST_LEN]u8 = undefined;
 var m3_resource_buf: [128]u8 = undefined;
 var m3_resource_len: usize = 0;
 
-fn m3Effect(grant: channel.Grant) void {
+fn m3Effect(grant: channel.Grant) verify.EffectOutcome {
     sem_effect_count += 1;
     @memcpy(&m3_action_digest, grant.action_digest[0..DIGEST_LEN]);
     m3_resource_len = grant.resource_id.len;
     @memcpy(m3_resource_buf[0..m3_resource_len], grant.resource_id);
+    return .fired;
 }
 
 fn m3MatchesSignedAction(action: []const u8, resource: []const u8) bool {

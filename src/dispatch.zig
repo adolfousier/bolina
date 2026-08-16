@@ -51,6 +51,7 @@ pub const DispatchError = error{
 pub const Outcome = enum {
     intent_admitted, // lock held, pending approval
     grant_executed, // effect callback fired once, inside verifyGrantThen
+    effect_refused, // checks passed, commit durable, executor declined: unpublished orphan (BE-GRANT-01a, brief 9.1)
     refusal_applied, // pending intent moved to REJECTED, or dropped no-match
     utterance, // pass-through, zero state change
     control, // routing-verified; full wiring phase B
@@ -58,7 +59,7 @@ pub const Outcome = enum {
 };
 
 pub const Hooks = struct {
-    execute_effect: *const fn (channel.Grant) void,
+    execute_effect: *const fn (channel.Grant) verify.EffectOutcome,
     cert_for_sender: *const fn (sender: []const u8) ?session.Cert,
     on_rejected: *const fn (intent_id: []const u8) void,
 };
@@ -239,7 +240,13 @@ pub const Dispatch = struct {
             .already_consumed = consumedHook,
             .is_revoked = isRevokedHook,
         };
-        try verify.verifyGrantThen(env, &grant, ctx, hooks.execute_effect);
+        const effect_outcome = try verify.verifyGrantThen(env, &grant, ctx, hooks.execute_effect);
+        // Brief 9.1: the outcome is the publication boundary's evidence
+        // source. A refused effect never reaches markPublished: publishing
+        // a grant whose effect never fired would be false evidence under
+        // the D-067 correspondence rule. The commit row from check 11
+        // stands, so the spent capability refuses any replay.
+        if (effect_outcome == .refused) return Outcome.effect_refused;
         // BE-GRANT-01a: the effect returned, so the grant is published. The
         // tombstone keeps the next recovery from re-emitting it as an orphan.
         // A failed tombstone write is fail-safe, not a dispatch failure: the

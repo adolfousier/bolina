@@ -58,8 +58,9 @@ fn signedEnvelope(body_type: u8, body: []const u8) channel.Envelope {
 }
 
 // Hook fixtures (M10 shape: bare function pointers).
-fn noopEffect(grant: channel.Grant) void {
+fn noopEffect(grant: channel.Grant) verify.EffectOutcome {
     _ = grant;
+    return .fired;
 }
 fn noCert(sender: []const u8) ?session.Cert {
     _ = sender;
@@ -277,9 +278,17 @@ pub fn grantPathCertHook(sender: []const u8) ?session.Cert {
 pub var effect_count: usize = 0;
 var effect_grant_id: [16]u8 = undefined;
 
-pub fn testEffect(grant: channel.Grant) void {
+pub fn testEffect(grant: channel.Grant) verify.EffectOutcome {
     effect_count += 1;
     @memcpy(&effect_grant_id, grant.grant_id);
+    return .fired;
+}
+
+pub fn refusingEffect(grant: channel.Grant) verify.EffectOutcome {
+    // Brief 9.1 negative control: the executor declines the capability
+    // after every check passed and the commit row is already durable.
+    _ = grant;
+    return .refused;
 }
 
 var g_sender: [32]u8 = undefined;
@@ -486,6 +495,42 @@ test "DAEMON_D durable seam: commit row and publish tombstone both on disk after
     const r = try view.recover();
     try std.testing.expect(view.isConsumed(G_GRANT_ID));
     try std.testing.expectEqual(@as(usize, 0), r.orphans.len);
+}
+
+test "DAEMON_D durable seam: refused effect leaves a durable unpublished orphan (brief 9.1)" {
+    const sl = try initSeamLedger("refused");
+    defer closeSeamLedger(sl);
+    effect_count = 0;
+    ensureGrantCerts();
+    const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
+    var res = resolver_mod.Resolver.init(&executor_pub);
+    var canonical_a_buf: [64]u8 = undefined;
+    const canonical_a = executorCanonical(&canonical_a_buf, "logs/deploy.log");
+    try res.add(canonical_a);
+    var d = dispatch_mod.Dispatch.init(res, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+    const hooks = dispatch_mod.Hooks{ .execute_effect = &refusingEffect, .cert_for_sender = &grantPathCertHook, .on_rejected = &noopRejected };
+    const len_a = buildIntentBodyId(&intent_body_a, &G_INTENT_ID, canonical_a, ACTION);
+    var a_sender: [32]u8 = undefined;
+    var a_sig: [64]u8 = undefined;
+    var a_tbs: [64]u8 = undefined;
+    try std.testing.expectEqual(dispatch_mod.Outcome.intent_admitted, try d.dispatch(agentEnvelopeSigned(intent_body_a[0..len_a], &a_sender, &a_sig, &a_tbs), hooks, GRANT_NOW_MS));
+    // Every check passed, the commit row is durable, the executor declined:
+    // the outcome is effect_refused, never grant_executed.
+    try std.testing.expectEqual(dispatch_mod.Outcome.effect_refused, try d.dispatch(grantEnvelopeSigned(buildGrantWire(G_INTENT_ID, canonical_a, ACTION)), hooks, GRANT_NOW_MS));
+    try std.testing.expectEqual(@as(usize, 0), effect_count);
+    // Independent view over the same file: consumed WITHOUT the tombstone.
+    // The spent capability is a durable orphan under BE-GRANT-01a; publishing
+    // it would be false evidence under the D-067 correspondence rule.
+    var view = try grant_ledger_mod.GrantLedger.open(sl.io, sl.path);
+    defer view.close();
+    const r = try view.recover();
+    try std.testing.expect(view.isConsumed(G_GRANT_ID));
+    try std.testing.expect(!view.isPublished(G_GRANT_ID));
+    try std.testing.expectEqual(@as(usize, 1), r.orphans.len);
+    // Replay: the commit row from check 11 already spent the capability, so
+    // the refused grant can never be replayed into a second effect attempt.
+    try std.testing.expectError(verify.VerifyError.AlreadyConsumed, d.dispatch(grantEnvelopeSigned(buildGrantWire(G_INTENT_ID, canonical_a, ACTION)), hooks, GRANT_NOW_MS));
+    try std.testing.expectEqual(@as(usize, 0), effect_count);
 }
 
 test "DAEMON_D durable seam: consumed grant survives restart, replay refused by the ledger (BE-GRANT-01)" {

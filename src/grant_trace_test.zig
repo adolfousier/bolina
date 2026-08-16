@@ -141,3 +141,39 @@ test "trace v1: resource conflict emits the refusal event" {
     try std.testing.expectEqual(grant_trace.Tag.reject_resource_conflict, seq[1].tag);
     try std.testing.expectEqual(grant_trace.fingerprint(&dt.G_INTENT_ID_B), seq[1].id);
 }
+
+test "trace v1: refused effect ends the trace in an unpublished orphan (brief 9.1)" {
+    if (!grant_trace.enabled) return error.SkipZigTest;
+    const sl = try dt.initSeamLedger("tracerefused");
+    defer dt.closeSeamLedger(sl);
+    grant_trace.reset();
+    dt.effect_count = 0;
+    dt.ensureGrantCerts();
+    const executor_pub = cth.pubkeyOf(dt.EXECUTOR_PREFIX);
+    var res = resolver_mod.Resolver.init(&executor_pub);
+    var canonical_a_buf: [64]u8 = undefined;
+    const canonical_a = dt.executorCanonical(&canonical_a_buf, "logs/deploy.log");
+    try res.add(canonical_a);
+    var d = dispatch_mod.Dispatch.init(res, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+    const hooks = dispatch_mod.Hooks{ .execute_effect = &dt.refusingEffect, .cert_for_sender = &dt.grantPathCertHook, .on_rejected = &dt.noopRejected };
+    const len_a = dt.buildIntentBodyId(&dt.intent_body_a, &dt.G_INTENT_ID, canonical_a, dt.ACTION);
+    var a_sender: [32]u8 = undefined;
+    var a_sig: [64]u8 = undefined;
+    var a_tbs: [64]u8 = undefined;
+    _ = try d.dispatch(dt.agentEnvelopeSigned(dt.intent_body_a[0..len_a], &a_sender, &a_sig, &a_tbs), hooks, dt.GRANT_NOW_MS);
+    try std.testing.expectEqual(dispatch_mod.Outcome.effect_refused, try d.dispatch(dt.grantEnvelopeSigned(dt.buildGrantWire(dt.G_INTENT_ID, canonical_a, dt.ACTION)), hooks, dt.GRANT_NOW_MS));
+
+    // Full prefix (intent, verify 0..10, commit, effect_start), then the
+    // refusal tag instead of effect_return, then NOTHING: no publication,
+    // no executing witness. The durable orphan is the trace's last word.
+    const seq = grant_trace.snapshot();
+    const expected = [_]grant_trace.Tag{ .receive_intent, .begin_verify } ++ ([_]grant_trace.Tag{.verify_check} ** 11) ++ [_]grant_trace.Tag{ .commit_consumed_11, .effect_start, .effect_refused };
+    try std.testing.expectEqual(expected.len, seq.len);
+    for (expected, seq) |want, got| try std.testing.expectEqual(want, got.tag);
+    for (seq) |ev| {
+        try std.testing.expect(ev.tag != .mark_published);
+        try std.testing.expect(ev.tag != .record_executing_witness);
+        try std.testing.expect(ev.tag != .effect_return);
+    }
+    try std.testing.expectEqual(@as(usize, 0), grant_trace.overflow());
+}

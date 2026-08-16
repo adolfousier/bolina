@@ -22,6 +22,14 @@
 // counter, monotonic within a process epoch. Crash/Restart is a
 // harness-owned epoch boundary that resets the buffer.
 //
+// effect_refused (brief section 9.1, D-078): emitted instead of
+//   effect_return when the executor declines the capability. A trace
+//   ending in effect_refused must never be followed by mark_published or
+//   record_executing_witness: publishing a grant whose effect never fired
+//   would be false evidence under the D-067 correspondence rule. The
+//   commit_consumed_11 row stands, so the trace ends in a durable,
+//   unpublished orphan (BE-GRANT-01a).
+//
 // Single-threaded by design: the dispatch path runs under the verify frame
 // lock, so the module-level buffer needs no synchronization.
 
@@ -44,6 +52,7 @@ pub const Tag = enum(u8) {
     mark_published = 8,
     record_executing_witness = 9,
     recover_mark_published = 10,
+    effect_refused = 11,
     trace_overflow = 255,
 };
 
