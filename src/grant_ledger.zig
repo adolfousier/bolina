@@ -55,6 +55,7 @@
 // expires within the certificate's life).
 
 const std = @import("std");
+const grant_trace = @import("grant_trace.zig");
 
 // Declared bounds (SPEC.md BE-EXEC-01, D-061).
 pub const GRANT_ID_LEN: usize = 16; // channel.LEN_GRANT_ID
@@ -206,6 +207,7 @@ pub const GrantLedger = struct {
         @memcpy(row[1 .. 1 + GRANT_ID_LEN], &grant_id);
         std.mem.writeInt(u64, row[1 + GRANT_ID_LEN ..][0..8], expiry_ms, .little);
         try self.appendSync(&row);
+        if (grant_trace.enabled) grant_trace.emit(.commit_consumed_11, grant_trace.NO_PC, &grant_id, now_ms);
         @memcpy(&self.consumed[self.consumed_len], &grant_id);
         self.consumed_len += 1;
     }
@@ -221,6 +223,7 @@ pub const GrantLedger = struct {
         row[0] = TAG_PUBLISHED;
         @memcpy(row[1 .. 1 + GRANT_ID_LEN], &grant_id);
         try self.appendSync(&row);
+        if (grant_trace.enabled) grant_trace.emit(.mark_published, grant_trace.NO_PC, &grant_id, 0);
         @memcpy(&self.published[self.published_len], &grant_id);
         self.published_len += 1;
     }

@@ -36,6 +36,7 @@
 // effect runs on that value inside the frame, never on a storable handle.
 
 const std = @import("std");
+const grant_trace = @import("grant_trace.zig");
 const parser = @import("parser.zig");
 const binding = @import("binding.zig");
 const ledger = @import("ledger.zig");
@@ -199,15 +200,19 @@ pub const GrantContext = struct {
 
 pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.channel.Grant, ctx: GrantContext, execute: *const fn (parser.channel.Grant) void) VerifyError!void {
     const grant = grant_ptr.*;
+    if (grant_trace.enabled) grant_trace.emit(.begin_verify, grant_trace.NO_PC, grant.grant_id, ctx.now_ms);
     // 0. Grant.version must be 2 (RED-TEAM-08 F6: the field is read, not ignored).
     if (grant.version != 2) return error.BadVersion;
+    if (grant_trace.enabled) grant_trace.emit(.verify_check, 0, grant.grant_id, ctx.now_ms);
 
     // 1. The grant arrived as a body_type=3 envelope whose sender is the approver.
     if (env.body_type != parser.channel.BODY_GRANT) return error.BadEnvelopeBinding;
     if (!std.mem.eql(u8, env.sender, grant.approver)) return error.BadEnvelopeBinding;
+    if (grant_trace.enabled) grant_trace.emit(.verify_check, 1, grant.grant_id, ctx.now_ms);
 
     // 2. Grant.sig verifies against Grant.approver (domain tag 0x04).
     try verifySigned(parser.channel.DOMAIN_GRANT, grant.tbs, grant.sig, grant.approver);
+    if (grant_trace.enabled) grant_trace.emit(.verify_check, 2, grant.grant_id, ctx.now_ms);
 
     // 3. Approver certificate valid NOW and carries the approver role (BE-ID-02,
     //    BE-ID-04). The cert binds the identity that signed the grant, so its
@@ -220,6 +225,7 @@ pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.ch
     // F4 / BE-REV-02: the approver's signing key is durably revoked. Checked at
     // use (this is the capability->effect checkpoint), not at session fill.
     if (ctx.is_revoked(ctx.approver_cert.sig_pubkey)) return error.ApproverRevoked;
+    if (grant_trace.enabled) grant_trace.emit(.verify_check, 3, grant.grant_id, ctx.now_ms);
 
     // 4. Subject certificate valid NOW and carries the agent role. Its identity
     //    key is the subject the grant authorizes.
@@ -228,26 +234,33 @@ pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.ch
     if (!std.mem.eql(u8, ctx.subject_cert.sig_pubkey, grant.subject)) return error.BadSubjectCert;
     // F4 / BE-REV-02: the subject's signing key is durably revoked.
     if (ctx.is_revoked(ctx.subject_cert.sig_pubkey)) return error.SubjectRevoked;
+    if (grant_trace.enabled) grant_trace.emit(.verify_check, 4, grant.grant_id, ctx.now_ms);
 
     // 5. Grant.executor equals this executor's own sig_pubkey.
     if (!std.mem.eql(u8, grant.executor, ctx.own_pubkey)) return error.WrongExecutor;
+    if (grant_trace.enabled) grant_trace.emit(.verify_check, 5, grant.grant_id, ctx.now_ms);
 
     // 6. The grant's subject is the pending intent's sender.
     if (!std.mem.eql(u8, grant.subject, ctx.intent_sender)) return error.WrongSubject;
+    if (grant_trace.enabled) grant_trace.emit(.verify_check, 6, grant.grant_id, ctx.now_ms);
 
     // 7. intent_id matches the pending intent.
     if (!std.mem.eql(u8, grant.intent_id, ctx.pending_intent_id)) return error.NoMatchingIntent;
+    if (grant_trace.enabled) grant_trace.emit(.verify_check, 7, grant.grant_id, ctx.now_ms);
 
     // 8. resource_id matches the pending intent's canonical resource_id.
     if (!std.mem.eql(u8, grant.resource_id, ctx.pending_resource_id)) return error.WrongResource;
+    if (grant_trace.enabled) grant_trace.emit(.verify_check, 8, grant.grant_id, ctx.now_ms);
 
     // 9. Grant.action_digest equals BLAKE2s recomputed over the intent's action
     //    bytes (BE-GRANT-02). Exact match, no partial or semantic matching.
     const digest = actionDigest(ctx.intent_action);
     if (!std.mem.eql(u8, &digest, grant.action_digest)) return error.ActionDigestMismatch;
+    if (grant_trace.enabled) grant_trace.emit(.verify_check, 9, grant.grant_id, ctx.now_ms);
 
     // 10. Expiry passes all three conditions of BE-GRANT-05.
     try checkExpiry(grant.not_after, ctx.now_ms, ctx.first_receipt_ms, ctx.t_max_s, ctx.t_recv_s);
+    if (grant_trace.enabled) grant_trace.emit(.verify_check, 10, grant.grant_id, ctx.now_ms);
 
     // 11. grant_id is not already consumed (BE-GRANT-01). Only I/O step; last.
     //     The hook carries not_after and the verify clock for the durable
@@ -259,7 +272,9 @@ pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.ch
     // leaves grant_id spent (BE-GRANT-01a interrupted), never retried. This
     // single invocation is the only reach path to the effect in the tree, which
     // the call-graph wall M10 makes load-bearing.
+    if (grant_trace.enabled) grant_trace.emit(.effect_start, grant_trace.NO_PC, grant.grant_id, ctx.now_ms);
     execute(grant);
+    if (grant_trace.enabled) grant_trace.emit(.effect_return, grant_trace.NO_PC, grant.grant_id, ctx.now_ms);
 }
 
 // ---------------------------------------------------------------------------

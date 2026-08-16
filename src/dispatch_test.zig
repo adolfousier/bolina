@@ -25,7 +25,7 @@ const EXECUTOR_PUBKEY: [32]u8 = .{0x42} ** 32; // resolver hashes bytes; no curv
 const INTENT_ID: [16]u8 = .{0x11} ** 16;
 const GRANT_ID_FIX: [16]u8 = .{0x22} ** 16;
 const MATCHLESS_INTENT_ID: [16]u8 = .{0x99} ** 16;
-const ACTION = "restart-service";
+pub const ACTION = "restart-service";
 const FIX_TBS = "fixture-envelope-tbs";
 
 // Stable storage for the signed fixture envelope (single-threaded tests).
@@ -65,7 +65,7 @@ fn noCert(sender: []const u8) ?session.Cert {
     _ = sender;
     return null;
 }
-fn noopRejected(intent_id: []const u8) void {
+pub fn noopRejected(intent_id: []const u8) void {
     _ = intent_id;
 }
 const TEST_HOOKS: dispatch_mod.Hooks = .{
@@ -78,13 +78,13 @@ const TEST_HOOKS: dispatch_mod.Hooks = .{
 // to check 11 runs the dispatch seam over a fresh ledger file under /tmp.
 // The threaded io context must outlive the ledger's borrow, so the test owns
 // the SeamLedger for its whole body.
-const SeamLedger = struct {
+pub const SeamLedger = struct {
     threaded: std.Io.Threaded,
     io: std.Io,
     path: []const u8,
 };
 
-fn initSeamLedger(comptime tag: []const u8) !SeamLedger {
+pub fn initSeamLedger(comptime tag: []const u8) !SeamLedger {
     var threaded = std.Io.Threaded.init_single_threaded;
     const io = threaded.io();
     const path = "/tmp/bolina_dispatch_" ++ tag ++ ".log";
@@ -96,7 +96,7 @@ fn initSeamLedger(comptime tag: []const u8) !SeamLedger {
     return .{ .threaded = threaded, .io = io, .path = path };
 }
 
-fn closeSeamLedger(sl: SeamLedger) void {
+pub fn closeSeamLedger(sl: SeamLedger) void {
     dispatch_mod.closeDurableLedger();
     const dir = std.Io.Dir.cwd();
     dir.deleteFile(sl.io, sl.path) catch {};
@@ -109,7 +109,7 @@ fn buildIntentBody(out: []u8, resource: []const u8, action: []const u8) usize {
     return buildIntentBodyId(out, &INTENT_ID, resource, action);
 }
 
-fn buildIntentBodyId(out: []u8, intent_id: []const u8, resource: []const u8, action: []const u8) usize {
+pub fn buildIntentBodyId(out: []u8, intent_id: []const u8, resource: []const u8, action: []const u8) usize {
     var n: usize = 0;
     @memcpy(out[n..][0..16], intent_id);
     n += 16;
@@ -244,13 +244,13 @@ test "DAEMON_A bad body for the declared type refuses" {
 // signature; certs are CA-signed by buildCertInto.
 // ---------------------------------------------------------------------------
 
-const EXECUTOR_PREFIX: u8 = 0xE1;
-const AGENT_PREFIX: u8 = 0xA1;
-const APPROVER_PREFIX: u8 = 0xB1;
-const GRANT_NOW_MS: u64 = 1_700_000_000_000; // inside both cert windows
-const G_INTENT_ID: [16]u8 = .{0x71} ** 16;
-const G_INTENT_ID_B: [16]u8 = .{0x72} ** 16;
-const G_GRANT_ID: [16]u8 = .{0x81} ** 16;
+pub const EXECUTOR_PREFIX: u8 = 0xE1;
+pub const AGENT_PREFIX: u8 = 0xA1;
+pub const APPROVER_PREFIX: u8 = 0xB1;
+pub const GRANT_NOW_MS: u64 = 1_700_000_000_000; // inside both cert windows
+pub const G_INTENT_ID: [16]u8 = .{0x71} ** 16;
+pub const G_INTENT_ID_B: [16]u8 = .{0x72} ** 16;
+pub const G_GRANT_ID: [16]u8 = .{0x81} ** 16;
 
 var cert_agent_wire: [512]u8 = undefined;
 var cert_approver_wire: [512]u8 = undefined;
@@ -258,14 +258,14 @@ var cert_agent: session.Cert = undefined;
 var cert_approver: session.Cert = undefined;
 var certs_inited: bool = false;
 
-fn ensureGrantCerts() void {
+pub fn ensureGrantCerts() void {
     if (certs_inited) return;
     cert_agent = cth.buildCertInto(&cert_agent_wire, cth.pubkeyOf(AGENT_PREFIX), binding.ROLE_AGENT, &[_]u8{0xC2}, cth.CERT_NOT_BEFORE, cth.CERT_NOT_AFTER);
     cert_approver = cth.buildCertInto(&cert_approver_wire, cth.pubkeyOf(APPROVER_PREFIX), binding.ROLE_APPROVER, &[_]u8{ 0xC0, 0xC1 }, cth.PRIVILEGED_CERT_NOT_BEFORE, cth.PRIVILEGED_CERT_NOT_AFTER);
     certs_inited = true;
 }
 
-fn grantPathCertHook(sender: []const u8) ?session.Cert {
+pub fn grantPathCertHook(sender: []const u8) ?session.Cert {
     ensureGrantCerts();
     if (sender.len == 32) {
         if (std.mem.eql(u8, sender, &cth.pubkeyOf(APPROVER_PREFIX))) return cert_approver;
@@ -274,10 +274,10 @@ fn grantPathCertHook(sender: []const u8) ?session.Cert {
     return null;
 }
 
-var effect_count: usize = 0;
+pub var effect_count: usize = 0;
 var effect_grant_id: [16]u8 = undefined;
 
-fn testEffect(grant: channel.Grant) void {
+pub fn testEffect(grant: channel.Grant) void {
     effect_count += 1;
     @memcpy(&effect_grant_id, grant.grant_id);
 }
@@ -287,12 +287,12 @@ var g_sig: [64]u8 = undefined;
 var g_tbs: [64]u8 = undefined;
 var grant_body: [512]u8 = undefined;
 var g_canonical_buf: [64]u8 = undefined;
-var intent_body_a: [128]u8 = undefined;
-var intent_body_b: [128]u8 = undefined;
+pub var intent_body_a: [128]u8 = undefined;
+pub var intent_body_b: [128]u8 = undefined;
 
 const G_TBS = "grant-envelope-tbs";
 
-fn grantEnvelopeSigned(body: []const u8) channel.Envelope {
+pub fn grantEnvelopeSigned(body: []const u8) channel.Envelope {
     const kp = cth.keypair(APPROVER_PREFIX);
     g_sender = Ed.PublicKey.toBytes(kp.public_key);
     @memcpy(g_tbs[0..G_TBS.len], G_TBS);
@@ -316,7 +316,7 @@ fn grantEnvelopeSigned(body: []const u8) channel.Envelope {
     };
 }
 
-fn agentEnvelopeSigned(body: []const u8, buf_sender: *[32]u8, buf_sig: *[64]u8, buf_tbs: *[64]u8) channel.Envelope {
+pub fn agentEnvelopeSigned(body: []const u8, buf_sender: *[32]u8, buf_sig: *[64]u8, buf_tbs: *[64]u8) channel.Envelope {
     const kp = cth.keypair(AGENT_PREFIX);
     buf_sender.* = Ed.PublicKey.toBytes(kp.public_key);
     @memcpy(buf_tbs[0..G_TBS.len], G_TBS);
@@ -340,7 +340,7 @@ fn agentEnvelopeSigned(body: []const u8, buf_sender: *[32]u8, buf_sig: *[64]u8, 
     };
 }
 
-fn executorCanonical(out: []u8, path: []const u8) []u8 {
+pub fn executorCanonical(out: []u8, path: []const u8) []u8 {
     const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
     var fphex: [16]u8 = undefined;
     resolver_mod.executorFp(&executor_pub, &fphex);
@@ -356,7 +356,7 @@ fn executorCanonical(out: []u8, path: []const u8) []u8 {
     return out[0..n];
 }
 
-fn buildGrantWire(intent_id: [16]u8, resource: []const u8, action: []const u8) []u8 {
+pub fn buildGrantWire(intent_id: [16]u8, resource: []const u8, action: []const u8) []u8 {
     var n: usize = 0;
     grant_body[n] = 2;
     n += 1;

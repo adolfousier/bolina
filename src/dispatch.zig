@@ -28,6 +28,7 @@ const intent_mod = @import("intent.zig");
 const resolver_mod = @import("resolver.zig");
 const verify = @import("verify.zig");
 const grant_ledger = @import("grant_ledger.zig");
+const grant_trace = @import("grant_trace.zig");
 
 // Declared defaults (SPEC grant receipts, D-059).
 pub const T_MAX_S_DEFAULT: u64 = 3600;
@@ -101,7 +102,10 @@ pub fn closeDurableLedger() void {
 // The caller has published the interrupted Effect for an orphan
 // (BE-GRANT-01a) and now tombstones it so later recoveries skip it.
 pub fn tombstoneOrphan(grant_id: [channel.LEN_GRANT_ID]u8) grant_ledger.LedgerError!void {
-    if (durable_ledger) |*lg| try lg.markPublished(grant_id);
+    if (durable_ledger) |*lg| {
+        try lg.markPublished(grant_id);
+        if (grant_trace.enabled) grant_trace.emit(.recover_mark_published, grant_trace.NO_PC, &grant_id, 0);
+    }
 }
 
 // Check 11 hook (D-062): durably commit-before-effect. Returns true when the
@@ -185,7 +189,13 @@ pub const Dispatch = struct {
     fn dispatchIntent(self: *Dispatch, env: channel.Envelope, now_ms: u64) (DispatchError || resolver_mod.ResolveError || intent_mod.IntentError)!Outcome {
         const it = channel.parseIntent(env.body) catch return error.BadBody;
         if (it.action.len > MAX_ACTION) return error.ActionTooLarge;
-        try self.resolver.resolveAndAdmit(&self.intents, it, now_ms);
+        self.resolver.resolveAndAdmit(&self.intents, it, now_ms) catch |e| {
+            if (grant_trace.enabled) {
+                if (e == error.ResourceHeld) grant_trace.emit(.reject_resource_conflict, grant_trace.NO_PC, it.intent_id, now_ms);
+            }
+            return e;
+        };
+        if (grant_trace.enabled) grant_trace.emit(.receive_intent, grant_trace.NO_PC, it.intent_id, now_ms);
         if (self.senders_len < self.senders.len and env.sender.len == 32 and it.intent_id.len == channel.LEN_INTENT_ID) {
             const rec = &self.senders[self.senders_len];
             @memcpy(rec.intent_id[0..channel.LEN_INTENT_ID], it.intent_id);
@@ -247,6 +257,7 @@ pub const Dispatch = struct {
         // the match-to-transition frame race BE-GRANT-03a names does not
         // exist until the phase-B listener owns the frame.
         try self.intents.beginExecuting(idx);
+        if (grant_trace.enabled) grant_trace.emit(.record_executing_witness, grant_trace.NO_PC, grant.grant_id, now_ms);
         return Outcome.grant_executed;
     }
 
