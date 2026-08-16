@@ -766,3 +766,60 @@ the nightly, which has contributed nothing on that half yet. §11.6 stays
 unsealed. The soak-deferred language in the Phase D and RED-TEAM-10 closeouts
 above is left as written: it was accurate at those closeouts and is superseded
 here, not rewritten.
+
+## Second nightly soak addendum (2026-08-16): section 11.6 sealed
+
+The second nightly soak (GitHub Actions run 31925289374, HEAD `2f310b0`,
+03:52 UTC on 2026-08-16) is the first run in which both halves produced
+evidence: the D-074 fixes (pipefail on the differential step, the measured
+1,000,000-record budget) were active, all five matrix jobs concluded success,
+and every receipt below was read from the job logs, not inferred from the green.
+
+**Chaos half, every seed.** All five seeds (bolina, s42, s1337, s999999,
+deadbeef) report `FUZZ DONE: 14400000000 inputs (316800000000 parser calls),
+0 panics` and `COVERAGE: 72/72 exit points reached`. Job walls: 2h47m15s
+(deadbeef), 2h48m43s (s999999), 3h06m46s (s1337), 2h47m36s (bolina), 2h10m21s
+(s42), about 13h41m accumulated this night.
+
+**Differential half, every seed.** All five seeds report 1,000,068 records
+against the 1,000,000 budget, `divergences: 0`, `coverage: 72/72 parser exit
+points reached`, and `VERDICT: PASS - production parser and reference parser
+agree on every record`. The bolina seed's full receipt reads 173,741 accepted
+and 826,327 rejected on both sides over a 1,276,006,998-byte corpus. Because
+D-074 ruling 1 put the differential step under `pipefail`, a divergence would
+have failed the job; the green is the verdict, not a `tee` exit status.
+
+**The accumulation arithmetic (D-070 ruling 2).** The ">= 24 hours" figure is
+met by accumulating five seeds per night across nights, not by one
+uninterrupted run. Night one contributed about 14.6 hours of chaos fuzzing
+(first addendum above; 14h15m on a strict job-wall reading). Night two
+contributes 13h41m. The conservative sum is 27h56m, the first addendum's own
+figure gives about 28.3h; both readings exceed 24 hours with margin. The
+zero-allocation clause holds structurally per D-056 ruling 5 in
+DECISION-LOG.md (no parse function takes an allocator; the fuzz arena covers
+setup only), so it is not re-polled here.
+
+**One tree, two nights.** `git diff 6dfebcb..2f310b0` touches no `src/` file:
+only `.github/workflows/soak.yml`, `DECISION-LOG.md`, `M1-AUDIT.md`, and
+`tools/fuzz_diff.py` differ between the two heads. The parser both nights
+measured is byte-identical; the differential harness differs only by the
+D-074 oversize refusal.
+
+**Section 11.6 is sealed** under the CONTRIBUTING.md vocabulary: the evidence
+for the claim exists and is recorded. Every clause of the claim now has a
+receipt: elapsed hours (accumulated per D-070 ruling 2), zero crashes and zero
+panics (both nights, all seeds, ReleaseSafe), zero out-of-bounds reads (a
+clean ReleaseSafe exit over N inputs is N inputs with no OOB access), zero
+allocations (structural ruling above), coverage and corpus reported per run
+(R1), and differential fuzzing per BE-SURF-04 (night two, five seeds, plus
+the per-push M4 gate and the RED-TEAM-10 standalone run). The unsealed
+conformance items drop from three to two: section 11.4 model checking is in
+progress with an external contributor, and section 11.5 adversarial
+evaluation against a real model has not been run. The first addendum's
+"§11.6 stays unsealed" stands as written and is superseded here, not
+rewritten. No M1 marker changes, no surface changes, no production code
+changes this round. What would reopen the seal: any future nightly reporting
+a panic or a differential divergence (that night's evidence is a counter-
+example and the item returns to unsealed), or the owner requiring literal
+continuity, which per D-070 ruling 2 needs a dedicated long-lived runner and
+a separate ruling.
