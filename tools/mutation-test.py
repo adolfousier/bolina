@@ -1248,8 +1248,8 @@ MUTANTS = [
     # source text; the runner restores every target before each mutant.
     ("grant_ledger", "grant_ledger.zig", "CHECK-ABSENCE", "grant-ledger-commit",
      "BE-GRANT-01: commit row never appended (no durable commit before effect)",
-     "        try self.appendSync(&row);\n        @memcpy(&self.consumed[self.consumed_len], &grant_id);\n        self.consumed_len += 1;",
-     "        // MUTANT: commit row never appended (no durable commit before effect)\n        @memcpy(&self.consumed[self.consumed_len], &grant_id);\n        self.consumed_len += 1;"),
+     "        try self.appendSync(&row);\n        if (grant_trace.enabled) grant_trace.emit(.commit_consumed_11, grant_trace.NO_PC, &grant_id, now_ms);\n        @memcpy(&self.consumed[self.consumed_len], &grant_id);\n        self.consumed_len += 1;",
+     "        // MUTANT: commit row never appended (no durable commit before effect)\n        if (grant_trace.enabled) grant_trace.emit(.commit_consumed_11, grant_trace.NO_PC, &grant_id, now_ms);\n        @memcpy(&self.consumed[self.consumed_len], &grant_id);\n        self.consumed_len += 1;"),
     ("grant_ledger", "grant_ledger.zig", "WRONG-VALUE", "grant-ledger-single-shot",
      "BE-GRANT-01: isConsumed always false (single-shot replay gate disabled)",
      "        return self.consumedIndex(grant_id) != null;",
