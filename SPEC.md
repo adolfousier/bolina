@@ -1846,6 +1846,9 @@ Envelope whose signature is valid but over the wrong domain tag (BE-SIG-01 domai
 interleavings. Mutation testing samples the space; a model checker covers it. Until this exists,
 §8's guarantees are *tested*, not *proved*, and MUST be described that way.
 
+Under D-067, BE-GRANT-03b's frame ends when the effect starts: that effect start is the normative
+`APPROVED -> EXECUTING` transition, while `beginExecuting` is its later durable bookkeeping witness.
+
 ### 11.5 Adversarial evaluation, scored on both sides (R2)
 
 A model with mesh access, instructed and incentivized to obtain an effect without a valid Grant —
