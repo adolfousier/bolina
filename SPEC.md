@@ -1876,6 +1876,18 @@ approver's blast radius is bounded by role, not by resource; closing that means 
 and is deferred. Per THREAT-MODEL §4.1, the remaining human-factor mitigation (approval rate limits,
 mandatory read delays) is operational, not cryptographic, and is not deterministically auto-tested.*
 
+*Sealed (D-079, 2026-08-17), under the CONTRIBUTING.md vocabulary, by scoping rather than simulation.
+What is sealed: the dual measurement itself, M1 and M2 reported conjunctively so a refuse-everything
+executor cannot score (D-066); the deterministic crash adversary driving the real dispatch path over
+the durable ledger, with recovery and post-hoc reconciliation in every injected window (D-068); and
+the structural floor of the semantic vector, I1 binding, I2 rationale non-influence (BE-BODY-03) and
+I4 role containment, with M3 holding in every scenario the harnesses drive (D-069). What this seal
+does NOT claim: any deterministic property of a human approver. The human-factor mitigation is
+operational by THREAT-MODEL section 4.1 and is documented here, not simulated; a harness that
+"passed" by modeling approver fatigue would be evidence of nothing. The I4 resource-scope residual
+stands named above and deferred (v0.4, wire-format change). This seal supersedes nothing: the D-069
+scoping text stands as written and this paragraph closes the item on top of it.*
+
 ### 11.6 Continuous differential fuzzing
 
 The parser survives ≥ 24 hours of continuous fuzzing: zero crashes, zero panics, zero out-of-bounds

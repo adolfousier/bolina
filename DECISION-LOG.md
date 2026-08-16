@@ -1323,4 +1323,19 @@ Migration surface: 2 production files (enum + signature + publication branch + c
 
 Reversible: revert to the void hook, drop the branch, the tag and the two tests. What would reopen this ruling: the pilot's Phase B binding PublishOutcome/RecoverPublishInterrupted to the durable recovery path, which may need additional events rather than reinterpretation of these two.
 
+## D-079 - 2026-08-17 - SPEC section 11.5 is sealed by scoping: the structural floor is proven adversarially, the human factor stays operational and named, never simulated
+
+The owner approved sealing section 11.5 via scoping (the v0.3.9 conclusion plan) rather than by building a live executor that simulates human approvers. The seal paragraph in SPEC section 11.5 declares what is sealed and what the seal does not claim.
+
+**Ruling 1 - what the seal covers, with receipts.** The dual measurement M1/M2 conjunctive (D-066: a refuse-everything executor scores M1=0 but fails M2, so neither number alone is a result); the deterministic crash adversary (D-068: five scenarios over the real dispatch path, durable ledger, injected crash windows, recovery and post-hoc audit reconciliation); the semantic structural floor (D-069: I1 binding via checks 8-9, I2 rationale non-influence as the first adversarial test of BE-BODY-03, I4 role containment via check 3, M3 executed-equals-signed holding in every scenario the harnesses drive, including the refuse-trap negative witness).
+
+**Ruling 2 - the honesty constraint, verbatim scope.** The seal wording must never read as proof of a human factor. What is NOT claimed: any deterministic property of a human approver. THREAT-MODEL section 4.1 places the remaining mitigation (approval rate limits, mandatory read delays) in operations, not cryptography; a harness that "passed" by modeling approver fatigue would be evidence of nothing and would not be accepted as section 11.5 evidence under this ruling.
+
+**Ruling 3 - the residuals stand named, not hidden.** I4: Cert carries role_bits and group_ids but no resource scope, so an approver's blast radius is bounded by role, not resource; closing it changes the wire format and is deferred to v0.4. The live-executor lane (B2) stays parked for the conformance pilot's later phases; the section 11.5 seal does not depend on it. M1 stays scoped to forged and stolen grants (a social-engineered grant has a real chain by definition, D-069 ruling text stands).
+
+Supersedes nothing: the D-069 scoping addendum stands as written; this ruling closes the item on top of it. The B2 executor, if ever built, would extend what is proven, not reopen this seal.
+
+Reversible: delete the seal paragraph from SPEC section 11.5 and this ruling. What would reopen it: an adversarial finding that breaks I1/I2/I4 or M3 in any harness scenario, which would void the structural-floor claim the seal rests on.
+
+
 
