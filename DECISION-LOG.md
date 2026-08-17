@@ -1339,3 +1339,18 @@ Reversible: delete the seal paragraph from SPEC section 11.5 and this ruling. Wh
 
 
 
+## D-080 - 2026-08-17 - owner closes the three residuals: keep section 9.2 semantics, accept I4 as documented, defer MESH-03; v0.4 backlog is named
+
+The owner reviewed the three remaining decisions of the v0.3.9 conclusion (after the section 9.1 outcome hook had already landed as D-078) and approved all three recommendations in one word. Each decision was argued with its strongest counter-considered case before the owner ruled; the reasoning is recorded here so v0.4 inherits the context, not just the outcome.
+
+**Ruling 1 - section 9.2 tombstone failure: the implementation stays D-061 at-least-once.** When markPublished fails after the effect fired, failing the dispatch would be theatre: the money already moved, the refusal undoes nothing. Double-spend stays dead by the check-11 durable commit that precedes the effect (BE-GRANT-01), and the orphan left behind is reconciled by recovery, proven in scenario S2 of the deterministic crash adversary (D-068). The fail-loud requirement the model reviewer raised is satisfied in evidence, not in control flow: the trace surface carries the failure (task 5 extends it), and Huebrz's model gains the MarkPublishedFailed branch on his side without weakening RecordExecutingWitness.
+
+**Ruling 2 - I4 resource scope: accepted as a documented residual, v0.4 opens with its design.** Cert carries role_bits and group_ids but no resource scope (session.zig:167), so any valid ROLE_APPROVER can approve a grant for any resource: blast radius is bounded by role, not by resource. The strongest counter was that wire format changes are never cheaper than pre-production; rejected because nobody has designed what a resource scope IS (ids? prefixes? groups? TTLs?) and designing a format under conclusion pressure is how bad formats become permanent. The fix would also reopen binding.zig (frozen lane), invalidate the 155/155 receipt, and send the TLA+ model back through verification. v0.4 starts with the scope design as its first item.
+
+**Ruling 3 - MESH-03 stays deferred (restates D-051, unchanged by conclusion).** Not on the section 11 seal path. Formalized in the v0.4 backlog beside the I4 scope design and the main.zig daemon.
+
+**The v0.4 backlog, named:** (1) design resource scope for Cert, (2) MESH-03 (D-051), (3) main.zig daemon if the conformance pilot's later phases need a live executor, (4) mutation harness header cosmetic v20 to v21. None of these are load-bearing for the section 11 evidence story; v0.3.9 concludes with them named, owned and versioned.
+
+Supersedes nothing: D-061 stands, the D-069 I4 residual documentation stands, D-051 stands. This ruling converts three open owner decisions into closed ones and freezes the v0.3.9 residual set.
+
+Reversible: the owner re-opens any of the three by saying so; each reversal is scoped to its own ruling above.
