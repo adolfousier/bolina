@@ -30,6 +30,23 @@
 //   commit_consumed_11 row stands, so the trace ends in a durable,
 //   unpublished orphan (BE-GRANT-01a).
 //
+// Phase B plumbing (brief section 6 table, D-081):
+//   publish_outcome is emitted when dispatch decides to publish from the
+//     effect outcome: only on the fired path (brief: "effect outcome
+//     publication attempt"). The refused path never attempts publication and
+//     already terminates in effect_refused (D-078).
+//   mark_published_failed is emitted inside the tombstone catch. D-080
+//     ruling 1: the failure stays fail-safe in control flow (D-061
+//     at-least-once) but is preserved loud in evidence. The projector must
+//     never map it to MarkPublished success; the grant stays a durable
+//     consumed, unpublished orphan until recovery.
+//   prune_temp_written / prune_temp_synced / prune_renamed / prune_reopened
+//     fire after each linearization point of the D-063 atomic rewrite, so a
+//     crash mid-prune is visible as the last completed phase. The id is the
+//     fingerprint of the live log path.
+//   expire_pending fires after the intent-table expiry sweep returns with a
+//     positive collapse count; pc carries the count (u8, table is bounded).
+//
 // Single-threaded by design: the dispatch path runs under the verify frame
 // lock, so the module-level buffer needs no synchronization.
 
@@ -53,6 +70,13 @@ pub const Tag = enum(u8) {
     record_executing_witness = 9,
     recover_mark_published = 10,
     effect_refused = 11,
+    publish_outcome = 12,
+    mark_published_failed = 13,
+    prune_temp_written = 14,
+    prune_temp_synced = 15,
+    prune_renamed = 16,
+    prune_reopened = 17,
+    expire_pending = 18,
     trace_overflow = 255,
 };
 

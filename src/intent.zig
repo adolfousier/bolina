@@ -31,6 +31,7 @@
 
 const std = @import("std");
 const channel = @import("parser/channel.zig");
+const grant_trace = @import("grant_trace.zig");
 
 const Intent = channel.Intent;
 const Refusal = channel.Refusal;
@@ -162,6 +163,9 @@ pub const Table = struct {
                 collapsed += 1;
             }
         }
+        // Brief section 6: after the expiry transition returns. pc carries
+        // the collapse count; a zero-count sweep emits nothing.
+        if (grant_trace.enabled and collapsed > 0) grant_trace.emit(.expire_pending, @intCast(collapsed), "intent-table", now_ms);
         return collapsed;
     }
 

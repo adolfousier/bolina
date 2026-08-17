@@ -100,6 +100,22 @@ pub fn closeDurableLedger() void {
     }
 }
 
+// Test-only write-failure injection for the Phase B conformance pilot
+// (brief section 6: crash between consume and tombstone, D-080 ruling 1's
+// loud-in-evidence promise). Swaps the ledger's read-write handle for a
+// read-only one opened on the same path: the next append fails (a write on
+// an O_RDONLY fd is EBADF) exactly like a lost tombstone write would, while
+// every later close stays valid (double-closing a real fd is a detected OS
+// bug in std.Io.Threaded.closeFd, so the original handle leaks instead;
+// harmless in a test process). Production never calls this.
+pub fn seamBreakLedgerWrites(io: std.Io) void {
+    if (durable_ledger) |*lg| {
+        const dir = std.Io.Dir.cwd();
+        const ro = dir.openFile(io, lg.path_buf[0..lg.path_len], .{ .mode = .read_only }) catch return;
+        lg.file = ro;
+    }
+}
+
 // The caller has published the interrupted Effect for an orphan
 // (BE-GRANT-01a) and now tombstones it so later recoveries skip it.
 pub fn tombstoneOrphan(grant_id: [channel.LEN_GRANT_ID]u8) grant_ledger.LedgerError!void {
@@ -247,16 +263,23 @@ pub const Dispatch = struct {
         // the D-067 correspondence rule. The commit row from check 11
         // stands, so the spent capability refuses any replay.
         if (effect_outcome == .refused) return Outcome.effect_refused;
+        // Brief section 6: the effect outcome is the publication attempt's
+        // evidence source. Reaching this line means the outcome is .fired.
+        if (grant_trace.enabled) grant_trace.emit(.publish_outcome, grant_trace.NO_PC, grant.grant_id, now_ms);
         // BE-GRANT-01a: the effect returned, so the grant is published. The
         // tombstone keeps the next recovery from re-emitting it as an orphan.
         // A failed tombstone write is fail-safe, not a dispatch failure: the
         // grant stays consumed, and recovery re-emits interrupted for it
         // (at-least-once), so an executed effect is never reported as an error.
+        // D-080 ruling 1: the failure stays silent in control flow but loud
+        // in evidence (mark_published_failed), never projected as success.
         if (durable_ledger) |*lg| {
             if (grant.grant_id.len == channel.LEN_GRANT_ID) {
                 var gid: [channel.LEN_GRANT_ID]u8 = undefined;
                 @memcpy(&gid, grant.grant_id[0..channel.LEN_GRANT_ID]);
-                lg.markPublished(gid) catch {};
+                lg.markPublished(gid) catch {
+                    if (grant_trace.enabled) grant_trace.emit(.mark_published_failed, grant_trace.NO_PC, grant.grant_id, now_ms);
+                };
             }
         }
         // Phase A ordering (D-059): the EXECUTING transition lands after a

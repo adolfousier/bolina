@@ -353,18 +353,26 @@ pub const GrantLedger = struct {
                 return error.DiskError;
             };
         }
+        // D-063 phase 1 of 4: survivor rows are durably in the temp file.
+        if (grant_trace.enabled) grant_trace.emit(.prune_temp_written, grant_trace.NO_PC, live_path, now_ms);
         tf.sync(self.io) catch {
             tf.close(self.io);
             return error.DiskError;
         };
+        // D-063 phase 2 of 4: temp file fsynced, safe to swap.
+        if (grant_trace.enabled) grant_trace.emit(.prune_temp_synced, grant_trace.NO_PC, live_path, now_ms);
         tf.close(self.io);
         // Atomic swap: rename temp -> live. The old inode is unlinked; close
         // the stale handle and reopen the live path.
         dir.rename(tmp_path, dir, live_path, self.io) catch return error.DiskError;
+        // D-063 phase 3 of 4: rename landed, live path points at the new log.
+        if (grant_trace.enabled) grant_trace.emit(.prune_renamed, grant_trace.NO_PC, live_path, now_ms);
         self.file.close(self.io);
         self.file = dir.openFile(self.io, live_path, .{ .mode = .read_write }) catch return error.DiskError;
         self.eof = out_len;
         self.file.sync(self.io) catch return error.DiskError;
+        // D-063 phase 4 of 4: live handle reopened and directory state durable.
+        if (grant_trace.enabled) grant_trace.emit(.prune_reopened, grant_trace.NO_PC, live_path, now_ms);
         // Rebuild the in-memory consumed set from survivors.
         self.consumed_len = live_len;
         @memcpy(self.consumed[0..live_len], live_consumed[0..live_len]);
