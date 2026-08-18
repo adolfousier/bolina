@@ -75,7 +75,7 @@ floor).
 | Option | Encoding | Wire-parser cost | Auditable by eye | Cert version |
 |---|---|---|---|---|
 | **A. Hashed scope prefixes in Cert** | `u8 scope_count` (<= 8) + `[8] scope_id` each, `scope_id = BLAKE2s-256(canonical prefix)[0..8]` | 8 to 14 lines, one bounded loop, mirrors `group_ids` | No | 3 |
-| **B. Literal prefixes in Cert** | `u8 count` + per prefix `u16 len` + bytes (<= 234 each, `resolver.ID_MAX`) | 20 to 30 lines, new length and bound exits | Yes | 3 |
+| **B. Literal prefixes in Cert** | `u8 count` + per prefix `u16 len` + bytes (<= 212 each) | 20 to 30 lines, new length and bound exits | Yes | 3 |
 | **C. Namespace-only scope** | `u8 count` + `[8]` hash of the `ns` component only | 6 to 10 lines | No | 3 |
 | **D. Out-of-cert scope record** | new CA-signed `ApproverScope` structure, own BE-SIG-01 domain tag | 25 to 40 lines in `parser/channel.zig`, same full sub-unit | Depends on encoding | 2 (unchanged) |
 
