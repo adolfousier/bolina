@@ -72,6 +72,17 @@ test "trace v1: happy path emits the full ordered prefix" {
             else => try std.testing.expectEqual(fp_grant, seq[i].id),
         }
     }
+    // Correlation, the projector's only legitimate binding source: the
+    // admission event carries the CANONICAL resource (so ReceiveIntent(i, r)
+    // can be named), begin_verify carries the intent the grant binds to (so
+    // later grant-path events attribute to an intent), and every other event
+    // leaves the slot empty. Without these the projector would have to guess,
+    // and the brief forbids synthesizing an unbound action.
+    try std.testing.expectEqual(grant_trace.fingerprint(canonical_a), seq[0].id2);
+    try std.testing.expectEqual(grant_trace.Tag.begin_verify, seq[1].tag);
+    try std.testing.expectEqual(fp_intent, seq[1].id2);
+    i = 2;
+    while (i < seq.len) : (i += 1) try std.testing.expectEqual(@as(u64, 0), seq[i].id2);
     // The four prune events share one id and arrive in D-063 phase order.
     try std.testing.expectEqual(fp_path, seq[13].id);
     try std.testing.expectEqual(grant_trace.Tag.prune_temp_written, seq[13].tag);
@@ -159,6 +170,13 @@ test "trace v1: resource conflict emits the refusal event" {
     try std.testing.expectEqual(grant_trace.Tag.receive_intent, seq[0].tag);
     try std.testing.expectEqual(grant_trace.Tag.reject_resource_conflict, seq[1].tag);
     try std.testing.expectEqual(grant_trace.fingerprint(&dt.G_INTENT_ID_B), seq[1].id);
+    // Both events name the SAME canonical resource: that shared identity is
+    // the whole content of exclusivity, and it is what lets a projector name
+    // ReceiveIntent(i1, r) and RejectResourceConflict(i2, r) over one atom
+    // instead of inventing a second resource.
+    const fp_resource = grant_trace.fingerprint(canonical_a);
+    try std.testing.expectEqual(fp_resource, seq[0].id2);
+    try std.testing.expectEqual(fp_resource, seq[1].id2);
 }
 
 test "trace v1: refused effect ends the trace in an unpublished orphan (brief 9.1)" {

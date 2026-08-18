@@ -208,11 +208,22 @@ pub const Dispatch = struct {
         if (it.action.len > MAX_ACTION) return error.ActionTooLarge;
         self.resolver.resolveAndAdmit(&self.intents, it, now_ms) catch |e| {
             if (grant_trace.enabled) {
-                if (e == error.ResourceHeld) grant_trace.emit(.reject_resource_conflict, grant_trace.NO_PC, it.intent_id, now_ms);
+                if (e == error.ResourceHeld) {
+                    // The CANONICAL resource, not the wire spelling: two
+                    // aliases resolve to one resource, and exclusivity is a
+                    // property of the canonical one. Resolution already
+                    // succeeded here (the refusal was the lock, not the
+                    // name), so the fallback is unreachable in practice.
+                    const canon = self.resolver.resolve(it.resource_id) catch it.resource_id;
+                    grant_trace.emit2(.reject_resource_conflict, grant_trace.NO_PC, it.intent_id, canon, now_ms);
+                }
             }
             return e;
         };
-        if (grant_trace.enabled) grant_trace.emit(.receive_intent, grant_trace.NO_PC, it.intent_id, now_ms);
+        if (grant_trace.enabled) {
+            const canon = self.resolver.resolve(it.resource_id) catch it.resource_id;
+            grant_trace.emit2(.receive_intent, grant_trace.NO_PC, it.intent_id, canon, now_ms);
+        }
         if (self.senders_len < self.senders.len and env.sender.len == 32 and it.intent_id.len == channel.LEN_INTENT_ID) {
             const rec = &self.senders[self.senders_len];
             @memcpy(rec.intent_id[0..channel.LEN_INTENT_ID], it.intent_id);

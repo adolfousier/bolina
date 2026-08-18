@@ -85,7 +85,18 @@ pub const NO_PC: u8 = 0xFF;
 pub const Event = struct {
     tag: Tag,
     pc: u8,
+    // Primary identity. Which identity depends on the tag: the intent for
+    // receive_intent and reject_resource_conflict, the grant for every
+    // grant-path tag, the ledger path for the prune tags, the table label
+    // for expire_pending.
     id: u64,
+    // Correlation slot, 0 when the tag does not carry one. Two tags use it:
+    // the intent tags carry the CANONICAL resource (not the wire spelling,
+    // which two aliases can share), and begin_verify carries the intent the
+    // grant binds to. Those two are what a projector needs to name the
+    // two-parameter model actions and to attribute later grant-path events
+    // to an intent without guessing.
+    id2: u64,
     now_ms: u64,
     seq: u32,
 };
@@ -108,17 +119,31 @@ pub fn fingerprint(id: []const u8) u64 {
 }
 
 pub fn emit(tag: Tag, pc: u8, id_bytes: []const u8, now_ms: u64) void {
+    emit2(tag, pc, id_bytes, "", now_ms);
+}
+
+// Correlated emit. id2_bytes is empty for every tag that carries no second
+// identity, which fingerprints to the FNV offset basis; the serializer maps
+// that to a null field rather than to a real identifier.
+pub fn emit2(tag: Tag, pc: u8, id_bytes: []const u8, id2_bytes: []const u8, now_ms: u64) void {
     if (!enabled) return;
     if (len == CAP) {
         if (overflow_count == 0) {
             // Exactly one marker on the first overflow, never a silent drop.
-            events[CAP - 1] = .{ .tag = .trace_overflow, .pc = NO_PC, .id = 0, .now_ms = now_ms, .seq = seq_next };
+            events[CAP - 1] = .{ .tag = .trace_overflow, .pc = NO_PC, .id = 0, .id2 = 0, .now_ms = now_ms, .seq = seq_next };
             seq_next += 1;
         }
         overflow_count += 1;
         return;
     }
-    events[len] = .{ .tag = tag, .pc = pc, .id = fingerprint(id_bytes), .now_ms = now_ms, .seq = seq_next };
+    events[len] = .{
+        .tag = tag,
+        .pc = pc,
+        .id = fingerprint(id_bytes),
+        .id2 = if (id2_bytes.len == 0) 0 else fingerprint(id2_bytes),
+        .now_ms = now_ms,
+        .seq = seq_next,
+    };
     seq_next += 1;
     len += 1;
 }

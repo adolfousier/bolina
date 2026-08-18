@@ -1369,3 +1369,55 @@ The conformance pilot's Phase B (brief section 6 table, task 5 of the v0.3.9 con
 Migration surface: 4 production files (7 tags + contract comments in grant_trace.zig; publish_outcome emit + catch emit + seam in dispatch.zig; 4 phase emits in grant_ledger.zig pruneExpired; import + expiry emit in intent.zig), 2 existing trace tests updated to the richer sequences (23 and 20 events, prune ids asserted by path fingerprint), 3 new tests (tombstone failure with orphan recovery view, standalone prune phases, expiry count), 137 mutant anchors dry-run verified intact BEFORE the suite launch (D-077 discipline). Default build 382 pass 7 skip (389 total, trace tests skip-gated), -Dtrace=true 388 pass 1 skip, fmt clean, zero em-dashes, prumo 0 failing.
 
 Reversible: drop the seven tags, the emits, the seam and the three tests. What would reopen this ruling: the projector needing per-phase prune ids or a count-carrying expire event would be a v2 contract change, decided with Huebrz before any Phase B binding.
+
+## D-082 - 2026-08-17 - grant-trace.v1 carries correlation: canonical resource on intent events, intent on begin_verify
+
+Phase A of the conformance pilot needs to name two-parameter model actions
+(`ReceiveIntent(i, r)`, `RejectResourceConflict(i, r)`) and to attribute
+grant-path events to an intent. The contract as of D-081 carried a single
+identity per event, so a projector could do neither without guessing, and
+section 6 of the brief forbids synthesizing an unbound action. Owner decision
+(Daniel, 2026-08-17): the pilot proceeds here rather than waiting on the
+external contributor, who redirects afterwards.
+
+**Ruling 1 - one correlation slot, not a widened schema per tag.** `Event`
+gains `id2: u64`, zero when the tag carries no second identity. Two tags use
+it: the intent tags carry the resource, `begin_verify` carries the intent.
+Every other grant-path event stays single-identity and is attributed through
+the `begin_verify` correlation already present in the same trace. The
+alternative, stamping the intent on all ten grant-path events, would have
+touched eight more emit sites in two mutation targets for information the
+trace already carries once.
+
+**Ruling 2 - the resource is the CANONICAL one, never the wire spelling.**
+Two aliases resolve to one resource, and resource exclusivity is a property of
+the canonical identity, so a projector fed wire spellings would see two atoms
+where the system sees one and would accept a trace that violates exclusivity.
+The emit sites re-resolve inside the comptime-gated branch rather than moving
+the emit into `resolveAndAdmit`: production cost stays zero and the
+mutation-target diff stays at two lines.
+
+**Ruling 3 - correlation is asserted, not assumed.** The happy path pins the
+canonical resource on admission, the intent on `begin_verify`, and an empty
+slot on all 21 remaining events; the conflict case pins that both admission
+and refusal name the SAME resource atom, which is the entire content of
+exclusivity for the projector.
+
+What this is NOT: a v2 schema. `bolina.grant-trace.v1` has no consumer yet
+(the projector does not exist), so an additive slot needs no migration. It is
+also not the serializer: the JSON envelope of brief section 5, with run id,
+process epoch and digest chain, is the next slice and stays out of the
+verification frame by design.
+
+Evidence: 155/155 mutant anchors dry-run verified present BEFORE compiling
+(D-077 discipline; four anchors legitimately match more than once and are
+first-occurrence replacements, unchanged by this edit). Default build 382 pass
+7 skip (389 total), -Dtrace=true 388 pass 1 skip, fmt clean, zero em-dashes,
+prumo 0 failing. Watch item, recorded rather than claimed fixed: one default
+run reported 4 failures once and was not reproducible across three controlled
+trace-then-default repeats with no leftover fixture state; if it recurs the
+gauntlet must capture the failing test names before any receipt is cited.
+
+Reversible: drop `id2`, `emit2` and the three emit-site changes. What would
+reopen this ruling: a Phase A case that needs a third identity per event, or a
+projector that cannot attribute grant-path events from `begin_verify` alone.

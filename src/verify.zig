@@ -210,7 +210,12 @@ pub const EffectOutcome = enum {
 
 pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.channel.Grant, ctx: GrantContext, execute: *const fn (parser.channel.Grant) EffectOutcome) VerifyError!EffectOutcome {
     const grant = grant_ptr.*;
-    if (grant_trace.enabled) grant_trace.emit(.begin_verify, grant_trace.NO_PC, grant.grant_id, ctx.now_ms);
+    // begin_verify is the one grant-path event that carries the correlation:
+    // it names the intent this grant binds to, so a projector can attribute
+    // every later grant-path event to an intent from the trace itself rather
+    // than by guessing from position (which breaks the moment two intents
+    // interleave).
+    if (grant_trace.enabled) grant_trace.emit2(.begin_verify, grant_trace.NO_PC, grant.grant_id, grant.intent_id, ctx.now_ms);
     // 0. Grant.version must be 2 (RED-TEAM-08 F6: the field is read, not ignored).
     if (grant.version != 2) return error.BadVersion;
     if (grant_trace.enabled) grant_trace.emit(.verify_check, 0, grant.grant_id, ctx.now_ms);
