@@ -100,7 +100,7 @@ def main():
     check("cert not_after", na == f["not_after"])
     check("cert name", name == f["name"], f"{name!r} vs {f['name']!r}")
     check("cert scope_count", gcount == f["scope_count"])
-    check("cert group_id[0]", gids[0].hex() == f["group_id"])
+    check("cert scope_id[0]", gids[0].hex() == f["scope_id"])
     check("cert TBS exact", r.eof(), f"consumed {r.o} of {len(r.b)}")
     print(f"       cert TBS length = {r.o} bytes")
 
