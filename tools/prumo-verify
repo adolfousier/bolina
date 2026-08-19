@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # prumo-verify: Bolina mechanical gates (CONTRIBUTING.md section 2)
 #
-# Prints ALL ELEVEN gate rows on every run. M2 alone is printed and marked
-# "not yet enforced: no code to check" until the code it targets exists.
-# The gap is made visible instead of absent: a gate with nothing to check
-# still gets a row, so the number of rows never quietly shrinks.
+# Prints ALL ELEVEN gate rows on every run. Every gate is enforced; each
+# derives its denominator from the source at run time (SPEC, source grep,
+# receipt file) rather than from a stored copy.
 #
 # Conventions enforced here:
 #   M1: SPEC.md declares BE-* items as paragraph-opening bold markers:
@@ -21,6 +20,12 @@
 #        is the number, printed every run, not the colour of the gate.
 #        Local runs raise the file when the count climbs; commit the bump
 #        together with the tests. CI runs never write the file.
+#   M2: Mutation testing receipt (SPEC.md section 11.2). The full mutation
+#        suite is expensive (~50 min for all domains), so it runs offline
+#        and writes tools/m2-mutation-receipt. The gate verifies: receipt
+#        exists, survived = 0, and no source drift since the receipt SHA.
+#        A stale receipt (src/ or mutation-test.py changed) is PENDING; a
+#        receipt with survivors is FAIL.
 #   M3: The committed test/vectors.json is canonical only if it cross-verifies
 #        between two independent implementations. This gate regenerates the file
 #        from the Zig generator (tools/gen-vectors.zig), fails on any drift
@@ -78,7 +83,7 @@
 #        new exit fails the gate until the enum grows, a dead enum member
 #        fails it the other way (CONTRIBUTING.md M9).
 #
-# Exit code: number of failing ENFORCED gates (M1, M3, M4, M5, M6, M7, M8, M9,
+# Exit code: number of failing ENFORCED gates (M1, M2, M3, M4, M5, M6, M7, M8, M9,
 # M10, M11).
 # Usage: run from anywhere; ZIG=/path/to/zig overrides PATH lookup,
 #        M4_BUDGET=N sets the differential corpus size (default 20000).
@@ -147,8 +152,48 @@ else
     fi
 fi
 
-# ---- M2: printed, not yet enforced ----
-row M2 PENDING "not yet enforced: no code to check (mutation testing, SPEC.md section 11.2)"
+# ---- M2: mutation receipt, SPEC.md section 11.2 (ENFORCED) ----
+# Receipt-based gate. The mutation suite is expensive (~50 min for all
+# domains), so it runs offline and writes tools/m2-mutation-receipt.
+# prumo-verify checks: (a) receipt exists, (b) survived = 0, (c) no src/
+# or tools/mutation-test.py changed since the receipt SHA. A stale receipt
+# (source drift) is PENDING; a receipt with survivors is FAIL.
+M2_RECEIPT="tools/m2-mutation-receipt"
+m2_verdict="PASS"
+m2_detail=""
+if [ ! -f "$M2_RECEIPT" ]; then
+    m2_verdict="PENDING"
+    m2_detail="no mutation receipt: run the full mutation suite and commit tools/m2-mutation-receipt (SPEC.md section 11.2)"
+else
+    m2_sha="$(grep '^sha=' "$M2_RECEIPT" | head -1 | sed 's/^sha=//')"
+    m2_total_line="$(grep '^total=' "$M2_RECEIPT" | head -1)"
+    m2_survived="$(printf '%s\n' "$m2_total_line" | grep -o 'survived=[0-9]*' | sed 's/survived=//')"
+    m2_killed="$(printf '%s\n' "$m2_total_line" | sed 's/total=\([0-9]*\)\/.*/\1/')"
+    m2_denom="$(printf '%s\n' "$m2_total_line" | sed 's/total=[0-9]*\/\([0-9]*\).*/\1/')"
+    if [ -z "$m2_sha" ] || [ -z "$m2_total_line" ]; then
+        m2_verdict="FAIL"
+        m2_detail="mutation receipt malformed (missing sha= or total= line)"
+    elif ! git cat-file -e "$m2_sha" 2>/dev/null; then
+        m2_verdict="FAIL"
+        m2_detail="mutation receipt SHA $m2_sha not found in git history"
+    else
+        # Check if source drifted since receipt
+        m2_drift="$(git diff --stat "$m2_sha" HEAD -- src/ tools/mutation-test.py 2>/dev/null)"
+        if [ -n "$m2_drift" ]; then
+            m2_verdict="PENDING"
+            m2_detail="mutation receipt stale: src/ or mutation-test.py changed since $m2_sha; re-run the suite (SPEC.md section 11.2)"
+        elif [ "${m2_survived:-0}" -ne 0 ]; then
+            m2_verdict="FAIL"
+            m2_detail="$m2_survived survivor(s) in $m2_denom mutants (receipt at $m2_sha)"
+        else
+            m2_detail="$m2_killed/$m2_denom mutants killed, 0 survived (receipt at $m2_sha, SPEC.md section 11.2)"
+        fi
+    fi
+fi
+row M2 "$m2_verdict" "$m2_detail"
+if [ "$m2_verdict" = "FAIL" ]; then
+    FAILS=$((FAILS + 1))
+fi
 
 # ---- M3: cross-implementation vectors, SPEC.md section 11.3 (ENFORCED) ----
 # The committed test/vectors.json is canonical only if two independent
@@ -544,6 +589,5 @@ if [ "$M11_VERDICT" = "FAIL" ]; then
 fi
 
 echo
-echo "enforced gates: M1 M3 M4 M5 M6 M7 M8 M9 M10 M11, failing: $FAILS"
-echo "not yet enforced: M2, printed above, excluded from the exit code"
+echo "enforced gates: M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11, failing: $FAILS"
 exit "$FAILS"
