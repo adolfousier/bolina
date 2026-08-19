@@ -29,6 +29,8 @@ Unproven claims are expected. An unproven claim that reads as a proven one is no
 `v0.2.0-draft` is **closed**. Nothing in it is **sealed**. Do not write otherwise in a commit
 message, a README, a comment, or a chat summary.
 
+`v0.3.9` is **closed and sealed**. Every §11 conformance item carries a seal paragraph with a named ruling and documented receipt (D-075, D-079, D-083, D-084).
+
 ---
 
 ## 2. Mechanical rules (CI refuses the merge)

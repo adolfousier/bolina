@@ -1,11 +1,12 @@
 # Bolina — Threat Model
 
-**Version:** 0.2.0-draft · **Companion to:** `SPEC.md` v0.2.0-draft · **Date:** 2026-08-05
+**Version:** 0.3.9 · **Companion to:** `SPEC.md` v0.3.9 · **Date:** 2026-08-19
 
-> **Epistemic status.** This document declares which adversaries the protocol is *designed* to
-> resist. It is not a security assessment, because there is nothing built to assess. No claim
-> below has been validated by analysis, review, or attack. Read every "resists" as "is intended
-> to resist, pending §7".
+> **Epistemic status.** This document declares which adversaries the protocol is *designed to
+> resist*. The M1 milestone is built and the eight §11 conformance items are sealed (D-075,
+> D-079, D-083, D-084); the adversarial evaluation (§11.5) provides the strongest independent
+> pressure on the protocol's assumptions. Read every "resists" as "is intended to resist, pending
+> §7" for any property whose seal paragraph does not yet exist.
 
 ---
 

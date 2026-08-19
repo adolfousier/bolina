@@ -175,18 +175,23 @@ In order, from `SPEC.md` §11:
    dispositions landed in `SPEC.md`: see `RED-TEAM-08.md` (§8, by the author) and `RED-TEAM-09.md`
    (§7, delegated). Both are evidence class *Inference*: one reader reading a document. That seals
    nothing on its own, which is why (2) and (3) below are unchanged by it.
-2. Model-check the state machine (TLA+ or Alloy), with BE-GRANT-01/-03/-04/-06 as invariants.
-3. Run an adversarial evaluation in which a real model tries to obtain an effect without a grant —
+2. ~~Model-check the state machine (TLA+ or Alloy), with BE-GRANT-01/-03/-04/-06 as invariants.~~
+   **Done** (§11.4, sealed D-083). Self-consistent disclaimer recorded: model and implementation
+   share an author. Revocation (BE-GRANT-06) projected with crash-recovery guards. Twelve Phase A
+   trace conformance fixtures exercised through the binding table.
+3. ~~Run an adversarial evaluation in which a real model tries to obtain an effect without a grant —
    including by prompt injection and by social-engineering an approver — and fails, **measured
-   together with the rate at which properly granted operations succeed**. An executor that refuses
-   everything passes the first half perfectly and is worthless; single-sided criteria get satisfied
-   by degenerate implementations in full compliance with their own text.
+   together with the rate at which properly granted operations succeed**.~~ **Done** (§11.5, sealed
+   D-079). Sealed by scoping under the CONTRIBUTING.md vocabulary: the structural floor is proven
+   adversarially; the human-factor residual (I4 resource-scope in the cert) is named, measured, and
+   deferred to v0.4.
 4. Get external cryptographic review of the *composition*. The primitives are standard; putting them
-   together this way is not, and composition is where protocols fail.
+   together this way is not, and composition is where protocols fail. **Not done.**
 
-Until (3) produces a result, the correct description of Bolina's central guarantee is **specified,
-and mechanically gated in one implementation**: not model-checked, not evaluated against a real
-model, not externally reviewed. Not proved, and not secure.
+Items (1)-(3) are sealed. Item (4) remains: an external cryptographic review of the composition.
+Until that exists, the correct description is **specified, mechanically gated, model-checked, and
+adversarially evaluated in one implementation** — not externally reviewed. Not proved, and not
+secure.
 
 ## Authorship and credits
 

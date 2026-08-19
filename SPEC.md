@@ -1,16 +1,15 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.3.8-draft · **Status:** DECLARED, nothing implemented · **Date:** 2026-08-11
+**Version:** 0.3.9 · **Status:** CLOSED AND SEALED · **Date:** 2026-08-19
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
 > **Epistemic status of this document.** Every normative statement below is a *declaration of
-> intent*, not a report of built behaviour. No line of Bolina exists as code at the time of
-> writing. Where this document says a property is "enforced", read it as "the specification
-> requires an implementation to enforce"; where it says "verified", read it as "must be verified
-> before the corresponding Boundary Expectation may be sealed". Nothing here may be cited as
-> evidence that anything works. Conformance is defined in §11; every
-> conformance item is sealed (D-075, D-079, D-083, D-084).
+> intent*. The M1 milestone (Zig, `ReleaseSafe`) is implemented and mechanically gated (see
+> `M1-AUDIT.md`); the eight §11 conformance items are sealed with documented receipts. Where this
+> document says a property is "enforced", the implementation's CI gates back the claim; where it
+> says "verified", the seal paragraph in §11 records the evidence. Conformance is defined in §11;
+> every conformance item is sealed (D-075, D-079, D-083, D-084).
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are to be interpreted as described in
 RFC 2119 and RFC 8174.
