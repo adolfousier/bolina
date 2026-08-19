@@ -383,6 +383,7 @@ RecoverPublishInterrupted(g) ==
     /\ g \in state.recoverableOrphans
     /\ g \in StableConsumed
     /\ g \notin StablePublished
+    /\ g \notin state.revokedGrants
     /\ RecoveryPublicationCount[g] < 2
     /\ state' = [state EXCEPT
         !.recoveryPublicationCount = [@ EXCEPT
@@ -402,6 +403,7 @@ RecoverMarkPublished(g) ==
     /\ state.prunePhase = "idle"
     /\ g \in StableConsumed
     /\ g \notin StablePublished
+    /\ g \notin state.revokedGrants
     /\ RecoveryPublicationCount[g] > 0
     /\ state' = [state EXCEPT
         !.stablePublished = @ \cup {g},
