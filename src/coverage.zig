@@ -93,7 +93,7 @@ pub const Branch = enum {
     // routes there); version is parsed, not rejected, so it adds no exit point
     // (SPEC 2.2, D-022). The CA-key ordering check is the one structural
     // invariant section 3.1 makes a parse failure rather than a policy check.
-    cert_group_oversize, // parseCert: group_count > MAX_GROUPS
+    cert_scope_oversize, // parseCert: scope_count > MAX_SCOPE
     cert_ca_count_zero, // parseCert: ca_sig_count == 0 (grammar floor 1)
     cert_ca_count_oversize, // parseCert: ca_sig_count > MAX_CA_SIGS
     cert_ca_order, // parseCert: CA keys not strictly ascending / not distinct (SPEC 3.1)
@@ -159,7 +159,7 @@ pub inline fn reject(comptime tag: Branch) parser.ParseError {
     hit(tag);
     return switch (tag) {
         .cursor_truncated, .data_payload_short => error.Truncated,
-        .env_parent_oversize, .env_body_oversize, .field16_oversize, .field32_oversize, .data_payload_oversize, .cert_group_oversize, .cert_ca_count_oversize, .genesis_ca_count_oversize, .sync_req_have_oversize => error.Oversize,
+        .env_parent_oversize, .env_body_oversize, .field16_oversize, .field32_oversize, .data_payload_oversize, .cert_scope_oversize, .cert_ca_count_oversize, .genesis_ca_count_oversize, .sync_req_have_oversize => error.Oversize,
         .env_trailing, .intent_trailing, .grant_trailing, .span_trailing, .effect_trailing, .claim_trailing, .hs_init_trailing, .hs_resp_trailing, .cookie_trailing, .lookup_req_trailing, .lookup_resp_trailing, .cert_trailing, .relay_route_trailing, .relay_reg_trailing, .bind_trailing, .genesis_trailing, .control_trailing, .refusal_trailing, .sync_req_trailing, .sync_resp_trailing => error.TrailingBytes,
         .hs_init_type, .hs_init_reserved, .hs_resp_type, .hs_resp_reserved, .cookie_type, .cookie_reserved, .data_type, .data_reserved, .frag_total_zero, .frag_index_range, .cert_ca_count_zero, .cert_ca_order, .relay_route_type, .relay_route_reserved, .relay_reg_type, .relay_reg_reserved, .bind_cert_len_zero, .genesis_ca_count_zero, .sync_resp_truncated_range => error.Malformed,
         .env_accepted, .intent_accepted, .grant_accepted, .span_accepted, .effect_accepted, .claim_accepted, .hs_init_accepted, .hs_resp_accepted, .cookie_accepted, .data_accepted, .frag_accepted, .lookup_req_accepted, .lookup_resp_accepted, .cert_accepted, .relay_route_accepted, .relay_reg_accepted, .bind_accepted, .genesis_accepted, .control_accepted, .refusal_accepted, .sync_req_accepted, .sync_resp_accepted => @compileError("accepted exit points do not reject; use accept()"),

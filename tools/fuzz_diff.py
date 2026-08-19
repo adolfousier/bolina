@@ -70,7 +70,7 @@ CORPUS_DESCRIPTION = (
     "input cap, deterministic PRNG seed (configurable via --seed, default "
     "0x626f6c696e61 'bolina'), tags 0x01-0x16, "
     "record framing u8 tag || u16 BE len || bytes, plus 4 boundary seeds "
-    "(bind cert_len=0, data payload 1385, cert group_count 17, cert "
+    "(bind cert_len=0, data payload 1385, cert scope_count 9, cert "
     "descending CA keys) each emitted verbatim then as a 16-record mutated "
     "lineage to reach the length/ordering-field exits generic mutation "
     "cannot"

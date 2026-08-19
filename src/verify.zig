@@ -58,7 +58,9 @@ pub const VerifyError = error{
     BadApproverCert, // BE-GRANT-03 check 3: approver cert invalid, wrong role, or not the grant's approver
     BadSubjectCert, // BE-GRANT-03 check 4: subject cert invalid, wrong role, or not the grant's subject
     ApproverRevoked, // BE-REV-02 / F4 check 3: approver's sig_pubkey is durably revoked
+    ApproverOutOfScope, // D-085 check 3a: approver cert scope does not cover grant resource
     SubjectRevoked, // BE-REV-02 / F4 check 4: subject's sig_pubkey is durably revoked
+    SubjectOutOfScope, // D-085 check 4a: subject cert scope does not cover grant resource
     WrongExecutor, // BE-GRANT-03 check 5: executor != this executor's key
     WrongSubject, // BE-GRANT-03 check 6: subject != pending intent's sender
     NoMatchingIntent, // BE-GRANT-03 check 7: intent_id matches no pending intent
@@ -240,6 +242,11 @@ pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.ch
     // F4 / BE-REV-02: the approver's signing key is durably revoked. Checked at
     // use (this is the capability->effect checkpoint), not at session fill.
     if (ctx.is_revoked(ctx.approver_cert.sig_pubkey)) return error.ApproverRevoked;
+    // 3a. Approver scope covers the grant's resource (D-085). The ancestor walk
+    //     hashes each prefix of the canonical resource_id against the cert's
+    //     scope_ids. Empty scope = deny-all (D-085 ruling 4).  Scope is a
+    //     cert-v3 feature; v2 certs carry no scope and skip this check.
+    if (ctx.approver_cert.version >= 3 and !scopeCoversResource(ctx.approver_cert, grant.resource_id)) return error.ApproverOutOfScope;
     if (grant_trace.enabled) grant_trace.emit(.verify_check, 3, grant.grant_id, ctx.now_ms);
 
     // 4. Subject certificate valid NOW and carries the agent role. Its identity
@@ -249,6 +256,9 @@ pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.ch
     if (!std.mem.eql(u8, ctx.subject_cert.sig_pubkey, grant.subject)) return error.BadSubjectCert;
     // F4 / BE-REV-02: the subject's signing key is durably revoked.
     if (ctx.is_revoked(ctx.subject_cert.sig_pubkey)) return error.SubjectRevoked;
+    // 4a. Subject scope covers the grant's resource (D-085). Same ancestor walk
+    //     as check 3a.  Scope is a cert-v3 feature; v2 certs skip this check.
+    if (ctx.subject_cert.version >= 3 and !scopeCoversResource(ctx.subject_cert, grant.resource_id)) return error.SubjectOutOfScope;
     if (grant_trace.enabled) grant_trace.emit(.verify_check, 4, grant.grant_id, ctx.now_ms);
 
     // 5. Grant.executor equals this executor's own sig_pubkey.
@@ -393,19 +403,41 @@ pub const ChannelContext = struct {
     is_revoked: *const fn (subject: []const u8) bool, // BE-CHAN-02 grow-only set
 };
 
-// BE-CHAN-01 helper: a cert carries an 8-byte group iff the group appears in
-// its group_ids (BLAKE2s-256 prefixes, SPEC 3.1). Equality is byte equality,
-// the only rule a channel defines (BE-GEN-04).
-fn certCarriesGroup(cert: parser.session.Cert, group: []const u8) bool {
+// BE-CHAN-01 helper: a cert carries a scope iff the 8-byte prefix appears in
+// its scope_ids (BLAKE2s-256 prefixes, SPEC 3.1, D-085). Equality is byte
+// equality, the only rule a channel defines (BE-GEN-04).
+fn certCarriesScope(cert: parser.session.Cert, scope: []const u8) bool {
     var i: usize = 0;
-    while (i < cert.group_count) : (i += 1) {
-        const off = i * parser.session.LEN_GROUP_ID;
-        if (std.mem.eql(u8, cert.group_ids[off .. off + parser.session.LEN_GROUP_ID], group)) return true;
+    while (i < cert.scope_count) : (i += 1) {
+        const off = i * parser.session.LEN_SCOPE_ID;
+        if (std.mem.eql(u8, cert.scope_ids[off .. off + parser.session.LEN_SCOPE_ID], scope)) return true;
     }
     return false;
 }
 
-// BE-GEN-01/03/04 and channel_id derivation. The genesis envelope's signature
+// D-085: walk the canonical resource_id from full path to root, hashing each
+// ancestor prefix against the cert's scope_ids. A scope_id of
+// BLAKE2s-256(prefix)[0..8] covers all resources under that prefix. The walk
+// is bounded by the canonical grammar (path <= 180 bytes, segments bounded by
+// it). The ancestor walk must be bounded by the canonical grammar and proven
+// so by a mutant that unbounds it, or it is a DoS surface.
+fn scopeCoversResource(cert: parser.session.Cert, resource_id: []const u8) bool {
+    var end = resource_id.len;
+    while (end > 0) {
+        var hasher = B2s.init(.{});
+        hasher.update(resource_id[0..end]);
+        var hash: [32]u8 = undefined;
+        hasher.final(&hash);
+        if (certCarriesScope(cert, hash[0..8])) return true;
+        // Find the previous '/' to strip the last segment.
+        var new_end = end;
+        while (new_end > 0 and resource_id[new_end - 1] != '/') new_end -= 1;
+        if (new_end == end) break; // No '/' found, cannot strip further.
+        end = new_end;
+    }
+    return false;
+} 
+// The genesis envelope's signature
 // and the admin cert's chain are verified separately; this runs the
 // genesis-specific invariants over the parsed body.
 pub fn verifyControlGenesis(
@@ -417,7 +449,7 @@ pub fn verifyControlGenesis(
     // BE-GEN-04: match_rule fixed at byte equality (1); no other value defined.
     if (genesis.match_rule != 1) return error.BadMatchRule;
     // BE-GEN-03: the genesis envelope is signed by a cert carrying admin_group.
-    if (!certCarriesGroup(admin_cert, genesis.admin_group)) return error.GenesisNotAdmin;
+    if (!certCarriesScope(admin_cert, genesis.admin_group)) return error.GenesisNotAdmin;
     // channel_id = BLAKE2s(name || ca_key_0) (SPEC 6.1b). ca_keys are
     // ascending-ordered at parse time (canonical encoding), so ca_key_0 is the
     // first key. Streamed in two chunks; no tagged buffer is allocated.
@@ -444,7 +476,7 @@ pub fn verifyControl(
         else => return error.BadActionType,
     }
     // BE-CTRL-02: a Revoke must be signed by a cert carrying admin_group.
-    if (control.action_type == 2 and !certCarriesGroup(sender_cert, genesis.admin_group))
+    if (control.action_type == 2 and !certCarriesScope(sender_cert, genesis.admin_group))
         return error.RevokeNotAdmin;
 }
 
@@ -459,7 +491,7 @@ pub fn requireMember(
     ctx: ChannelContext,
 ) ChannelError!void {
     if (ctx.is_revoked(sender_cert.sig_pubkey)) return error.SubjectRevoked;
-    if (!certCarriesGroup(sender_cert, genesis.member_group)) return error.NotMember;
+    if (!certCarriesScope(sender_cert, genesis.member_group)) return error.NotMember;
 }
 
 // ---------------------------------------------------------------------------
@@ -481,10 +513,10 @@ pub fn requireMember(
 //     refuses; nothing partially verified escapes.
 //   * BE-MESH-05: the certificate opens the session and confers nothing. The
 //     continuation receives SessionKeys, which carries the two public keys the
-//     handshake needs and nothing else. role_bits, group_ids and name do not
+//     handshake needs and nothing else. role_bits, scope_ids and name do not
 //     cross this boundary, so no caller can reach a membership or authority
 //     fact through this path, only through BE-TR-01's exchange inside the
-//     encrypted session.
+//     encrypted session. role_bits, scope_ids and name do not cross.
 //   * BE-MESH-06: verification is a call, not a value (the BE-GRANT-03b shape).
 //     now_ms and the revocation hook are parameters of the *use*, and no value
 //     representing a verified certificate exists outside the call, so a cached

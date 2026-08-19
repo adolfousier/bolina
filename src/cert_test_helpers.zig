@@ -79,7 +79,7 @@ fn decodeHex(comptime hex: []const u8) [hex.len / 2]u8 {
 //
 // The wire layout is SPEC 3.1: version, role_bits, [32] sig_pubkey, [32]
 // kex_pubkey, u64 not_before, u64 not_after, u16 name_len + name, u8
-// group_count + group_ids, then u8 ca_sig_count and that many (ca_key + ca_sig)
+// scope_count + scope_ids, then u8 ca_sig_count and that many (ca_key + ca_sig)
 // pairs. tbs is every byte preceding ca_sig_count, the input each CA Ed25519
 // signature covers under domain 0x01. CA keys are sorted strictly ascending
 // before emission because parseCert enforces that ordering as a parse failure.
@@ -140,7 +140,7 @@ pub fn buildCertInto(
     wire[n] = 0; // name_len high byte
     wire[n + 1] = 0; // name_len low byte (empty name)
     n += 2;
-    wire[n] = 0; // group_count = 0
+    wire[n] = 0; // scope_count = 0 (no scope in test certs; D-085)
     n += 1;
     const tbs_len = n;
     const tbs = wire[0..tbs_len];

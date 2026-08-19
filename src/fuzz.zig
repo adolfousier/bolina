@@ -103,7 +103,7 @@ const SEED_SYNC_RESP = [_]u8{2} ++ [_]u8{0} ** 32 ++ [_]u8{0} ++ [_]u8{0}; // SP
 const SEED_CERT = [_]u8{ 2, 0 } ++ // version, role_bits
     [_]u8{0} ** 32 ++ [_]u8{0} ** 32 ++ // sig_pubkey, kex_pubkey
     [_]u8{0} ** 8 ++ [_]u8{0} ** 8 ++ // not_before, not_after
-    [_]u8{ 0, 0 } ++ [_]u8{0} ++ // name_len = 0, group_count = 0
+    [_]u8{ 0, 0 } ++ [_]u8{0} ++ // name_len = 0, scope_count = 0
     [_]u8{2} ++ // ca_sig_count = 2
     [_]u8{0} ** 96 ++ // pair 0: key 0x00.., sig
     [_]u8{1} ++ [_]u8{0} ** 95; // pair 1: key 0x01.. (ascending), sig
@@ -131,14 +131,14 @@ const SEED_DATA_OVERSIZE = [_]u8{4} ++ [_]u8{0} ** 3 ++ // msg_type=4, reserved
     [_]u8{0} ** 4 ++ [_]u8{0} ** 8 ++ // receiver_index, counter
     [_]u8{0} ** 1385; // payload: 1385 > 1384 ceiling
 
-// Cert boundary seed for cert_group_oversize: group_count = 17, one past
-// MAX_GROUPS(16). Minimal valid prefix up to the group_count byte; the parser
-// rejects before reading group_ids, so no trailing bytes are needed.
+// Cert boundary seed for cert_scope_oversize: scope_count = 9, one past
+// MAX_SCOPE(8). Minimal valid prefix up to the scope_count byte; the parser
+// rejects before reading scope_ids, so no trailing bytes are needed.
 const SEED_CERT_GROUP_OVER = [_]u8{ 2, 0 } ++ // version, role_bits
     [_]u8{0} ** 32 ++ [_]u8{0} ** 32 ++ // sig_pubkey, kex_pubkey
     [_]u8{0} ** 8 ++ [_]u8{0} ** 8 ++ // not_before, not_after
     [_]u8{ 0, 0 } ++ // name_len = 0
-    [_]u8{17}; // group_count = 17 > MAX_GROUPS(16)
+    [_]u8{9}; // scope_count = 9 > MAX_SCOPE(8)
 
 // Cert boundary seed for cert_ca_order: two CA keys in DESCENDING order
 // (pair 0 = 0x01.., pair 1 = 0x00..). SPEC 3.1 requires strictly ascending
@@ -148,7 +148,7 @@ const SEED_CERT_GROUP_OVER = [_]u8{ 2, 0 } ++ // version, role_bits
 const SEED_CERT_CA_ORDER = [_]u8{ 2, 0 } ++ // version, role_bits
     [_]u8{0} ** 32 ++ [_]u8{0} ** 32 ++ // sig_pubkey, kex_pubkey
     [_]u8{0} ** 8 ++ [_]u8{0} ** 8 ++ // not_before, not_after
-    [_]u8{ 0, 0 } ++ [_]u8{0} ++ // name_len=0, group_count=0
+    [_]u8{ 0, 0 } ++ [_]u8{0} ++ // name_len=0, scope_count=0
     [_]u8{2} ++ // ca_sig_count = 2
     [_]u8{1} ++ [_]u8{0} ** 95 ++ // pair 0: key 0x01.. (descending first), sig
     [_]u8{0} ** 96;
@@ -380,7 +380,7 @@ fn printCoverageReport() void {
             }
         }
     }
-    std.debug.print("COVERAGE: corpus = 22 seeds, one per parse entry point (envelope, intent, grant, span, effect, claim, refusal from test/vectors.json; cert synthesized with a two-signature CA list; binding built from the real vectors cert; genesis, control, handshake initiation/response, cookie reply, data header, relay route/registration, fragment header, lookup request/response, sync request/response synthesized from their SPEC field tables), 5 mutation operators (bit flip, byte overwrite, truncate, saturate, extend), 40% mutated-seed / 60% fully-random, 4096-byte input cap; plus 4 boundary seeds (bind cert_len=0, data payload 1385, cert group_count 17, cert descending CA keys) each emitted verbatim then as a 16-record mutated lineage to reach the length/ordering-field exits generic mutation cannot\n", .{});
+    std.debug.print("COVERAGE: corpus = 22 seeds, one per parse entry point (envelope, intent, grant, span, effect, claim, refusal from test/vectors.json; cert synthesized with a two-signature CA list; binding built from the real vectors cert; genesis, control, handshake initiation/response, cookie reply, data header, relay route/registration, fragment header, lookup request/response, sync request/response synthesized from their SPEC field tables), 5 mutation operators (bit flip, byte overwrite, truncate, saturate, extend), 40% mutated-seed / 60% fully-random, 4096-byte input cap; plus 4 boundary seeds (bind cert_len=0, data payload 1385, cert scope_count 9, cert descending CA keys) each emitted verbatim then as a 16-record mutated lineage to reach the length/ordering-field exits generic mutation cannot\n", .{});
 }
 
 // Corpus-emit mode (D-056 part two). Writes tagged records round-robin over

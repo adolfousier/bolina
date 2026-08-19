@@ -1125,8 +1125,8 @@ MUTANTS = [
     # cert without member_group; under the inversion it is accepted.
     ("channel", "verify.zig", "WRONG-LOGIC", "chan-01",
      "membership check inverted (non-members accepted, members refused)",
-     "    if (!certCarriesGroup(sender_cert, genesis.member_group)) return error.NotMember;",
-     "    if (certCarriesGroup(sender_cert, genesis.member_group)) return error.NotMember; // MUTANT"),
+     "    if (!certCarriesScope(sender_cert, genesis.member_group)) return error.NotMember;",
+     "    if (certCarriesScope(sender_cert, genesis.member_group)) return error.NotMember; // MUTANT"),
     # chan-02: revocation inverted. The BE_CHAN_02 test expects SubjectRevoked
     # for a revoked subject; under the inversion only unrevoked subjects fail.
     ("channel", "verify.zig", "WRONG-LOGIC", "chan-02",
@@ -1143,7 +1143,7 @@ MUTANTS = [
     # non-admin test expects GenesisNotAdmin.
     ("channel", "verify.zig", "CHECK-ABSENCE", "gen-03",
      "genesis admin-group authority never checked",
-     "    if (!certCarriesGroup(admin_cert, genesis.admin_group)) return error.GenesisNotAdmin;",
+     "    if (!certCarriesScope(admin_cert, genesis.admin_group)) return error.GenesisNotAdmin;",
      "    // MUTANT: admin group never checked"),
     # gen-03 (derivation half): channel_id comparison dropped. The BE_GEN_03
     # mismatched-id test expects BadChannelId.
@@ -1169,8 +1169,8 @@ MUTANTS = [
     # pass and admins are refused.
     ("channel", "verify.zig", "WRONG-LOGIC", "ctrl-02",
      "revoke admin requirement inverted (non-admins accepted)",
-     "    if (control.action_type == 2 and !certCarriesGroup(sender_cert, genesis.admin_group))",
-     "    if (control.action_type == 2 and certCarriesGroup(sender_cert, genesis.admin_group)) // MUTANT"),
+     "    if (control.action_type == 2 and !certCarriesScope(sender_cert, genesis.admin_group))",
+     "    if (control.action_type == 2 and certCarriesScope(sender_cert, genesis.admin_group)) // MUTANT"),
 
     # --- mesh domain: served-certificate verification (src/verify.zig, SPEC 5)
     # mesh-01: identity taken from the wrong key. The overlay address derives

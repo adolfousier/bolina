@@ -99,12 +99,12 @@ test "sync response round trip" {
 const CHAN_GENESIS_HEX = "01" ++ "0004" ++ "74657374" ++
     "aaaaaaaaaaaaaaaa" ++ "bbbbbbbbbbbbbbbb" ++ "01" ++
     "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" ++ "01";
-const CHAN_MEMBER_GROUP = [_]u8{0xaa} ** parser.session.LEN_GROUP_ID;
-const CHAN_OTHER_GROUP = [_]u8{0xee} ** parser.session.LEN_GROUP_ID;
+const CHAN_MEMBER_GROUP = [_]u8{0xaa} ** parser.session.LEN_SCOPE_ID;
+const CHAN_OTHER_GROUP = [_]u8{0xee} ** parser.session.LEN_SCOPE_ID;
 const PEER_PUB = [_]u8{0xdd} ** 32;
 
 fn syncCert(groups: []const u8) parser.session.Cert {
-    return .{ .version = 2, .role_bits = 0, .sig_pubkey = &PEER_PUB, .kex_pubkey = "", .not_before = 0, .not_after = 0, .name = "", .group_count = @intCast(groups.len / parser.session.LEN_GROUP_ID), .group_ids = groups, .ca_sig_count = 0, .ca_sigs = "", .tbs = "" };
+    return .{ .version = 2, .role_bits = 0, .sig_pubkey = &PEER_PUB, .kex_pubkey = "", .not_before = 0, .not_after = 0, .name = "", .scope_count = @intCast(groups.len / parser.session.LEN_SCOPE_ID), .scope_ids = groups, .ca_sig_count = 0, .ca_sigs = "", .tbs = "" };
 }
 
 fn revokedNo(_: []const u8) bool {

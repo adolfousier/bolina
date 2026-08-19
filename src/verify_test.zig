@@ -546,7 +546,7 @@ test "BE_GRANT_03 check 8 resource_id mismatch refused" {
 // Channel control verification (SPEC 6.1b, 6.1c). The channel layer runs over
 // parsed ControlGenesis/Control bodies and caller-verified certs: the cert
 // chain (BE-ID-02..04) is the caller's job (D-018 boundary), so these tests
-// build minimal Cert literals carrying only the group_ids / sig_pubkey the
+// build minimal Cert literals carrying only the scope_ids / sig_pubkey the
 // channel checks read. genesis_exists and is_revoked are package-level hooks
 // mirroring GrantContext.already_consumed.
 
@@ -561,8 +561,8 @@ const CHAN_GENESIS_HEX =
 const CHAN_CONTROL_BAD_HEX = "01" ++ "03" ++ "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" ++ "0000";
 const CHAN_REVOKE_HEX = "01" ++ "02" ++ "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" ++ "0000";
 
-const CHAN_MEMBER_GROUP = [_]u8{0xaa} ** parser.session.LEN_GROUP_ID; // 8 bytes
-const CHAN_ADMIN_GROUP = [_]u8{0xbb} ** parser.session.LEN_GROUP_ID; // 8 bytes
+const CHAN_MEMBER_GROUP = [_]u8{0xaa} ** parser.session.LEN_SCOPE_ID; // 8 bytes
+const CHAN_ADMIN_GROUP = [_]u8{0xbb} ** parser.session.LEN_SCOPE_ID; // 8 bytes
 const CHAN_SENDER_PUB = [_]u8{0xdd} ** parser.LEN_PUBKEY; // 32 bytes
 const WRONG_ID = [_]u8{0xff} ** 32;
 
@@ -579,8 +579,8 @@ fn revokedYes(_: []const u8) bool {
     return true;
 }
 
-// A Cert literal carrying only the fields the channel layer reads. group_count,
-// group_ids, and sig_pubkey drive every membership / admin check; the cert
+// A Cert literal carrying only the fields the channel layer reads. scope_count,
+// scope_ids, and sig_pubkey drive every membership / admin check; the cert
 // chain is verified before these run, so the remaining fields are inert dummies.
 fn channelCert(groups: []const u8, pubkey: []const u8) parser.session.Cert {
     return .{
@@ -591,8 +591,8 @@ fn channelCert(groups: []const u8, pubkey: []const u8) parser.session.Cert {
         .not_before = 0,
         .not_after = 0,
         .name = "",
-        .group_count = @intCast(groups.len / parser.session.LEN_GROUP_ID),
-        .group_ids = groups,
+        .scope_count = @intCast(groups.len / parser.session.LEN_SCOPE_ID),
+        .scope_ids = groups,
         .ca_sig_count = 0,
         .ca_sigs = "",
         .tbs = "",
@@ -858,7 +858,7 @@ test "BE_MESH_01 a valid cert for a different identity is refused as a substitut
 
 // BE-MESH-05 is a shape guarantee, so it is asserted over the type rather than
 // over one call: the continuation must not be able to carry an authority fact.
-// Adding role_bits, group_ids or name to SessionKeys fails here.
+// Adding role_bits, scope_ids or name to SessionKeys fails here.
 test "BE_MESH_05 the session-open continuation carries the two keys and nothing else" {
     const fields = @typeInfo(verify.SessionKeys).@"struct".fields;
     try std.testing.expectEqual(@as(usize, 2), fields.len);

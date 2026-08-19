@@ -21,7 +21,7 @@
 //   I4 ROLE CONTAINMENT (BE-ROLE-01): only ROLE_APPROVER may mint a grant
 //                 (check 3, verify.zig:218). An agent signing a grant is
 //                 refused. Blast radius is bounded by role, not by resource:
-//                 the RESIDUAL that Cert carries role_bits + group_ids but no
+//                 the RESIDUAL that Cert carries role_bits + scope_ids but no
 //                 resource scope is documented in SPEC §11.5, not fixed here
 //                 (fixing it means changing the wire format, an owner call).
 //

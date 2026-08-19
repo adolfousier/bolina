@@ -517,9 +517,9 @@ test "BE_WIRE_01 certificate round-trips the canonical vector, zero heap" {
     try std.testing.expectEqual(@as(u64, 1700000000000), cert.not_before);
     try std.testing.expectEqual(@as(u64, 1800000000000), cert.not_after);
     try std.testing.expectEqualStrings("agent-1", cert.name);
-    try std.testing.expectEqual(@as(u8, 1), cert.group_count);
-    try std.testing.expectEqualSlices(u8, bytes[92..100], cert.group_ids);
-    // tbs is every byte preceding ca_sig_count (offset 100): version..group_ids.
+    try std.testing.expectEqual(@as(u8, 1), cert.scope_count);
+    try std.testing.expectEqualSlices(u8, bytes[92..100], cert.scope_ids);
+    // tbs is every byte preceding ca_sig_count (offset 100): version..scope_ids.
     try std.testing.expectEqual(@as(usize, 100), cert.tbs.len);
     try std.testing.expectEqualSlices(u8, bytes[0..100], cert.tbs);
     try std.testing.expectEqual(@as(u8, 2), cert.ca_sig_count);
@@ -550,7 +550,7 @@ test "BE_WIRE_01 certificate with a single CA signature and empty name is accept
     const cert = try parser.session.parseCert(&bytes);
     try std.testing.expectEqual(@as(u8, 1), cert.role_bits);
     try std.testing.expectEqual(@as(usize, 0), cert.name.len);
-    try std.testing.expectEqual(@as(u8, 0), cert.group_count);
+    try std.testing.expectEqual(@as(u8, 0), cert.scope_count);
     try std.testing.expectEqual(@as(u8, 1), cert.ca_sig_count);
     try std.testing.expectEqual(@as(usize, 96), cert.ca_sigs.len);
     try std.testing.expectEqual(@as(usize, 85), cert.tbs.len);
@@ -564,9 +564,9 @@ test "BE_WIRE_02 certificate with name_len above 64 is rejected as Oversize" {
     try std.testing.expectError(error.Oversize, parser.session.parseCert(&bytes));
 }
 
-test "BE_WIRE_02 certificate with group_count above 16 is rejected as Oversize" {
+test "BE_WIRE_02 certificate with scope_count above 8 is rejected as Oversize" {
     var bytes = decodeHex(CERT_WIRE_HEX);
-    bytes[91] = 17; // group_count
+    bytes[91] = 9; // scope_count > MAX_SCOPE(8)
     try std.testing.expectError(error.Oversize, parser.session.parseCert(&bytes));
 }
 

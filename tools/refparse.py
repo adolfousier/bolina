@@ -69,7 +69,7 @@ MAX_NOTE = 1024                # Refusal.note, "<= 1 KiB" (SPEC 8.5)
 MAX_GENESIS_NAME = 64          # ControlGenesis.name, "<= 64" (SPEC 6.1b)
 MAX_CA_COUNT = 16              # ControlGenesis.ca_count, grammar floor 1, "<= 16" (SPEC 6.1b; channel_id derives from ca_key_0, so 0 is malformed)
 MAX_CERT_NAME = 64             # Cert.name, "<= 64 bytes" (SPEC 3.1)
-MAX_GROUPS = 16                # Cert.group_count, "<= 16" (SPEC 3.1)
+MAX_SCOPE = 8                   # Cert.scope_count, "<= 8" (SPEC 3.1, D-085)
 MIN_CA_SIGS = 1                # Cert.ca_sig_count, "1..4" (SPEC 3.1)
 MAX_CA_SIGS = 4                # Cert.ca_sig_count, "1..4" (SPEC 3.1)
 MAX_HAVE = 64                  # SyncRequest.have_count, "<= 64" (SPEC 6.4)
@@ -669,10 +669,10 @@ def _cert(c, buf):
     not_before = c.u64()
     not_after = c.u64()
     name = c.field16(MAX_CERT_NAME, "cert_name_oversize")
-    group_count = c.u8()
-    if group_count > MAX_GROUPS:
-        raise _Reject("cert_group_oversize")
-    group_ids = c.take(group_count * 8)
+    scope_count = c.u8()
+    if scope_count > MAX_SCOPE:
+        raise _Reject("cert_scope_oversize")
+    scope_ids = c.take(scope_count * 8)
     tbs = buf[0:c.pos]
     ca_sig_count = c.u8()
     if ca_sig_count < MIN_CA_SIGS:
@@ -694,7 +694,7 @@ def _cert(c, buf):
         "version": version, "role_bits": role_bits,
         "sig_pubkey": sig_pubkey, "kex_pubkey": kex_pubkey,
         "not_before": not_before, "not_after": not_after, "name": name,
-        "group_count": group_count, "group_ids": group_ids,
+        "scope_count": scope_count, "scope_ids": scope_ids,
         "ca_sig_count": ca_sig_count, "ca_sigs": ca_sigs, "tbs": tbs,
     }
 

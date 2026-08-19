@@ -214,8 +214,8 @@ pub fn main(init: std.process.Init) !void {
     const agent = try makeIdentity("agent", 0x81, 0x82, 0x03);
 
     // Derived shared values.
-    const group_name = "bolina-core";
-    const group_id = blake2s(group_name)[0..8].*;
+    const scope_name = "bolina-core";
+    const scope_id = blake2s(scope_name)[0..8].*;
     const resource_id = blk: {
         var buf: [256]u8 = undefined;
         const fp = blake2s(&executor.sig_pubkey)[0..8].*;
@@ -248,8 +248,8 @@ pub fn main(init: std.process.Init) !void {
     try putU64be(&cert_tbs, a, T_NOT_BEFORE);
     try putU64be(&cert_tbs, a, T_NOT_AFTER);
     try putU16Len(&cert_tbs, a, "agent-1");
-    try putU8(&cert_tbs, a, 1); // group_count
-    try putFixed(&cert_tbs, a, &group_id); // [8]
+    try putU8(&cert_tbs, a, 1); // scope_count
+    try putFixed(&cert_tbs, a, &scope_id); // [8]
     var order = [_]usize{ 0, 1 };
     if (std.mem.order(u8, &ca1.sig_pubkey, &ca2.sig_pubkey) == .gt) order = .{ 1, 0 };
     const ca_keys = [_]*const Identity{ &ca1, &ca2 };
@@ -559,9 +559,9 @@ pub fn main(init: std.process.Init) !void {
     try sep(&j, a);
     try fStr(&j, a, "name", "agent-1");
     try sep(&j, a);
-    try fU8(&j, a, "group_count", 1);
+    try fU8(&j, a, "scope_count", 1);
     try sep(&j, a);
-    try fHex(&j, a, "group_id", &group_id);
+    try fHex(&j, a, "scope_id", &scope_id);
     try sep(&j, a);
     try fU8(&j, a, "ca_sig_count", 2);
     try w(&j, a, "}");
