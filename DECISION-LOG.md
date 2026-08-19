@@ -1492,3 +1492,31 @@ model's assumptions are not merely self-reinforcing.
 **Reversible:** Each seal reverts if its premise breaks: M1 bound count drops, mutation suite gains a survivor, vectors drift, deps appear, or build mode changes.
 
 **What this does NOT claim:** That the test set is complete in any absolute sense (§11.1). That mutation testing exhausts all attack surfaces (§11.2). That two independent full-protocol implementations exist (§11.3). That the toolchain has zero transitive deps (§11.7). That Debug/ReleaseFast results transfer (§11.8).
+
+## D-085 - 2026-08-19 - resource-scope encoding: owner picks all five, cert v3
+
+**Date:** 2026-08-19
+**Decision:** Authorize resource-scope wire-format change for v0.4. Cert v3, Option A from SCOPE-ESTIMATE.md.
+**Reasoning:** The SCOPE-ESTIMATE documented the residual (I4 resource scope, blast radius bounded by role not by resource, D-069/D-080). Five encoding questions were presented to the owner. All five answered in one pass. The answers pin the format before any wire byte moves, per D-080's warning: designing under conclusion pressure is how bad formats become permanent.
+
+**Ruling 1 — Both certs carry scope.** Subject cert and approver cert both get `scope_count` + `scope_ids`. A subject scoped to `bol:<fp>/db/` cannot be granted anything outside `/db/`, independently of who approves. Cheaper to add now than later: adding scope to only one cert and retroactively adding the other would require a cert v4.
+
+**Ruling 2 — Pinned to executor.** Scope hashes include the executor fingerprint: `BLAKE2s-256("bol:" + fp + "/ns/path")[0..8]`. An approver pinned to executor A's `/db/` namespace cannot approve grants at executor B. Portable scope (namespace-only) was rejected: a scope that means different resources at different executors is a scope operators will misconfigure.
+
+**Ruling 3 — Opaque hashes, not literal prefixes.** 8-byte BLAKE2s-256 prefixes, same encoding as `group_ids`. Costs8-14 lines in the wire-parser (Option A), the house pattern. Literal prefixes (Option B) would cost20-30 lines in a sub-unit with zero headroom and are rejected for now. The tooling to print a cert's scope set lands outside the surface, not in the parser.
+
+**Ruling 4 — Empty scope is deny-all.** Version 3 makes this free: no deployed v2 certs exist, so the default can be hard without a compatibility migration. A missing scope means the cert cannot authorize any grant. This closes the compatibility window permanently (D-080: "closes the day something ships").
+
+**Ruling 5 — Scope subsumes group_ids.** `group_count`/`group_ids` are removed from the cert. `scope_count`/`scope_ids` replace them. The channel authorization helper `certCarriesGroup` in verify.zig (BE-CHAN-01, BE-GEN-03/04) is updated to check scope_ids instead of group_ids. One mechanism, not two. The group-name concept stays in the channel genesis (BE-GEN-04 match_rule=1), but the cert carries hashed resource prefixes instead of hashed group names.
+
+**Wire-format change.** Cert version 2→3. The `group_count` (u8) + `[8]* group_ids` fields are replaced by `scope_count` (u8, ≤8) + `[8]* scope_ids`. All other fields unchanged. TBS extends to cover `scope_count` and `scope_ids`. The ca_sig signature domain is unchanged (all bytes preceding `ca_sig_count`).
+
+**New check.** A new refusal class `ApproverOutOfScope` (distinct from `BadApproverCert`, per the D-049 lesson: folded error classes are unfalsifiable by mutation). Ordering: immediately after check 3 (role gate), before check 4 (subject cert), per D-069 SEM_S4. The check walks the grant's canonical resource id from full form down through each ancestor prefix, hashes each, and matches against the approver's scope set. The walk is bounded by the canonical grammar (path ≤180 bytes, segments bounded by it).
+
+**Scope on both subject and approver.** Check 3a (approver scope) and check 4a (subject scope) both fire. The conformance sentence in SPEC §8.2 moves in the same commit as the code (D-039 lesson).
+
+**What this invalidates.** Mutation receipt 155/155 at `fe3b2be` (v0.3.9) becomes stale: new domain properties, new check, full re-run required. M1 ratchet moves from 114/114 to ≥115/115. TLA+ model gains approver-scope precondition. `refparse.py` must learn the field or M4 diverges on every cert record.
+
+**Reversible:** Rulings 1-5 revert if the encoding changes before anything is deployed. Since nothing is deployed, this is the cheapest time to reverse.
+
+**Evidence.** SCOPE-ESTIMATE.md (design doc, bf6e52a), D-080 (residual acceptance), D-069 (scoping, SEM_S4 ordering), D-049 (distinct error classes), D-052 (compaction precedent), D-039 (conformance sentence lesson).
