@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.3.9 · **Status:** CLOSED AND SEALED · **Date:** 2026-08-19
+**Version:** 0.4.0-draft · **Status:** OPEN · **Date:** 2026-08-19
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -43,7 +43,18 @@ closed; this edit supplies the row the obligation owed. No envelope wire bytes c
 **Changes from v0.3.7-draft:** the daemon milestone's phase D promotes BE-EXEC-01 from reserved to declared in §0.4 (daemon lifecycle: one process, no fork-per-session, bounded resources, restart semantics). BE-SURF-03 places `src/grant_ledger.zig` in the non-surface list ahead of its code (D-061), the hand-rolled two-phase durable append log over `std.fs` that implements BE-GRANT-01/01a (durable commit before the effect; committed-but-unpublished publishes an `interrupted` Effect on restart) and BE-REV-02 (revocation persists). It is distinct from the DAG hash ledger `src/ledger.zig` (BE-LEDGER-02/03), which is untouched. No new DAG marker. No wire bytes change and no sub-unit cap changes: the grant ledger is post-admission and non-surface.
 
 **Changes from v0.3.8-draft (phase D closeout):** phase D is implemented and the differential oracle (§11.6 / BE-SURF-04) is strengthened. The durable ledger ships with two-phase commit and fsync barrier; the dispatch check-11 seam commits before the effect and surfaces committed-but-unpublished grants idempotently on restart (D-062). `pruneExpired` is crash-safe by atomic rename, not in-place truncate — a crash during prune no longer empties the consumed log (D-063, BE-GRANT-01). Four boundary seeds drive all 72 parser exit points to coverage at any corpus size; a 1,000,000-record run (50× the enforced M4 gate) surfaced and fixed three reference-parser bound omissions (ControlGenesis `ca_count=0`, binding `cert_len=0`, control-body oversize) plus the production prune defect above. The continuous 24-hour soak component of §11.6 remains deferred for want of dedicated compute (the owner's workstations and production servers are out of scope for a soak by owner ruling); the differential component is evidenced at scale. A model-checking brief for §11.4 (TLA+/Alloy with BE-GRANT-01/01a/04/06 as invariants) is issued for external contribution. No wire bytes change, no sub-unit cap changes.
-**Changes from v0.3.9-draft:** v0.3.9 is closed and sealed. All eight §11 conformance items produce evidence and carry seal paragraphs. §11.4 advances from brief to instrumented conformance: the bounded grant-path TLA+ checks (BE-GRANT-01/01a/04, D-061/D-063/D-067 rulings encoded as invariants) are merged under `model/` with a pinned TLC runner in CI (D-083). BE-GRANT-06 (revocation) is projected as `RevokeGrant` with `RevokedGrantsNeverExecute` invariant; crash-recovery paths (`RecoverPublishInterrupted`, `RecoverMarkPublished`) guard against publishing revoked grants. Twelve Phase A conformance fixtures exercise the trace projector through a binding table. BE-SURF-03 places `src/grant_trace.zig` in the non-surface list (D-076): `bolina.grant-trace.v1`, the comptime-gated test-only instrumentation the ZIG-TLA conformance pilot reads; with the `trace` build option off every emit site compiles out with zero cost. The remaining five items (§11.1 bijection, §11.2 mutation testing, §11.3 test vectors, §11.7 no third-party deps, §11.8 measured build) are sealed by D-084 on mechanical evidence from CI gates. No wire bytes change, no sub-unit cap changes.
+**Changes from v0.3.9-draft:** v0.3.9 is closed and sealed. Cert version advances from 2 to 3; the
+`group_count`/`group_ids` fields are renamed to `scope_count`/`scope_ids` and the bound tightens from
+16 to 8 (D-085). Scope ids are 8-byte BLAKE2s-256 resource prefixes; an empty scope is deny-all. The
+grant verification table (§8.2, BE-GRANT-03) gains checks 3a and 4a: both the approver's and the
+subject's `scope_ids` must cover `Grant.resource_id`. Scope is a cert v3 feature; v2 certs carry no
+scope and skip both checks. The genesis envelope's `member_group`/`admin_group` fields become
+`member_scope`/`admin_scope` to match the cert terminology. Wire byte layout is byte-identical at the
+binary level (`LEN_SCOPE_ID == LEN_GROUP_ID == 8`, both use a single-byte count prefix); the
+semantic change is the bound reduction and the resource-prefix interpretation. No grant/envelope/
+span wire bytes change, no sub-unit cap changes.
+
+**Changes from v0.3.9-draft (prior):** v0.3.9 is closed and sealed. All eight §11 conformance items produce evidence and carry seal paragraphs. §11.4 advances from brief to instrumented conformance: the bounded grant-path TLA+ checks (BE-GRANT-01/01a/04, D-061/D-063/D-067 rulings encoded as invariants) are merged under `model/` with a pinned TLC runner in CI (D-083). BE-GRANT-06 (revocation) is projected as `RevokeGrant` with `RevokedGrantsNeverExecute` invariant; crash-recovery paths (`RecoverPublishInterrupted`, `RecoverMarkPublished`) guard against publishing revoked grants. Twelve Phase A conformance fixtures exercise the trace projector through a binding table. BE-SURF-03 places `src/grant_trace.zig` in the non-surface list (D-076): `bolina.grant-trace.v1`, the comptime-gated test-only instrumentation the ZIG-TLA conformance pilot reads; with the `trace` build option off every emit site compiles out with zero cost. The remaining five items (§11.1 bijection, §11.2 mutation testing, §11.3 test vectors, §11.7 no third-party deps, §11.8 measured build) are sealed by D-084 on mechanical evidence from CI gates. No wire bytes change, no sub-unit cap changes.
 
 ---
 
@@ -240,8 +251,8 @@ structure is encoded as a **flat record**:
 
 | Exception | Fields | Why |
 |---|---|---|
-| **Fixed-width, no prefix** | `[16]` ids and addresses, `[32]` keys, hashes, and digests, `[64]` signatures, `[8]` group ids, all `u8`/`u16`/`u32`/`u64` scalars | Width is a constant of this specification, so a length prefix would be a second source of truth about a value that cannot vary |
-| **Non-`u16` prefixes** | `u8` counts (`ca_sig_count`, `group_count`, `parent_count`, `claim_count`, `span_count`, `envelope_count`, `have_count`); `u32` lengths (`Envelope.body_len`, `Intent.action_len`) | Counts are bounded ≤ 255 by their own limits; the two `u32` fields carry payloads above 64 KiB |
+| **Fixed-width, no prefix** | `[16]` ids and addresses, `[32]` keys, hashes, and digests, `[64]` signatures, `[8]` scope ids, all `u8`/`u16`/`u32`/`u64` scalars | Width is a constant of this specification, so a length prefix would be a second source of truth about a value that cannot vary |
+| **Non-`u16` prefixes** | `u8` counts (`ca_sig_count`, `scope_count`, `parent_count`, `claim_count`, `span_count`, `envelope_count`, `have_count`); `u32` lengths (`Envelope.body_len`, `Intent.action_len`) | Counts are bounded ≤ 255 by their own limits; the two `u32` fields carry payloads above 64 KiB |
 
 *An undocumented exception is worse than an inconsistent rule: an auditor who finds one stops
 trusting the other rules, and the entire argument for a flat format is that it can be verified by
@@ -381,7 +392,7 @@ larger instance of it.*
 
 ```
 Cert :=
-  u8    version              ; = 2
+  u8    version              ; = 3
   u8    role_bits            ; bit 0 participant, 1 agent, 2 executor,
                              ; 3 approver, 4 lighthouse, 5 relay
   [32]  sig_pubkey           ; Ed25519
@@ -389,8 +400,9 @@ Cert :=
   u64   not_before           ; unix ms
   u64   not_after            ; unix ms
   u16   name_len, name       ; ≤ 64 bytes, UTF-8, NOT a security boundary
-  u8    group_count          ; ≤ 16
-  [8]*  group_ids            ; each = BLAKE2s-256(group_name)[0..8], a GLOBAL identifier
+  u8    scope_count          ; ≤ 8
+  [8]*  scope_ids            ; each = BLAKE2s-256(resource_prefix)[0..8], 8-byte prefix;
+                             ; empty scope = deny-all (D-085)
   u8    ca_sig_count         ; 1..4
   ([32] ca_key + [64] ca_sig) × ca_sig_count
                              ; each Ed25519 over all bytes preceding ca_sig_count,
@@ -402,7 +414,7 @@ nesting. Ordering by key and requiring distinctness makes the encoding canonical
 duplicate-key quorum forgery a parse failure rather than a policy check.
 
 `name` is a convenience label. **No authorization decision may depend on `name`.** Authorization
-depends on `sig_pubkey`, `role_bits`, and `group_ids` only.
+depends on `sig_pubkey`, `role_bits`, and `scope_ids` only.
 
 The overlay address is not carried in the certificate; it is *derived*, so it cannot disagree with
 the key.
@@ -822,8 +834,8 @@ Membership is the one piece of mutable, authority-bearing state in the protocol,
 the machinery normally used to agree on such state. Three rules keep it consistent anyway.
 
 **BE-CHAN-01 (membership is granted by the CA, not by the channel)** — A node is a member of a
-channel if and only if its certificate carries the channel's `member_group` (§6.1b), and it is an
-administrator if and only if its certificate carries the channel's `admin_group`. Neither is
+channel if and only if its certificate carries the channel's `member_scope` (§6.1b), and it is an
+administrator if and only if its certificate carries the channel's `admin_scope`. Neither is
 conferred by any message. *An earlier design let a `Control` message promote and demote members,
 which made authority a function of replicated DAG state. The DAG has no total order (§9), so two
 honest nodes with legitimate but different views would disagree about who may act — a consensus
@@ -856,8 +868,8 @@ the channel's immutable parameters.
 ControlGenesis :=
   u8    version              ; = 2
   u16   name_len, name       ; ≤ 64, channel name (channel_id = BLAKE2s(name || ca_key_0))
-  [8]   member_group         ; certificates carrying this group are members
-  [8]   admin_group          ; certificates carrying this group are administrators
+  [8]   member_scope         ; certificates carrying this scope are members
+  [8]   admin_scope          ; certificates carrying this scope are administrators
   u8    ca_count ; [32]* ca_keys   ; the trust set for this channel, ordered ascending
   u8    match_rule           ; = 1 (byte equality). No other value is defined.
 ```
@@ -865,12 +877,12 @@ ControlGenesis :=
 **BE-GEN-01** — Exactly one envelope in a channel has `parent_count = 0`. Every other envelope MUST
 have `1..4` parents. A second genesis for an existing `channel_id` MUST be rejected.
 
-**BE-GEN-02** — Genesis parameters are immutable. There is no message that changes `member_group`,
-`admin_group`, `ca_keys`, or `match_rule`. *Immutability is what makes them safe to depend on
+**BE-GEN-02** — Genesis parameters are immutable. There is no message that changes `member_scope`,
+`admin_scope`, `ca_keys`, or `match_rule`. *Immutability is what makes them safe to depend on
 without consensus: a value that never changes cannot be disagreed about.* Changing any of them means
 creating a different channel.
 
-**BE-GEN-03** — The genesis envelope MUST be signed by a certificate carrying `admin_group`, and
+**BE-GEN-03** — The genesis envelope MUST be signed by a certificate carrying `admin_scope`, and
 every member MUST verify it before accepting any other envelope in the channel. `channel_id` is
 derived from `ca_key_0` — the lowest CA key in the trust set — which removes the ambiguity that
 arises once a certificate can carry several CA signatures (§3.1).
@@ -898,7 +910,7 @@ section whose entire purpose is that nothing is prose.
 forward-compatibility path; §2.2 has no extension mechanism by design.
 
 **BE-CTRL-02** — A `Revoke` MUST be rejected unless the envelope sender's certificate carries the
-channel's `admin_group`. Authority is read from the certificate at verification time, never from
+channel's `admin_scope`. Authority is read from the certificate at verification time, never from
 accumulated channel state.
 
 ### 6.2 Envelope
@@ -1393,6 +1405,13 @@ refuses on the first failure:
    *The approver's certificate was revalidated at execution time, the requesting agent's was not,
    so revoking a compromised agent did not stop the work it had already requested (RED-TEAM-08,
    F5). The asymmetry had no justification.*
+3a. The approver's `scope_ids` (cert v3, D-085) cover `Grant.resource_id`. Scope is an 8-byte
+   BLAKE2s-256 resource prefix; a cert's scope covers a resource if any of its `scope_ids` is a
+   prefix of the resource's canonical hash. A cert v2 (scope_count absent / zero) does not carry
+   scope and skips this check. An empty scope on a v3 cert is deny-all: no resource is covered.
+4a. The subject's `scope_ids` cover `Grant.resource_id`. Same rule as 3a, applied to the requesting
+   agent's certificate. Both scope checks run after certificate validity (3, 4) and before the
+   executor/subject/intent/resource matching checks (5-9) that perform the semantic binding.
 5. `Grant.executor` equals this executor's own `sig_pubkey`, byte-for-byte.
 6. `Grant.subject` equals the `sender` of the `Intent` being executed, byte-for-byte.
 7. `Grant.intent_id` equals the `intent_id` of a `PENDING` intent held by this executor. A Grant
@@ -1412,14 +1431,15 @@ on restart, BE-GRANT-01a would publish an `interrupted` Effect for an effect tha
 A check order that makes the ledger assert a fabricated effect is an audit defect, not a
 performance detail.
 
-**Conformance status (Zig slice).** The routine in `verify.zig` models checks 0, 1, 2, 3, 4, 5, 6, 7,
+**Conformance status (Zig slice).** The routine in `verify.zig` models checks 0, 1, 2, 3, 3a, 4, 4a, 5, 6, 7,
 8, 9, 10 and 11 inside the single routine. The debt recorded here through round 4 was that checks 3
 and 4 (approver and subject certificate validity) and 6, 7 and 8 (subject, intent_id and resource_id
 matching against the pending intent) were delegated to the executor until a certificate store and a
 pending-intent table existed. That backing state is now supplied through `GrantContext`
 (`trusted_ca_keys`, the approver and subject certs, and the three pending-intent fields), so the
 repayment condition stated for those five checks is met and BE-GRANT-03's requirement that all
-twelve checks run in the routine is satisfied by the slice. The repayment is recorded rather than
+fourteen checks run in the routine is satisfied by the slice. Checks 3a and 4a (approver and
+subject scope coverage) are cert v3 features (D-085): v2 certs skip them. The repayment is recorded rather than
 deleted so the history of the debt survives.
 
 **BE-GRANT-03b (verification is a call, not a value; language-portable property).** The grant's
@@ -1728,7 +1748,7 @@ previously-published head hash validate against it. No consensus protocol here, 
 | System | Relationship |
 |---|---|
 | WireGuard | Noise_IK construction, rekey policy, cookie DoS defence, sliding-window replay filter — §4 follows it closely and deliberately |
-| Nebula (Slack) | Offline CA, certificate-carried groups, lighthouses — §3, §5 |
+| Nebula (Slack) | Offline CA, certificate-carried scopes, lighthouses — §3, §5 |
 | CJDNS / Yggdrasil | Address-as-key-commitment (§3.2) |
 | Noise Framework (Perrin) | The handshake pattern and key schedule |
 | IRC | Channel *shape* only — names, membership, broadcast |
@@ -1903,9 +1923,10 @@ I4 role containment, only ROLE_APPROVER may mint a grant (verify check 3). M3, a
 metric, holds when the executed effect carries the action digest and resource of the signed grant rather
 than something swapped in; it is measured in the harness, not the post-hoc auditor, because the ledger
 stores the grant id, not the action text, so executed-versus-signed cannot be reconstructed after the
-fact. Residual, owner-scoped: Cert carries role bits and group ids but no resource scope, so an
-approver's blast radius is bounded by role, not by resource; closing that means changing the wire format
-and is deferred. Per THREAT-MODEL §4.1, the remaining human-factor mitigation (approval rate limits,
+fact. Residual, owner-scoped: Cert v3 carries role bits and scope_ids (D-085), bounding an
+approver's blast radius by resource prefix; v2 certs carry no scope and fall back to role-only bounding.
+The remaining residual is that a v3 scope_ids list is set at issuance and cannot be narrowed without
+reissuing the cert. Per THREAT-MODEL §4.1, the remaining human-factor mitigation (approval rate limits,
 mandatory read delays) is operational, not cryptographic, and is not deterministically auto-tested.*
 
 *Sealed (D-079, 2026-08-17), under the CONTRIBUTING.md vocabulary, by scoping rather than simulation.
