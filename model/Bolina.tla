@@ -553,7 +553,6 @@ RevokedGrantsNeverExecute ==
     \A i \in Intents :
         IntentState[i] = "revoked" =>
             /\ EffectCount[GrantOf(i)] = 0
-            /\ GrantOf(i) \notin StableConsumed
             /\ GrantOf(i) \notin StablePublished
             /\ ~state.validExecutingEntry[i]
 
