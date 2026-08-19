@@ -548,9 +548,10 @@ NoCommitBeforeCheck10 ==
 
 \* BE-GRANT-06 (D-064): a revoked grant never reaches executing, executed,
 \* or failed. The RevokeGrant action transitions the intent to "revoked"
-\* and the guards on CommitConsumedCheck11 and EffectStart prevent any
-\* further progress. Checks 3-4 of the grant path are the implementation's
-\* revocation gate.
+\* and the guards on CommitConsumedCheck11, EffectStart,
+\* RecoverPublishInterrupted, and RecoverMarkPublished prevent any
+\* further progress including post-crash recovery. Checks 3-4 of the
+\* grant path are the implementation's revocation gate.
 RevokedGrantsNeverExecute ==
     \A i \in Intents :
         IntentState[i] = "revoked" =>
