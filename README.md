@@ -7,8 +7,11 @@ message.**
 > jamming. Náutico like the rest of the family (Prumo, Caravela, Nau, Orbit), six letters, ASCII.
 > Change it in one line if you have better.
 
-**Status:** active research. The specification still leads the implementation, but it is no longer
-alone: the M1 milestone is built in Zig and held by mechanical gates. Everything past M1 is draft.
+**Status:** v0.3.9 closed and sealed. Eight §11 conformance items produce evidence and carry seal
+paragraphs; every ruling names its receipt. The M1 milestone is built in Zig, held by mechanical
+gates, and the model checking (§11.4), adversarial evaluation (§11.5), fuzzing (§11.6), mutation
+testing (§11.2), test vectors (§11.3), bijection (§11.1), zero-deps (§11.7), and measured build
+(§11.8) are all sealed with documented receipts in `SPEC.md §11`.
 
 This is a research project, and a specification written ahead of its implementation is the normal
 working mode here, not a deficiency. Unproven claims are expected — what is *not* acceptable is an
@@ -25,7 +28,7 @@ ambition is unchanged by saying out loud which parts have been measured.
 
 ## Implementation status
 
-M1 only, in Zig 0.16.0, built `ReleaseSafe` with no optimisation flag exposed. `tools/prumo-verify`
+v0.3.9, in Zig 0.16.0, built `ReleaseSafe` with no optimisation flag exposed. `tools/prumo-verify`
 prints every gate on every run and returns non-zero if an enforced one fails.
 
 | Measure | Value | Gate |

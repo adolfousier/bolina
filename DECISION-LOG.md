@@ -1470,3 +1470,25 @@ model can agree with a buggy implementation if both share the same
 misunderstanding. The adversarial evaluation (§11.5, sealed D-079) and the
 mutation testing (§11.2, 155/155) provide independent pressure that the
 model's assumptions are not merely self-reinforcing.
+
+## D-084: v0.3.9 seal round (§11.1, §11.2, §11.3, §11.7, §11.8)
+
+**Date:** 2026-08-18
+**Decision:** Seal five remaining §11 conformance items, bringing v0.3.9 to full close+seal.
+**Reasoning:** Each item has mechanical evidence in CI gates and recorded receipts. The evidence existed before this ruling; the ruling records it and writes the seal paragraphs.
+
+**Ruling 1 - §11.1 bijection.** `prumo-verify` M1 reports 114/114 bound, high water 114, missing 0. SUPERSEDED BY REMOVAL items are excluded by the spec's own marker. The ratchet holds: a bound-test deletion fails M1.
+
+**Ruling 2 - §11.2 mutation testing.** 155/155 viable mutants killed at HEAD bd00e6d across eighteen domains targeting §8's state machine and §7's verifier. Receipt: `M1-AUDIT.md` mutation addendum.
+
+**Ruling 3 - §11.3 test vectors.** M3 regenerates `test/vectors.json` from `tools/gen-vectors.zig`, fails on drift, then cross-verifies with `tools/verify-vectors.py` and `tools/verify-layout.py`. Five positive vectors, three negative vectors, and the `method_id_table` all verified.
+
+**Ruling 4 - §11.7 no third-party deps.** M5 (pre-authentication 1492/1500 lines) and M11 (post-authentication 1477/1500 lines) both pass. Build succeeds with network disabled and no package manager (BE-DEP-01).
+
+**Ruling 5 - §11.8 measured build.** M7 verifies ReleaseSafe hardcoded, no optimize flag exposed, Zig 0.16.0. Conformance results are recorded against this exact configuration per LANGUAGE.md O1.
+
+**Evidence.** `tools/prumo-verify` (M1, M5, M7, M11), `tools/m1-high-water`, `M1-AUDIT.md`, `test/vectors.json`, `tools/gen-vectors.zig`, `tools/verify-vectors.py`, `tools/verify-layout.py`, `.github/workflows/ci.yml`.
+
+**Reversible:** Each seal reverts if its premise breaks: M1 bound count drops, mutation suite gains a survivor, vectors drift, deps appear, or build mode changes.
+
+**What this does NOT claim:** That the test set is complete in any absolute sense (§11.1). That mutation testing exhausts all attack surfaces (§11.2). That two independent full-protocol implementations exist (§11.3). That the toolchain has zero transitive deps (§11.7). That Debug/ReleaseFast results transfer (§11.8).

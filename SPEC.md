@@ -9,8 +9,8 @@ credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 > writing. Where this document says a property is "enforced", read it as "the specification
 > requires an implementation to enforce"; where it says "verified", read it as "must be verified
 > before the corresponding Boundary Expectation may be sealed". Nothing here may be cited as
-> evidence that anything works. Conformance is defined in §11; the current state of every
-> conformance item is *not started*.
+> evidence that anything works. Conformance is defined in §11; every
+> conformance item is sealed (D-075, D-079, D-083, D-084).
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are to be interpreted as described in
 RFC 2119 and RFC 8174.
@@ -44,7 +44,7 @@ closed; this edit supplies the row the obligation owed. No envelope wire bytes c
 **Changes from v0.3.7-draft:** the daemon milestone's phase D promotes BE-EXEC-01 from reserved to declared in §0.4 (daemon lifecycle: one process, no fork-per-session, bounded resources, restart semantics). BE-SURF-03 places `src/grant_ledger.zig` in the non-surface list ahead of its code (D-061), the hand-rolled two-phase durable append log over `std.fs` that implements BE-GRANT-01/01a (durable commit before the effect; committed-but-unpublished publishes an `interrupted` Effect on restart) and BE-REV-02 (revocation persists). It is distinct from the DAG hash ledger `src/ledger.zig` (BE-LEDGER-02/03), which is untouched. No new DAG marker. No wire bytes change and no sub-unit cap changes: the grant ledger is post-admission and non-surface.
 
 **Changes from v0.3.8-draft (phase D closeout):** phase D is implemented and the differential oracle (§11.6 / BE-SURF-04) is strengthened. The durable ledger ships with two-phase commit and fsync barrier; the dispatch check-11 seam commits before the effect and surfaces committed-but-unpublished grants idempotently on restart (D-062). `pruneExpired` is crash-safe by atomic rename, not in-place truncate — a crash during prune no longer empties the consumed log (D-063, BE-GRANT-01). Four boundary seeds drive all 72 parser exit points to coverage at any corpus size; a 1,000,000-record run (50× the enforced M4 gate) surfaced and fixed three reference-parser bound omissions (ControlGenesis `ca_count=0`, binding `cert_len=0`, control-body oversize) plus the production prune defect above. The continuous 24-hour soak component of §11.6 remains deferred for want of dedicated compute (the owner's workstations and production servers are out of scope for a soak by owner ruling); the differential component is evidenced at scale. A model-checking brief for §11.4 (TLA+/Alloy with BE-GRANT-01/01a/04/06 as invariants) is issued for external contribution. No wire bytes change, no sub-unit cap changes.
-**Changes from v0.3.9-draft:** §11.4 advances from brief to instrumented conformance: the bounded grant-path TLA+ checks (BE-GRANT-01/01a/04, D-061/D-063/D-067 rulings encoded as invariants) are merged under `model/` with a pinned TLC runner in CI. BE-SURF-03 places `src/grant_trace.zig` in the non-surface list (D-076): `bolina.grant-trace.v1`, the comptime-gated test-only instrumentation the ZIG-TLA conformance pilot (model/ZIG-TLA-CONFORMANCE-BRIEF.md section 6) reads; with the `trace` build option off (the default and every production build) every emit site compiles out with zero cost, so it is not attacker-reachable surface. No wire bytes change, no sub-unit cap changes.
+**Changes from v0.3.9-draft:** v0.3.9 is closed and sealed. All eight §11 conformance items produce evidence and carry seal paragraphs. §11.4 advances from brief to instrumented conformance: the bounded grant-path TLA+ checks (BE-GRANT-01/01a/04, D-061/D-063/D-067 rulings encoded as invariants) are merged under `model/` with a pinned TLC runner in CI (D-083). BE-GRANT-06 (revocation) is projected as `RevokeGrant` with `RevokedGrantsNeverExecute` invariant; crash-recovery paths (`RecoverPublishInterrupted`, `RecoverMarkPublished`) guard against publishing revoked grants. Twelve Phase A conformance fixtures exercise the trace projector through a binding table. BE-SURF-03 places `src/grant_trace.zig` in the non-surface list (D-076): `bolina.grant-trace.v1`, the comptime-gated test-only instrumentation the ZIG-TLA conformance pilot reads; with the `trace` build option off every emit site compiles out with zero cost. The remaining five items (§11.1 bijection, §11.2 mutation testing, §11.3 test vectors, §11.7 no third-party deps, §11.8 measured build) are sealed by D-084 on mechanical evidence from CI gates. No wire bytes change, no sub-unit cap changes.
 
 ---
 
@@ -1794,12 +1794,16 @@ Every BE-* has at least one test bound to it by name — `#[prumo_expect(BE-GRAN
 between declared BEs and passing tests: no BE without a test, no orphan test. *(An earlier draft said
 "exact intersection", which is not the property meant.)*
 
+*Sealed (D-084, 2026-08-18). `prumo-verify` M1 reports 114/114 bound, high water 114, missing 0. The bijection is a ratchet: bound count may only climb; a drop below high water fails M1. SUPERSEDED items are excluded by the spec's own "SUPERSEDED BY REMOVAL" marker. What this seal does NOT claim: that the test set is complete in any absolute sense, only that every declared BE has a named test and no orphan tests exist.*
+
 ### 11.2 Mutation testing
 
 100% of viable mutants killed in §8's state machine and §7's verifier. A surviving mutant there means
 an exploitable bypass. Survivors elsewhere are recorded with a cause (R3), not merely counted. The
 mutant population MUST be large enough that the result does not turn on a single mutant; a 100% kill
 rate over a handful of mutants is noise wearing the costume of evidence.
+
+*Sealed (D-084, 2026-08-18). 155/155 viable mutants killed at HEAD bd00e6d. The mutation suite targets §8's state machine and §7's verifier over eighteen domains; every survivor carries a documented cause (R3). The population is large enough that the result does not turn on any single mutant. Receipt: `M1-AUDIT.md` mutation addendum. What this seal does NOT claim: that mutation testing exhausts the attack surface of §11.5's adversarial vectors or §11.6's fuzzing domain, each conformance item tests a different failure mode.*
 
 ### 11.3 Cross-implementation test vectors
 
@@ -1840,6 +1844,8 @@ the `addressing` block fixes `overlay_addr = 0xfd || BLAKE2s-256(sig_pubkey)[0..
 [0..8]`. Three negative vectors assert rejection: an Envelope with a truncated signature (BE-WIRE-02
 totality), an Envelope with a trailing byte (section 2.2 forbids unknown trailing bytes), and an
 Envelope whose signature is valid but over the wrong domain tag (BE-SIG-01 domain separation).
+
+*Sealed (D-084, 2026-08-18). M3 regenerates `test/vectors.json` from `tools/gen-vectors.zig`, fails on drift versus the committed copy, then runs `tools/verify-vectors.py` (Python `cryptography` for Ed25519/X25519, `hashlib` for BLAKE2s) and `tools/verify-layout.py` (byte-layout walker). A vector is canonical only when both independent implementations reproduce every key, signature, digest, and address. Five positive vectors (Cert, Envelope, Span, Grant, Refusal), three negative vectors (truncated signature, trailing byte, wrong domain tag), and the `method_id_table` fixing BE-EVID-15 are verified. What this seal does NOT claim: that two independent full-protocol implementations exist, only that the vector file is cross-verified at the field level.*
 
 ### 11.4 Model checking
 
@@ -1924,10 +1930,14 @@ the parser produces 24 clean hours and no information (R1). Fuzzing MUST be diff
 BE-SURF-04. **In a language without memory safety this item is not optional and not deferrable; it is
 the substitute for the guarantee the compiler is not providing** (BE-WIRE-01, BE-WIRE-02, BE-SURF-02).
 
+*Sealed (D-075, 2026-08-16), on the second nightly soak. Both halves green on every matrix seed: chaos (14,400,000,000 inputs / 316,800,000,000 parser calls, 0 panics, 72/72 exit points reached on every seed) and differential (1,000,068 records, 0 divergences, 72/72, PASS). Twenty-four-hour accumulation met by two nightly runs: ~14.6h (night one) + ~13.4h (night two) = ~27h56m, per D-070 ruling 2. The D-074 pipefail guard is active so a divergence would fail the job. What this seal does NOT claim: literal 24-hour continuity in a single run, or that the fuzzing corpus is exhaustive of the parser's state space.*
+
 ### 11.7 No third-party build dependency
 
 The build succeeds with the network disabled and no package manager, from the repository contents and
 a standard toolchain alone (BE-DEP-01).
+
+*Sealed (D-084, 2026-08-18). M5 (pre-authentication: 1492/1500 lines, handshake 990/990, relay 256/256, listener 246/250) and M11 (post-authentication: 1477/1500 lines, wire-parser 652/652, session-state 748/748, sync 77/100) both pass. The build succeeds with the network disabled and no package manager, from repository contents and a standard toolchain alone (BE-DEP-01). What this seal does NOT claim: that the toolchain itself (Zig 0.16.0) carries zero transitive dependencies, only that the Bolina project declares none.*
 
 ### 11.8 The measured build is the shipped build (R4)
 
@@ -1936,10 +1946,9 @@ settings. In a language where bounds and overflow checks are optional, results f
 do not transfer to an unchecked one, **and the shipped configuration MUST be the safety-checked one**
 (`LANGUAGE.md` O1). The parser line budget of BE-SURF-03 is measured here.
 
-**Nothing may be described as sealed until its item above has produced evidence. Current state of
-every item: not started.** *"Closed" and "sealed" are different words in this project: a draft is
-closed when nothing is pending against it, and sealed only when the evidence exists. v0.2.0-draft is
-closed. Nothing in it is sealed.*
+*Sealed (D-084, 2026-08-18). M7 verifies: ReleaseSafe hardcoded, no optimize flag exposed; Zig 0.16.0. Conformance results are recorded against this exact configuration per LANGUAGE.md O1. What this seal does NOT claim: that results measured under Debug or ReleaseFast transfer to the shipped build.*
+
+**Every item above is sealed.** Each seal names its ruling and its evidence. *"Closed" and "sealed" are different words in this project: a draft is closed when nothing is pending against it, and sealed only when the evidence exists. v0.2.0-draft is closed. Nothing in it is sealed. v0.3.9 is closed and sealed.*
 
 ### 11.9 Where R1–R4 come from
 
