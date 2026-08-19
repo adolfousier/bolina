@@ -213,26 +213,30 @@ if len(sys.argv) > 1:
 # --- grant denominator, derived from SPEC.md section 8 --------------------
 
 def enumerated_checks_from_spec():
-    """The full BE-GRANT-03 check list (0-11), counted from SPEC's numbered
-    list, not from this script."""
+    """The full BE-GRANT-03 check list (0-11, plus 3a/4a), counted from SPEC's
+    numbered list, not from this script. Lettered checks like 3a/4a are
+    returned as strings; pure-digit checks as ints."""
     text = SPEC.read_text()
     start = text.index("**BE-GRANT-03 (no bypass edge)**")
     rest = text[start:]
     nxt = rest.find("\n**BE-GRANT-03b")
     block = rest[:nxt] if nxt != -1 else rest
-    nums = re.findall(r"^(\d+)\. ", block, re.MULTILINE)
-    return [int(n) for n in nums]
+    tokens = re.findall(r"^(\d+[a-z]?)\. ", block, re.MULTILINE)
+    return [int(t) if t.isdigit() else t for t in tokens]
 
 
 def modelled_checks_from_spec():
     """The subset the slice models, parsed from SPEC's conformance-status
-    sentence. This is the authority for 'which checks must be attacked'."""
+    sentence. This is the authority for 'which checks must be attacked'.
+    Lettered checks like 3a/4a are returned as strings; pure-digit checks
+    as ints."""
     text = SPEC.read_text()
     m = re.search(r"models checks (.+?) inside the single routine", text, re.DOTALL)
     if not m:
         sys.exit("FATAL: cannot parse modelled-check set from SPEC "
                  "(conformance sentence changed?)")
-    return [int(n) for n in re.findall(r"\d+", m.group(1))]
+    tokens = re.findall(r"\d+[a-z]?", m.group(1))
+    return [int(t) if t.isdigit() else t for t in tokens]
 
 
 # --- evidence denominator, derived from SPEC.md section 7 -----------------
@@ -923,6 +927,34 @@ MUTANTS = [
      "callback invoked before the ledger check",
      "if (ctx.already_consumed(grant.grant_id, grant.not_after, ctx.now_ms)) return error.AlreadyConsumed;",
      "execute(grant); // MUTANT callback before ledger\n    if (ctx.already_consumed(grant.grant_id, grant.not_after, ctx.now_ms)) return error.AlreadyConsumed;"),
+
+    # --- grant domain: D-085 scope checks (checks 3a, 4a, src/verify.zig)
+    # Scope is a cert-v3 feature (D-085). Each cert carries scope_ids
+    # (8-byte BLAKE2s-256 resource prefixes). scopeCoversResource walks
+    # ancestor prefixes of the resource_id, hashing each against the cert's
+    # scope_ids. Checks 3a/4a gate on cert version >= 3; v2 certs skip.
+    # Three attack surfaces per check: absence, wrong version gate, and
+    # wrong logic on the ancestor walk.
+    ("grant", "verify.zig", "CHECK-ABSENCE", "3a",
+     "check 3a approver scope never enforced (D-085)",
+     "    if (ctx.approver_cert.version >= 3 and !scopeCoversResource(ctx.approver_cert, grant.resource_id)) return error.ApproverOutOfScope;",
+     "    // MUTANT: check 3a approver scope removed"),
+    ("grant", "verify.zig", "WRONG-OPERATOR", "3a",
+     "check 3a version gate >=3 -> >3 (v3 certs skip scope, D-085)",
+     "    if (ctx.approver_cert.version >= 3 and !scopeCoversResource(ctx.approver_cert, grant.resource_id)) return error.ApproverOutOfScope;",
+     "    if (ctx.approver_cert.version > 3 and !scopeCoversResource(ctx.approver_cert, grant.resource_id)) return error.ApproverOutOfScope; // MUTANT"),
+    ("grant", "verify.zig", "CHECK-ABSENCE", "4a",
+     "check 4a subject scope never enforced (D-085)",
+     "    if (ctx.subject_cert.version >= 3 and !scopeCoversResource(ctx.subject_cert, grant.resource_id)) return error.SubjectOutOfScope;",
+     "    // MUTANT: check 4a subject scope removed"),
+    ("grant", "verify.zig", "WRONG-OPERATOR", "4a",
+     "check 4a version gate >=3 -> >3 (v3 certs skip scope, D-085)",
+     "    if (ctx.subject_cert.version >= 3 and !scopeCoversResource(ctx.subject_cert, grant.resource_id)) return error.SubjectOutOfScope;",
+     "    if (ctx.subject_cert.version > 3 and !scopeCoversResource(ctx.subject_cert, grant.resource_id)) return error.SubjectOutOfScope; // MUTANT"),
+    ("grant", "verify.zig", "WRONG-LOGIC", "3a",
+     "scopeCoversResource match inverted (scope match -> no-match, D-085)",
+     "        if (certCarriesScope(cert, hash[0..8])) return true;",
+     "        if (certCarriesScope(cert, hash[0..8])) return false; // MUTANT"),
 
     # --- evidence domain: the attestation layer (src/evidence.zig, src/dag.zig)
     # Ceiling integers (table 7.2/7.4). BE_EVID_02/15 assert the exact Q8 value;
@@ -1878,8 +1910,8 @@ def main():
     if not enumerated:
         sys.exit("FATAL: no enumerated BE-GRANT-03 checks found in SPEC")
     if not modelled.issubset(set(enumerated)):
-        sys.exit(f"FATAL: grant modelled set {sorted(modelled)} not a subset of "
-                 f"enumerated {enumerated} (SPEC/conformance drift)")
+        sys.exit(f"FATAL: grant modelled set {sorted(str(x) for x in modelled)} not a subset of "
+                 f"enumerated {sorted(str(x) for x in enumerated)} (SPEC/conformance drift)")
     evidence_props = evidence_properties_from_spec()
     if not evidence_props:
         sys.exit("FATAL: no evidence properties detected in section 7 of SPEC")
@@ -1935,7 +1967,7 @@ def main():
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
-    print(f"  grant modelled by this slice:  {sorted(modelled)} ({len(modelled)})")
+    print(f"  grant modelled by this slice:  {sorted(str(x) for x in modelled)} ({len(modelled)})")
     print(f"  BE-GRANT-03b callback:         call-boundary property modelled")
     print(f"  section-7 evidence properties: {sorted(evidence_props)} ({len(evidence_props)})")
     print(f"  section-4 transport properties: {sorted(transport_props)} ({len(transport_props)})")
@@ -2086,7 +2118,7 @@ def main():
         run = [r for r in results if r["domain"] == dom and not r["skipped"]]
         killed_keys = {r["key"] for r in run if r["killed"]}
         survivors = [r["name"] for r in run if not r["killed"]]
-        uncovered = sorted(set(keys) - killed_keys)
+        uncovered = sorted(str(x) for x in (set(keys) - killed_keys))
         cb = callback_key in killed_keys if callback_key is not None else True
         return run, survivors, uncovered, cb
 
