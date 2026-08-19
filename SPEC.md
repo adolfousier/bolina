@@ -1850,6 +1850,33 @@ interleavings. Mutation testing samples the space; a model checker covers it. Un
 Under D-067, BE-GRANT-03b's frame ends when the effect starts: that effect start is the normative
 `APPROVED -> EXECUTING` transition, while `beginExecuting` is its later durable bookkeeping witness.
 
+BE-GRANT-06 (revocation, checks 3-4, D-064) is projected in `Bolina.tla` as `RevokeGrant`: a
+pending or approved intent transitions to "revoked" and releases the resource lock. The
+`RevokedGrantsNeverExecute` invariant asserts that revoked grants never reach executing, executed, or
+failed. `RevokeGrant` is listed in `UNOBSERVED_ACTIONS` because no Zig observation point for
+revocation exists yet; the model verifies the property in the abstract.
+
+The trace conformance bridge (`model/conformance/`) projects `bolina.grant-trace.v1` events onto
+TLA+ actions through a checked binding table. Twelve Phase A fixtures exercise the projector: five
+ACCEPTED (normal execution, two independent resources, resource conflict, verification refusal,
+replay refusal), five NONCONFORMANT (effect before consume, duplicate effect, effect without all
+checks, witness-as-authorization, consume before check 10), and two structural rejections (reordered
+events, identifier remap). CI runs TLC on every generated trace module.
+
+*Sealed (D-083, 2026-08-18), with a shared-authorship disclaimer. The TLA+ model and the Zig
+implementation share an author: the model was written from the implementation and checked against it.
+The claim is therefore self-consistent, not independently verified. The model checks that the
+implementation's traced behavior is admitted by the model the same author wrote. This is real
+evidence (a second description with a different execution engine and a different language), but it is
+not independence. The adversarial evaluation (§11.5, sealed D-079) and the mutation testing (§11.2,
+155/155 mutants killed) provide independent pressure that the model's assumptions are not merely
+self-reinforcing, but they do not substitute for a model written by someone who did not write the
+implementation. F-01 (empty-prune guard deadlock) resolved by relaxing the `PruneWriteTemp` guard
+(D-083 ruling 3): an empty prune is a legal no-op cycle faithful to the implementation. What this
+seal does NOT claim: that the implementation is correct in general; that unobserved executions
+conform; that the binding table captures every linearization point (two remain unbound:
+`FinishExecuted`/`FinishFailed` and `RecoverPublishInterrupted`).*
+
 ### 11.5 Adversarial evaluation, scored on both sides (R2)
 
 A model with mesh access, instructed and incentivized to obtain an effect without a valid Grant —

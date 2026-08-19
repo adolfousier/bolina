@@ -3,7 +3,7 @@
 (* Bounded semantic projection of the Bolina SPEC section 8 grant path.    *)
 (*                                                                         *)
 (* Source: 492f0e31009bcb905e309de5572a2d25dee793bf                       *)
-(* Decisions: D-061, D-063, D-067, D-072                                  *)
+(* Decisions: D-061, D-063, D-064, D-067, D-072                          *)
 (*                                                                         *)
 (* D-067 is load-bearing: EffectStart atomically establishes normative     *)
 (* EXECUTING and records the only action-effect attempt. The later         *)
@@ -33,7 +33,7 @@ Resources == {ResourceA, ResourceB}
 
 IntentStates == {
     "absent", "pending", "approved", "executing",
-    "executed", "failed", "expired", "rejected"
+    "executed", "failed", "expired", "rejected", "revoked"
 }
 
 PCNone == 13
@@ -102,12 +102,14 @@ Init ==
         prePruneLedger |-> {},
         candidateLedger |-> {},
         recoverableOrphans |-> {},
+        revokedGrants |-> {},
         normalExecutionSeen |-> FALSE,
         independentResourcesSeen |-> FALSE,
         conflictRefusalSeen |-> FALSE,
         restartClearedVolatileSeen |-> FALSE,
         orphanRecoverySeen |-> FALSE,
-        expirySeen |-> FALSE
+        expirySeen |-> FALSE,
+        revocationSeen |-> FALSE
         ]
 
 ReceiveIntent(i, r) ==
@@ -146,6 +148,7 @@ BeginVerify(i) ==
     LET g == GrantOf(i) IN
     /\ state.processUp
     /\ IntentState[i] = "pending"
+    /\ g \notin state.revokedGrants
     /\ Acceptable(g)
     /\ g \notin StableConsumed
     /\ IntentResource[i] \in Resources
@@ -171,6 +174,7 @@ CommitConsumedCheck11(i) ==
     /\ state.prunePhase = "idle"
     /\ IntentState[i] = "approved"
     /\ VerificationPC[i] = 11
+    /\ g \notin state.revokedGrants
     /\ IntentResource[i] \in Resources
     /\ LockOwner[IntentResource[i]] = i
     /\ g \notin StableConsumed
@@ -187,6 +191,7 @@ EffectStart(i) ==
     /\ IntentState[i] = "approved"
     /\ VerificationPC[i] = 12
     /\ g \in StableConsumed
+    /\ g \notin state.revokedGrants
     /\ EffectCount[g] = 0
     /\ IntentResource[i] \in Resources
     /\ LockOwner[IntentResource[i]] = i
@@ -292,7 +297,6 @@ ExpirePending(i) ==
 PruneWriteTemp ==
     /\ state.processUp
     /\ state.prunePhase = "idle"
-    /\ StableConsumed /= {}
     /\ state' = [state EXCEPT
         !.prePruneLedger = StableConsumed,
         !.candidateLedger = {g \in StableConsumed : Acceptable(g)},
@@ -319,6 +323,22 @@ PruneReopen ==
         !.prunePhase = "idle",
         !.prePruneLedger = {},
         !.candidateLedger = {}
+        ]
+
+RevokeGrant(i) ==
+    LET r == IntentResource[i] IN
+    LET g == GrantOf(i) IN
+    /\ state.processUp
+    /\ IntentState[i] \in {"pending", "approved"}
+    /\ g \notin state.revokedGrants
+    /\ state' = [state EXCEPT
+        !.intentState = [@ EXCEPT ![i] = "revoked"],
+        !.lockOwner = IF r \in Resources /\ LockOwner[r] = i
+                      THEN [@ EXCEPT ![r] = NoIntent] ELSE LockOwner,
+        !.intentResource = [@ EXCEPT ![i] = NoResource],
+        !.verificationPC = [@ EXCEPT ![i] = PCNone],
+        !.revokedGrants = @ \cup {g},
+        !.revocationSeen = TRUE
         ]
 
 CrashLedgerOptions ==
@@ -411,6 +431,7 @@ Next ==
     \/ PruneSyncTemp
     \/ PruneRename
     \/ PruneReopen
+    \/ \E i \in Intents : RevokeGrant(i)
     \/ Crash
     \/ Restart
     \/ \E g \in Grants : RecoverPublishInterrupted(g)
@@ -448,12 +469,14 @@ TypeOK ==
     /\ state.prePruneLedger \subseteq Grants
     /\ state.candidateLedger \subseteq Grants
     /\ state.recoverableOrphans \subseteq Grants
+    /\ state.revokedGrants \subseteq Grants
     /\ state.normalExecutionSeen \in BOOLEAN
     /\ state.independentResourcesSeen \in BOOLEAN
     /\ state.conflictRefusalSeen \in BOOLEAN
     /\ state.restartClearedVolatileSeen \in BOOLEAN
     /\ state.orphanRecoverySeen \in BOOLEAN
     /\ state.expirySeen \in BOOLEAN
+    /\ state.revocationSeen \in BOOLEAN
 
 CommitBeforeEffect ==
     \A g \in Grants :
@@ -521,11 +544,25 @@ RecoveryNeverRetriesActionEffect ==
 NoCommitBeforeCheck10 ==
     \A g \in EverCommitted : state.committedAfterChecks[g]
 
+\* BE-GRANT-06 (D-064): a revoked grant never reaches executing, executed,
+\* or failed. The RevokeGrant action transitions the intent to "revoked"
+\* and the guards on CommitConsumedCheck11 and EffectStart prevent any
+\* further progress. Checks 3-4 of the grant path are the implementation's
+\* revocation gate.
+RevokedGrantsNeverExecute ==
+    \A i \in Intents :
+        IntentState[i] = "revoked" =>
+            /\ EffectCount[GrantOf(i)] = 0
+            /\ GrantOf(i) \notin StableConsumed
+            /\ GrantOf(i) \notin StablePublished
+            /\ ~state.validExecutingEntry[i]
+
 W01NormalExecution == state.normalExecutionSeen
 W02IndependentResources == state.independentResourcesSeen
 W03ConflictRefusal == state.conflictRefusalSeen
 W04RestartClearsVolatile == state.restartClearedVolatileSeen
 W05OrphanRecovery == state.orphanRecoverySeen
 W06PendingExpiry == state.expirySeen
+W07Revocation == state.revocationSeen
 
 =============================================================================

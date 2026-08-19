@@ -100,6 +100,7 @@ UNOBSERVED_ACTIONS = {
     "Crash": "harness-owned process epoch boundary",
     "Restart": "harness-owned process epoch boundary",
     "ObserveIndependentResources": "model-internal observation, no implementation counterpart",
+    "RevokeGrant": "BE-GRANT-06 revocation gate (checks 3-4); no Zig observation point yet",
 }
 
 # Which JSON identity fields each tag is allowed to carry. The projector

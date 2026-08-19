@@ -11,8 +11,14 @@ Sections refer to `ZIG-TLA-CONFORMANCE-BRIEF.md`.
 
 ## F-01: the model does not admit an empty prune, the implementation performs one
 
-**Status:** open, needs a ruling. Blocks the Phase A "normal grant execution
-through EffectReturn" case.
+**Status:** resolved (option 1). Blocks the Phase A "normal grant execution
+through EffectReturn" case until resolved; now unblocked.
+
+**Resolution.** Guard relaxed: `StableConsumed /= {}` dropped from
+`PruneWriteTemp` so an empty prune is a legal no-op cycle (prePruneLedger
+and candidateLedger both empty). Faithful to the implementation, which
+performs the full D-063 atomic rename regardless of ledger contents.
+D-083, model-check green, first-grant path admissible.
 
 **Implementation.** `GrantLedger.commitConsumed` runs `pruneExpired` before
 every append (D-061 ruling 4, to bound the log). On the first grant against a

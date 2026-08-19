@@ -1,0 +1,60 @@
+{
+  "schema": "bolina.grant-trace.v1",
+  "case": "a11_reordered_events",
+  "intent": "duplicate sequence number in the trace is rejected as INVALID_TRACE",
+  "expect": "INVALID_TRACE",
+  "events": [
+    {
+      "schema": "bolina.grant-trace.v1",
+      "sequence": 0,
+      "process_epoch": 0,
+      "event": "receive_intent",
+      "check": null,
+      "intent_id": "i-alpha",
+      "grant_id": null,
+      "resource_id": "r-logs-deploy",
+      "ledger_id": null,
+      "pc": null,
+      "previous_event_sha256": null
+    },
+    {
+      "schema": "bolina.grant-trace.v1",
+      "sequence": 1,
+      "process_epoch": 0,
+      "event": "begin_verify",
+      "check": null,
+      "intent_id": "i-alpha",
+      "grant_id": "g-live",
+      "resource_id": null,
+      "ledger_id": null,
+      "pc": null,
+      "previous_event_sha256": "e1f1c9558939b340f5111cdf884b464bbdb372934d25d74a773804487fdb89c7"
+    },
+    {
+      "schema": "bolina.grant-trace.v1",
+      "sequence": 2,
+      "process_epoch": 0,
+      "event": "verify_check",
+      "check": 0,
+      "intent_id": null,
+      "grant_id": "g-live",
+      "resource_id": null,
+      "ledger_id": null,
+      "pc": 0,
+      "previous_event_sha256": "a20be1a413e228ba7aab56b9905fd5b1a0541996fb90f0cbec4c68f075ab521d"
+    },
+    {
+      "schema": "bolina.grant-trace.v1",
+      "sequence": 2,
+      "process_epoch": 0,
+      "event": "verify_check",
+      "check": 1,
+      "intent_id": null,
+      "grant_id": "g-live",
+      "resource_id": null,
+      "ledger_id": null,
+      "pc": 1,
+      "previous_event_sha256": "7fbc48edd9c7e8efb8dfc272f88c6d4e0e27cc3d02f72007c7f3387b490b5838"
+    }
+  ]
+}

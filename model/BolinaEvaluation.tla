@@ -13,6 +13,7 @@ W03NotReached == ~W03ConflictRefusal
 W04NotReached == ~W04RestartClearsVolatile
 W05NotReached == ~W05OrphanRecovery
 W06NotReached == ~W06PendingExpiry
+W07NotReached == ~W07Revocation
 
 M01EffectBeforeConsume(i) ==
     LET g == GrantOf(i) IN

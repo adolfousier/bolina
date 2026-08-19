@@ -1421,3 +1421,52 @@ gauntlet must capture the failing test names before any receipt is cited.
 Reversible: drop `id2`, `emit2` and the three emit-site changes. What would
 reopen this ruling: a Phase A case that needs a third identity per event, or a
 projector that cannot attribute grant-path events from `begin_verify` alone.
+
+## D-083: §11.4 seal with shared-authorship disclaimer
+
+**Date:** 2026-08-18
+**Status:** enacted
+**Reversible:** no (the disclaimer is permanent once recorded)
+
+**Ruling 1 - self-consistent, not independently verified.** The TLA+ model
+(`model/Bolina.tla`) and the Zig implementation share an author. The §11.4
+claim is therefore downgraded from "independently verified" to
+"self-consistent": the model checks that the implementation's traced behavior
+is admitted by the model the same author wrote. This is real evidence (a
+second description with a different execution engine), but it is not
+independence. The seal text records this plainly so a future reader can
+evaluate the claim's actual strength.
+
+**Ruling 2 - BE-GRANT-06 projection included.** Revocation (checks 3-4,
+D-064) is now projected in `Bolina.tla` as `RevokeGrant`, an action that
+transitions pending or approved intents to "revoked" and releases the resource
+lock. The `RevokedGrantsNeverExecute` invariant asserts that revoked grants
+never reach executing, executed, or failed. `RevokeGrant` is listed in
+`UNOBSERVED_ACTIONS` because no Zig observation point for revocation exists
+yet; the model verifies the property in the abstract.
+
+**Ruling 3 - F-01 resolved.** The `PruneWriteTemp` guard `StableConsumed /= {}`
+dropped: an empty prune is a legal no-op cycle faithful to the implementation,
+which performs the full D-063 atomic rename regardless of ledger contents.
+The first-grant path (fresh ledger, empty consumed set) is now admissible.
+
+**Ruling 4 - trace conformance bridge.** Twelve Phase A fixtures
+(`model/conformance/fixtures/`) exercise the trace projector
+(`model/conformance/project.py`) through the binding table
+(`model/conformance/binding.py`) against `Bolina.tla`. Five ACCEPTED cases
+(normal execution, two resources, resource conflict, verification refusal,
+replay refusal), five NONCONFORMANT cases (effect before consume, duplicate
+effect, effect without all checks, witness as auth, consume before check 10),
+two structural rejection cases (reordered events, identifier remap). CI runs
+TLC on every generated trace module.
+
+**Evidence.** `model/Bolina.tla`, `model/Bolina.cfg`, `model/conformance/`
+(projector, binding, fixtures, runner), `.github/workflows/model-check.yml`
+(TLC + conformance jobs). TLC base model check and12 conformance cases
+pending CI on this commit.
+
+What this is NOT: a proof that the implementation is correct. A self-consistent
+model can agree with a buggy implementation if both share the same
+misunderstanding. The adversarial evaluation (§11.5, sealed D-079) and the
+mutation testing (§11.2, 155/155) provide independent pressure that the
+model's assumptions are not merely self-reinforcing.
