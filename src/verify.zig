@@ -432,8 +432,8 @@ fn scopeCoversResource(cert: parser.session.Cert, resource_id: []const u8) bool 
         // Find the previous '/' to strip the last segment.
         var new_end = end;
         while (new_end > 0 and resource_id[new_end - 1] != '/') new_end -= 1;
-        if (new_end == end) break; // No '/' found, cannot strip further.
-        end = new_end;
+        if (new_end == 0) break; // No '/' found, cannot strip further.
+        end = new_end - 1; // Exclude the '/' itself from the next prefix.
     }
     return false;
 } 

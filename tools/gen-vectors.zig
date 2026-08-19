@@ -214,8 +214,6 @@ pub fn main(init: std.process.Init) !void {
     const agent = try makeIdentity("agent", 0x81, 0x82, 0x03);
 
     // Derived shared values.
-    const scope_name = "bolina-core";
-    const scope_id = blake2s(scope_name)[0..8].*;
     const resource_id = blk: {
         var buf: [256]u8 = undefined;
         const fp = blake2s(&executor.sig_pubkey)[0..8].*;
@@ -229,6 +227,12 @@ pub fn main(init: std.process.Init) !void {
     };
     defer a.free(resource_id);
 
+    // D-085: scope_id = BLAKE2s(org_prefix)[0..8] where org_prefix is the
+    // resource path up to the first '/'. scopeCoversResource walks ancestor
+    // prefixes hashing each; this ensures the grant's resource is in scope.
+    const org_prefix = resource_id[0..std.mem.indexOf(u8, resource_id, "/").?];
+    const scope_id = blake2s(org_prefix)[0..8].*;
+
     const intent_id: [16]u8 = seedFrom(0x01)[0..16].*;
     const grant_id: [16]u8 = seedFrom(0x11)[0..16].*;
     const span_id: [16]u8 = seedFrom(0x21)[0..16].*;
@@ -241,7 +245,7 @@ pub fn main(init: std.process.Init) !void {
     // ---- CERT: agent identity, signed by ca1 and ca2 (ascending ca_key) ----
     var cert_tbs = Alist.empty;
     defer cert_tbs.deinit(a);
-    try putU8(&cert_tbs, a, 2);
+    try putU8(&cert_tbs, a, 3); // version = 3 (D-085: enables scope checks)
     try putU8(&cert_tbs, a, agent.role_bits);
     try putFixed(&cert_tbs, a, &agent.sig_pubkey);
     try putFixed(&cert_tbs, a, &agent.kex_pubkey);
@@ -540,12 +544,12 @@ pub fn main(init: std.process.Init) !void {
 
     // cert
     try w(&j, a, "\"cert\":{");
-    try fStr(&j, a, "desc", "Agent identity cert, version 2, signed by two CAs in ascending ca_key order. TBS is all bytes preceding ca_sig_count.");
+    try fStr(&j, a, "desc", "Agent identity cert, version 3, signed by two CAs in ascending ca_key order. TBS is all bytes preceding ca_sig_count.");
     try sep(&j, a);
     try fStr(&j, a, "domain_tag", "01");
     try sep(&j, a);
     try w(&j, a, "\"fields\":{");
-    try fU8(&j, a, "version", 2);
+    try fU8(&j, a, "version", 3);
     try sep(&j, a);
     try fStr(&j, a, "role_bits", "0x03(participant+agent)");
     try sep(&j, a);

@@ -165,6 +165,89 @@ pub fn buildCertInto(
 }
 
 // ---------------------------------------------------------------------------
+// buildCertScopedInto: like buildCertInto but the caller controls version and
+// scope_ids. Used by scope-binding tests (D-085, checks 3a / 4a).
+// scope_ids is the raw concatenation of 8-byte scope prefixes;
+// scope_count is derived from scope_ids.len / LEN_SCOPE_ID.
+// ---------------------------------------------------------------------------
+pub fn buildCertScopedInto(
+    wire: []u8,
+    sig_pubkey: [32]u8,
+    role_bits: u8,
+    ca_prefixes: []const u8,
+    not_before: u64,
+    not_after: u64,
+    version: u8,
+    scope_ids: []const u8,
+) parser.session.Cert {
+    const ca_count: u8 = @intCast(ca_prefixes.len);
+    const scope_count: u8 = @intCast(scope_ids.len / parser.session.LEN_SCOPE_ID);
+
+    var kps: [4]Ed.KeyPair = undefined;
+    var pubs: [4][32]u8 = undefined;
+    for (0..ca_count) |i| {
+        kps[i] = keypair(ca_prefixes[i]);
+        pubs[i] = Ed.PublicKey.toBytes(kps[i].public_key);
+    }
+    var a: usize = 0;
+    while (a < ca_count) : (a += 1) {
+        var b_idx: usize = a + 1;
+        while (b_idx < ca_count) : (b_idx += 1) {
+            if (std.mem.order(u8, &pubs[b_idx], &pubs[a]) == .lt) {
+                const tk = kps[a];
+                kps[a] = kps[b_idx];
+                kps[b_idx] = tk;
+                const tp = pubs[a];
+                pubs[a] = pubs[b_idx];
+                pubs[b_idx] = tp;
+            }
+        }
+    }
+
+    var n: usize = 0;
+    wire[n] = version;
+    n += 1;
+    wire[n] = role_bits;
+    n += 1;
+    @memcpy(wire[n..][0..32], &sig_pubkey);
+    n += 32;
+    @memcpy(wire[n..][0..32], &seedFrom(0x4b));
+    n += 32;
+    var bb: [8]u8 = undefined;
+    std.mem.writeInt(u64, &bb, not_before, .big);
+    @memcpy(wire[n..][0..8], &bb);
+    n += 8;
+    std.mem.writeInt(u64, &bb, not_after, .big);
+    @memcpy(wire[n..][0..8], &bb);
+    n += 8;
+    wire[n] = 0;
+    wire[n + 1] = 0;
+    n += 2;
+    wire[n] = scope_count;
+    n += 1;
+    @memcpy(wire[n..][0..scope_ids.len], scope_ids);
+    n += scope_ids.len;
+    const tbs_len = n;
+    const tbs = wire[0..tbs_len];
+
+    wire[n] = ca_count;
+    n += 1;
+    var k: usize = 0;
+    while (k < ca_count) : (k += 1) {
+        @memcpy(wire[n..][0..32], &pubs[k]);
+        n += 32;
+        var msg: [1 + 512]u8 = undefined;
+        msg[0] = DOMAIN_CERT;
+        @memcpy(msg[1..][0..tbs_len], tbs);
+        const sig = Ed.KeyPair.sign(kps[k], msg[0 .. 1 + tbs_len], null) catch unreachable;
+        @memcpy(wire[n..][0..64], &(Ed.Signature.toBytes(sig)));
+        n += 64;
+    }
+
+    return parser.session.parseCert(wire[0..n]) catch unreachable;
+}
+
+// ---------------------------------------------------------------------------
 // Canonical fixtures: the approver cert (ROLE_APPROVER, quorum-2), the subject
 // cert (ROLE_AGENT), and the trusted-CA set. Built lazily into module-level
 // buffers the first time an accessor runs (see the Zig 0.16 note above).

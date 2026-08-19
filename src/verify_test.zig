@@ -508,6 +508,116 @@ test "BE_GRANT_03 check 4 subject cert without agent role refused" {
     try std.testing.expectEqual(@as(usize, 0), effect_calls);
 }
 
+// ---------------------------------------------------------------------------
+// D-085 scope binding (checks 3a and 4a). A v3 cert carries scope_ids;
+// scopeCoversResource walks ancestor prefixes hashing each and checking
+// against the cert's scope_ids. Check 3a gates on the approver cert, check
+// 4a gates on the subject cert. v2 certs skip these checks entirely (version
+// guard). Positive: cert v3 with scope covering the resource's org prefix
+// grants access. Negative: cert v3 with a sibling scope refuses.
+// ---------------------------------------------------------------------------
+
+// Compute scope_id = BLAKE2s(prefix)[0..8] at runtime.
+fn scopeIdOf(prefix: []const u8) [8]u8 {
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.blake2.Blake2s256.hash(prefix, &hash, .{});
+    return hash[0..8].*;
+}
+
+test "BE_GRANT_03 check 3a v3 cert with scope covering resource is accepted" {
+    // scope_id derived from the resource's org prefix (everything before the
+    // first '/'). scopeCoversResource walks ancestors and hashes each; this
+    // scope_id matches the org-level ancestor.
+    const org_prefix = cth.RESOURCE_ID[0..std.mem.indexOf(u8, cth.RESOURCE_ID, "/").?];
+    const covering_scope = scopeIdOf(org_prefix);
+
+    var appr_wire: [512]u8 = undefined;
+    const scoped_appr = cth.buildCertScopedInto(
+        &appr_wire,
+        cth.APPROVER_PUB,
+        binding.ROLE_APPROVER,
+        &[_]u8{ 0xc0, 0xc1 },
+        cth.PRIVILEGED_CERT_NOT_BEFORE,
+        cth.PRIVILEGED_CERT_NOT_AFTER,
+        3, // version 3: scope checks fire
+        &covering_scope,
+    );
+    var subj_wire: [512]u8 = undefined;
+    const scoped_subj = cth.buildCertScopedInto(
+        &subj_wire,
+        cth.SUBJECT_PUB,
+        binding.ROLE_AGENT,
+        &[_]u8{0xc2},
+        cth.CERT_NOT_BEFORE,
+        cth.CERT_NOT_AFTER,
+        3,
+        &covering_scope,
+    );
+
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    ctx.approver_cert = scoped_appr;
+    ctx.subject_cert = scoped_subj;
+    resetEffect();
+    _ = try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
+    try std.testing.expectEqual(@as(usize, 1), effect_calls);
+}
+
+test "BE_GRANT_03 check 3a v3 approver cert with non-covering scope is refused" {
+    // A sibling scope: "bol:other_org" is not an ancestor of the resource.
+    const sibling_scope = scopeIdOf("bol:other_org");
+
+    var appr_wire: [512]u8 = undefined;
+    const scoped_appr = cth.buildCertScopedInto(
+        &appr_wire,
+        cth.APPROVER_PUB,
+        binding.ROLE_APPROVER,
+        &[_]u8{ 0xc0, 0xc1 },
+        cth.PRIVILEGED_CERT_NOT_BEFORE,
+        cth.PRIVILEGED_CERT_NOT_AFTER,
+        3,
+        &sibling_scope,
+    );
+
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    ctx.approver_cert = scoped_appr;
+    // subject cert stays v2 (scope checks skipped for v2)
+    resetEffect();
+    try std.testing.expectError(error.ApproverOutOfScope, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
+test "BE_GRANT_03 check 4a v3 subject cert with non-covering scope is refused" {
+    const sibling_scope = scopeIdOf("bol:other_org");
+
+    var subj_wire: [512]u8 = undefined;
+    const scoped_subj = cth.buildCertScopedInto(
+        &subj_wire,
+        cth.SUBJECT_PUB,
+        binding.ROLE_AGENT,
+        &[_]u8{0xc2},
+        cth.CERT_NOT_BEFORE,
+        cth.CERT_NOT_AFTER,
+        3,
+        &sibling_scope,
+    );
+
+    const grant_bytes = decodeHex(GRANT_HEX);
+    const grant = try parser.channel.parseGrant(&grant_bytes);
+    const env = grantEnvelope(grant);
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    ctx.subject_cert = scoped_subj;
+    // approver cert stays v2 (scope checks skipped for v2)
+    resetEffect();
+    try std.testing.expectError(error.SubjectOutOfScope, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+}
+
 test "BE_GRANT_03 check 6 subject not the pending intent sender refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
     const grant = try parser.channel.parseGrant(&grant_bytes);
