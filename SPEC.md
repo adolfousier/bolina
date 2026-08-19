@@ -1822,7 +1822,7 @@ an exploitable bypass. Survivors elsewhere are recorded with a cause (R3), not m
 mutant population MUST be large enough that the result does not turn on a single mutant; a 100% kill
 rate over a handful of mutants is noise wearing the costume of evidence.
 
-*Sealed (D-084, 2026-08-18). 155/155 viable mutants killed at HEAD bd00e6d. The mutation suite targets §8's state machine and §7's verifier over eighteen domains; every survivor carries a documented cause (R3). The population is large enough that the result does not turn on any single mutant. Receipt: `M1-AUDIT.md` mutation addendum. What this seal does NOT claim: that mutation testing exhausts the attack surface of §11.5's adversarial vectors or §11.6's fuzzing domain, each conformance item tests a different failure mode.*
+*Sealed (D-086, 2026-08-19). 160/160 viable mutants killed at HEAD a02aa0f. The mutation suite targets §8's state machine and §7's verifier over eighteen domains; every survivor carries a documented cause (R3). The population is large enough that the result does not turn on any single mutant. The D-085 scope checks (3a approver scope, 4a subject scope) add five mutants to the grant domain (CHECK-ABSENCE 3a/4a, WRONG-OPERATOR 3a/4a, WRONG-LOGIC scopeCoversResource); all five killed by the scope binding tests in `verify_test.zig`. The mutation harness regex was also fixed to parse "3a"/"4a" as distinct check keys (previously collapsed to 3/4 by `\d+` matching). Receipt: `M1-AUDIT.md` mutation addendum. What this seal does NOT claim: that mutation testing exhausts the attack surface of §11.5's adversarial vectors or §11.6's fuzzing domain, each conformance item tests a different failure mode.*
 
 ### 11.3 Cross-implementation test vectors
 

@@ -731,6 +731,35 @@ closeout are unchanged: the 24-hour soak is deferred for want of dedicated
 compute, §11.4 model checking is in progress with an external contributor, and
 §11.5 adversarial evaluation against a real model has not been run.
 
+## D-086 scope mutation addendum (2026-08-19)
+
+The D-085 resource-scope work (cert v3, checks 3a/4a) adds five mutants to
+the grant domain, bringing the total from 155 to 160 across eighteen domains.
+The five new mutants target `src/verify.zig`:
+
+| ID | Type | Check | Anchor |
+|----|------|-------|--------|
+| grant/3a | CHECK-ABSENCE | 3a approver scope never enforced | `if (ctx.approver_cert.version >= 3 and !scopeCoversResource(...))` |
+| grant/3a | WRONG-OPERATOR | 3a version gate `>=3` -> `>3` | same line |
+| grant/4a | CHECK-ABSENCE | 4a subject scope never enforced | `if (ctx.subject_cert.version >= 3 and !scopeCoversResource(...))` |
+| grant/4a | WRONG-OPERATOR | 4a version gate `>=3` -> `>3` | same line |
+| grant/3a | WRONG-LOGIC | `scopeCoversResource` match inverted | `if (certCarriesScope(cert, hash[0..8])) return true;` |
+
+The mutation harness regex in `modelled_checks_from_spec()` was also fixed:
+`\d+` collapsed "3a"/"4a" into 3/4, making the scope checks invisible to the
+denominator. Updated to `\d+[a-z]?` so the conformance sentence "models checks
+0, 1, 2, 3, 3a, 4, 4a, 5, 6, 7, 8, 9, 10 and 11" parses to 14 modelled
+checks (was 12). Three `sorted()` calls fixed for mixed int/string keys.
+
+Grant domain run: 22/22 killed (17 existing + 5 new scope mutants), zero
+survivors. The three scope tests in `verify_test.zig` (positive scope accepted,
+approver non-covering scope refused, subject non-covering scope refused) kill
+all five. Receipt: `logs/mutation_grant_scope.log` (inline output captured
+2026-08-19, HEAD a02aa0f).
+
+No M1 marker changes: the scope checks are covered by the existing BE-GRANT-03
+marker (114/114, high water 114). M2 reads 160/160 killed.
+
 ## First nightly soak addendum (2026-08-15)
 
 The §11.6 soak schedule activated by D-070 fired for the first time at 03:44

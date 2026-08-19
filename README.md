@@ -7,7 +7,7 @@ message.**
 > jamming. Náutico like the rest of the family (Prumo, Caravela, Nau, Orbit), six letters, ASCII.
 > Change it in one line if you have better.
 
-**Status:** v0.3.9 closed and sealed. Eight §11 conformance items produce evidence and carry seal
+**Status:** v0.4.0-draft (open). Eight §11 conformance items produce evidence and carry seal
 paragraphs; every ruling names its receipt. The M1 milestone is built in Zig, held by mechanical
 gates, and the model checking (§11.4), adversarial evaluation (§11.5), fuzzing (§11.6), mutation
 testing (§11.2), test vectors (§11.3), bijection (§11.1), zero-deps (§11.7), and measured build
@@ -28,7 +28,7 @@ ambition is unchanged by saying out loud which parts have been measured.
 
 ## Implementation status
 
-v0.3.9, in Zig 0.16.0, built `ReleaseSafe` with no optimisation flag exposed. `tools/prumo-verify`
+v0.4.0-draft, in Zig 0.16.0, built `ReleaseSafe` with no optimisation flag exposed. `tools/prumo-verify`
 prints every gate on every run and returns non-zero if an enforced one fails.
 
 | Measure | Value | Gate |
@@ -36,7 +36,7 @@ prints every gate on every run and returns non-zero if an enforced one fails.
 | BE-\* items bound to a named test | 114 of 114 declared, high-water ratchet at 114 | M1, enforced |
 | Test vectors cross-verified (Zig against Python `cryptography`) | 77 passed, 0 failed | M3, enforced |
 | Differential fuzz divergences (production parser against an independent Python reference) | 0 divergences, 72 of 72 parser exit points reached (gate 20,000; extended 1,000,000; nightly soak 5 seeds x 1,000,068 records, 0 divergences, 72/72) | M4, enforced; SPEC §11.6 sealed (D-075) |
-| Mutants killed by the test suite | 155 of 155 | M2, measured but **not** wired into the exit code |
+| Mutants killed by the test suite | 160 of 160 | M2, measured but **not** wired into the exit code |
 | Pre-authentication attack surface | 1492 of 1500 lines | M5, enforced |
 | Post-authentication attack surface | 1477 of 1500 lines | M11, enforced |
 | Parser exit points with a matching `Branch` member | 72 of 72, zero raw error returns | M9, enforced |

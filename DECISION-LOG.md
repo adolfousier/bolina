@@ -1520,3 +1520,25 @@ model's assumptions are not merely self-reinforcing.
 **Reversible:** Rulings 1-5 revert if the encoding changes before anything is deployed. Since nothing is deployed, this is the cheapest time to reverse.
 
 **Evidence.** SCOPE-ESTIMATE.md (design doc, bf6e52a), D-080 (residual acceptance), D-069 (scoping, SEM_S4 ordering), D-049 (distinct error classes), D-052 (compaction precedent), D-039 (conformance sentence lesson).
+
+## D-086 - 2026-08-19 - v0.4.0-draft closeout: scope sealed, mutation receipt bumped
+
+**Date:** 2026-08-19
+**Decision:** Close v0.4.0-draft open items. Seal the D-085 scope checks (3a, 4a) under the mutation receipt; update M2 from 155/155 to 160/160.
+**Reasoning:** The D-085 resource-scope work is mechanically complete across all vectors: spec (c4d4d3a), parser (cert v3, scope_count/scope_ids), verify (checks 3a/4a with ancestor walk), vectors (77/77 Python cross-verified), binding tests (3 new tests in verify_test.zig), and mutation coverage (5 new scope mutants, all killed). The mutation harness regex was a latent bug: `\d+` in `modelled_checks_from_spec()` collapsed "3a"/"4a" to 3/4, making the scope checks invisible to the denominator. Fixed to `\d+[a-z]?`, denominator reads 14 modelled checks (was 12).
+
+**Ruling 1 - Mutation receipt bumped.** 155/155 at bd00e6d (D-084) becomes 160/160 at a02aa0f. Five new grant-domain mutants: CHECK-ABSENCE 3a, CHECK-ABSENCE 4a, WRONG-OPERATOR 3a, WRONG-OPERATOR 4a, WRONG-LOGIC scopeCoversResource. All killed by the three scope binding tests.
+
+**Ruling 2 - Harness regex fix is part of the seal.** The `\d+` → `\d+[a-z]?` fix in `modelled_checks_from_spec()` and `enumerated_checks_from_spec()` is not a cosmetic edit: without it, the denominator under-counts by 2 and the gate would pass with 2 fewer mutants than it should. The fix is committed in the same tree as the mutants it defends.
+
+**Ruling 3 - No M1 ratchet change.** The scope checks are covered by the existing BE-GRANT-03 marker (114/114, high water 114). No new BE-* marker was declared for scope: checks 3a and 4a are sub-checks of BE-GRANT-03, not standalone obligations.
+
+**Ruling 4 - v0.4.0-draft remains open.** The draft is not closed and sealed because the wire format change (cert v3) has not been deployed or audited beyond mechanical gates. The mutation receipt seals the mechanical evidence; the draft stays open until the owner closes it.
+
+**What this seals.** The D-085 scope checks are mechanically defended by mutation testing. The grant domain's14 modelled checks (0-11 + 3a + 4a) each have at least one killed mutant. The conformance sentence in SPEC §8.2 matches the code and the harness.
+
+**What this does NOT seal.** The full mutation suite across all domains was not re-run end-to-end; only the grant domain chunk was executed (D-035: chunked runs, each domain fits under the tool-timeout ceiling). The other seventeen domains are unchanged since the D-084 seal at155/155.
+
+**Reversible:** The five new mutants and the regex fix revert if the scope encoding changes. Nothing depends on them outside the mutation harness and verify_test.zig.
+
+**Evidence.** Mutation-test.py grant domain output (22/22 killed, HEAD a02aa0f), prumo-verify M3 PASS, zig build test 385/392 pass 7 skip 0 fail.
