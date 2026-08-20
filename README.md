@@ -7,7 +7,7 @@ message.**
 > jamming. Náutico like the rest of the family (Prumo, Caravela, Nau, Orbit), six letters, ASCII.
 > Change it in one line if you have better.
 
-**Status:** v0.4.0-draft (open). Eight §11 conformance items produce evidence and carry seal
+**Status:** v0.4.0 (closed and sealed). Eight §11 conformance items produce evidence and carry seal
 paragraphs; every ruling names its receipt. The M1 milestone is built in Zig, held by mechanical
 gates, and the model checking (§11.4), adversarial evaluation (§11.5), fuzzing (§11.6), mutation
 testing (§11.2), test vectors (§11.3), bijection (§11.1), zero-deps (§11.7), and measured build
@@ -28,7 +28,7 @@ ambition is unchanged by saying out loud which parts have been measured.
 
 ## Implementation status
 
-v0.4.0-draft, in Zig 0.16.0, built `ReleaseSafe` with no optimisation flag exposed. `tools/prumo-verify`
+v0.4.0, in Zig 0.16.0, built `ReleaseSafe` with no optimisation flag exposed. `tools/prumo-verify`
 prints every gate on every run and returns non-zero if an enforced one fails.
 
 | Measure | Value | Gate |
@@ -184,7 +184,7 @@ In order, from `SPEC.md` §11:
    together with the rate at which properly granted operations succeed**.~~ **Done** (§11.5, sealed
    D-079). Sealed by scoping under the CONTRIBUTING.md vocabulary: the structural floor is proven
    adversarially; the human-factor residual (I4 resource-scope in the cert) is named, measured, and
-   deferred to v0.4.
+   deferred to v0.4. **Done** (D-085, cert v3 scope binding, sealed D-086).
 4. Get external cryptographic review of the *composition*. The primitives are standard; putting them
    together this way is not, and composition is where protocols fail. **Not done.**
 

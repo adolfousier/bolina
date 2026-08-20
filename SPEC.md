@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.4.0-draft · **Status:** OPEN · **Date:** 2026-08-19
+**Version:** 0.4.0 · **Status:** CLOSED AND SEALED · **Date:** 2026-08-20
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -9,7 +9,7 @@ credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 > `M1-AUDIT.md`); the eight §11 conformance items are sealed with documented receipts. Where this
 > document says a property is "enforced", the implementation's CI gates back the claim; where it
 > says "verified", the seal paragraph in §11 records the evidence. Conformance is defined in §11;
-> every conformance item is sealed (D-075, D-079, D-083, D-084).
+> every conformance item is sealed (D-075, D-079, D-083, D-084, D-086).
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are to be interpreted as described in
 RFC 2119 and RFC 8174.
@@ -1822,7 +1822,7 @@ an exploitable bypass. Survivors elsewhere are recorded with a cause (R3), not m
 mutant population MUST be large enough that the result does not turn on a single mutant; a 100% kill
 rate over a handful of mutants is noise wearing the costume of evidence.
 
-*Sealed (D-086, 2026-08-19). 160/160 viable mutants killed at HEAD a02aa0f. The mutation suite targets §8's state machine and §7's verifier over eighteen domains; every survivor carries a documented cause (R3). The population is large enough that the result does not turn on any single mutant. The D-085 scope checks (3a approver scope, 4a subject scope) add five mutants to the grant domain (CHECK-ABSENCE 3a/4a, WRONG-OPERATOR 3a/4a, WRONG-LOGIC scopeCoversResource); all five killed by the scope binding tests in `verify_test.zig`. The mutation harness regex was also fixed to parse "3a"/"4a" as distinct check keys (previously collapsed to 3/4 by `\d+` matching). Receipt: `M1-AUDIT.md` mutation addendum. What this seal does NOT claim: that mutation testing exhausts the attack surface of §11.5's adversarial vectors or §11.6's fuzzing domain, each conformance item tests a different failure mode.*
+*Sealed (D-086, 2026-08-19). 160/160 viable mutants killed at HEAD 91f05f7 (full non-chunked run, receipt sha bumped 861672f). The mutation suite targets §8's state machine and §7's verifier over eighteen domains; every survivor carries a documented cause (R3). The population is large enough that the result does not turn on any single mutant. The D-085 scope checks (3a approver scope, 4a subject scope) add five mutants to the grant domain (CHECK-ABSENCE 3a/4a, WRONG-OPERATOR 3a/4a, WRONG-LOGIC scopeCoversResource); all five killed by the scope binding tests in `verify_test.zig`. The mutation harness regex was also fixed to parse "3a"/"4a" as distinct check keys (previously collapsed to 3/4 by `\d+` matching). Receipt: `tools/m2-mutation-receipt`. What this seal does NOT claim: that mutation testing exhausts the attack surface of §11.5's adversarial vectors or §11.6's fuzzing domain, each conformance item tests a different failure mode.*
 
 ### 11.3 Cross-implementation test vectors
 
