@@ -3,7 +3,7 @@
 # Updated: bump this file after every clean full-suite run.
 # Format: one line per domain "domain=killed/total", final "total=" line.
 # SHA must be HEAD or an ancestor; prumo-verify gates on it.
-sha=a02aa0f
+sha=91f05f7
 grant=14/14
 evidence=11/11
 transport=9/9
