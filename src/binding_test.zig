@@ -257,7 +257,7 @@ test "BE_TR_01 valid cert and binding signature over handshake hash accepted" {
     );
     const h = cth.seedFrom(0x68); // stand-in Noise handshake hash
     const sig = bindingSig(id, h);
-    try binding.bindSession(cert, &sig, &h, cth.trustedSet(), cth.CERT_NOT_BEFORE + 1);
+    try binding.bindSession(cert, &sig, &h, cert.kex_pubkey, cth.trustedSet(), cth.CERT_NOT_BEFORE + 1);
 }
 
 test "BE_TR_01 binding signature over the wrong hash refused" {
@@ -275,7 +275,7 @@ test "BE_TR_01 binding signature over the wrong hash refused" {
     const h = cth.seedFrom(0x68);
     // Sign over a different hash; the verify over h must fail.
     const sig = bindingSig(id, cth.seedFrom(0x69));
-    try std.testing.expectError(error.BadBindingSig, binding.bindSession(cert, &sig, &h, cth.trustedSet(), cth.CERT_NOT_BEFORE + 1));
+    try std.testing.expectError(error.BadBindingSig, binding.bindSession(cert, &sig, &h, cert.kex_pubkey, cth.trustedSet(), cth.CERT_NOT_BEFORE + 1));
 }
 
 test "BE_TR_01 invalid cert refused before the binding signature is checked" {
@@ -287,7 +287,7 @@ test "BE_TR_01 invalid cert refused before the binding signature is checked" {
     const cert = cth.buildCertInto(&wire, id_pub, binding.ROLE_AGENT, &[_]u8{0xc0}, 1000, 2000);
     const h = cth.seedFrom(0x68);
     const sig = bindingSig(id, h);
-    try std.testing.expectError(error.CertExpired, binding.bindSession(cert, &sig, &h, cth.trustedSet(), 3000));
+    try std.testing.expectError(error.CertExpired, binding.bindSession(cert, &sig, &h, cert.kex_pubkey, cth.trustedSet(), 3000));
 }
 
 // ---------------------------------------------------------------------------

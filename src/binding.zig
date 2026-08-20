@@ -60,6 +60,7 @@ pub const BindingError = error{
     RoleApproverExecutor, // BE-ID-03 / BE-ROLE-04: approver + executor
     ApproverNoQuorum, // BE-ID-04: approver bit set with < 2 CA signatures
     BadBindingSig, // BE-TR-01: binding sig does not verify over h
+    KexPubkeyMismatch, // F1: cert kex_pubkey != remote static key from handshake
 };
 
 // BE-SIG-01 domain-separated Ed25519 verification (internal).
@@ -170,8 +171,18 @@ fn inTrustSet(ca_key: []const u8, trusted: []const []const u8) bool {
 // signature checks; the caller flips session.bound on success (session.zig
 // gates upward delivery on that flag).
 
-pub fn bindSession(cert: Cert, binding_sig: []const u8, handshake_hash: []const u8, trusted_ca_keys: []const []const u8, now_ms: u64) BindingError!void {
+// F1: bindSession now verifies that the cert's kex_pubkey matches the remote
+// static key from the handshake. This prevents a session binding to a cert
+// whose kex_pubkey doesn't match the actual key exchange key, which would
+// allow a MITM to substitute their own kex key while using a valid cert.
+pub fn bindSession(cert: Cert, binding_sig: []const u8, handshake_hash: []const u8, remote_kex_pubkey: []const u8, trusted_ca_keys: []const []const u8, now_ms: u64) BindingError!void {
     try validateCert(cert, trusted_ca_keys, now_ms);
+    // F1: verify kex_pubkey binding. The cert's kex_pubkey must match the
+    // remote static key from the handshake. Without this, an attacker could
+    // present a valid cert with a different kex key.
+    if (cert.kex_pubkey.len != remote_kex_pubkey.len or !std.mem.eql(u8, cert.kex_pubkey, remote_kex_pubkey)) {
+        return error.KexPubkeyMismatch;
+    }
     verifySig(DOMAIN_BINDING, handshake_hash, binding_sig, cert.sig_pubkey) catch |e| switch (e) {
         error.MalformedKey => return error.MalformedKey,
         error.SignatureRejected => return error.BadBindingSig,
