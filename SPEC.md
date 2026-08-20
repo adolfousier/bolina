@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.4.0 · **Status:** CLOSED AND SEALED · **Date:** 2026-08-20
+**Version:** 0.5.0-draft · **Status:** OPEN · **Date:** 2026-08-20
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -401,8 +401,13 @@ Cert :=
   u64   not_after            ; unix ms
   u16   name_len, name       ; ≤ 64 bytes, UTF-8, NOT a security boundary
   u8    scope_count          ; ≤ 8
-  [8]*  scope_ids            ; each = BLAKE2s-256(resource_prefix)[0..8], 8-byte prefix;
-                             ; empty scope = deny-all (D-085)
+  [8]*  scope_ids            ; each = BLAKE2s-256(ancestor_prefix)[0..8], where ancestor_prefix
+                             ; is an ancestor of a resource id (including the full id, excluding
+                             ; trailing slash); empty scope = deny-all (D-085). The 8-byte
+                             ; truncation is second-preimage resistant at ~2^64 BLAKE2s calls;
+                             ; this bound is acceptable because resource names are operator-
+                             ; controlled (BE-RES-02 refuses unknown resources), not attacker-
+                             ; influenced. A wider truncation (16 bytes) is not required.
   u8    ca_sig_count         ; 1..4
   ([32] ca_key + [64] ca_sig) × ca_sig_count
                              ; each Ed25519 over all bytes preceding ca_sig_count,
@@ -603,9 +608,14 @@ verifying one BLAKE2s MAC costs orders of magnitude less than a curve operation.
 reply with a cookie — a BLAKE2s MAC over the initiator's observed source address under a secret
 rotated at least every 120 s — and MUST require subsequent handshake attempts to carry it as `mac2`.
 Under load, a message with a valid `mac1` but absent or stale `mac2` gets a cookie reply and no
-curve operation.
+curve operation. The cookie reply is sealed with ChaCha20-Poly1305 (§4.1a); the sealing key is
+derived per rotation epoch (the 120 s cookie-secret rotation), not long-lived, so that 96-bit random
+nonces remain collision-resistant within each epoch's message volume (F12).
 
-Both are WireGuard's design, adopted unchanged. Neither alone suffices: `mac1` stops attackers who
+Both are WireGuard's design, adopted with one modification: the cookie-sealing key is epoch-derived
+(WireGuard uses a long-lived key with XChaCha20-Poly1305's 192-bit nonces; Bolina uses ChaCha20-
+Poly1305's 12-byte nonces, so the sealing key rotates with the cookie secret to bound collision
+probability). Neither `mac1` nor `mac2` alone suffices: `mac1` stops attackers who
 do not know the target, `mac2` stops attackers who spoof their source.
 
 **BE-TR-07 (no handshake payloads)** — Handshake messages MUST carry no application payload. In
@@ -1405,10 +1415,14 @@ refuses on the first failure:
    *The approver's certificate was revalidated at execution time, the requesting agent's was not,
    so revoking a compromised agent did not stop the work it had already requested (RED-TEAM-08,
    F5). The asymmetry had no justification.*
-3a. The approver's `scope_ids` (cert v3, D-085) cover `Grant.resource_id`. Scope is an 8-byte
-   BLAKE2s-256 resource prefix; a cert's scope covers a resource if any of its `scope_ids` is a
-   prefix of the resource's canonical hash. A cert v2 (scope_count absent / zero) does not carry
-   scope and skips this check. An empty scope on a v3 cert is deny-all: no resource is covered.
+3a. The approver's `scope_ids` (cert v3, D-085) cover `Grant.resource_id`. Scope coverage is
+   computed by hashing each ancestor prefix of the resource's canonical id (including the full
+   id itself, excluding the trailing slash) with BLAKE2s-256 and truncating to 8 bytes; a cert's
+   scope covers the resource if any of its `scope_ids` equals one of these 8-byte hashes. The
+   ancestor prefixes are hashed *without* the trailing slash — a CA that hashes with the trailing
+   slash mints scopes that never match. A §11.3 vector pins this convention. A cert
+   v2 (scope_count absent / zero) does not carry scope and skips this check. An empty scope on a
+   v3 cert is deny-all: no resource is covered.
 4a. The subject's `scope_ids` cover `Grant.resource_id`. Same rule as 3a, applied to the requesting
    agent's certificate. Both scope checks run after certificate validity (3, 4) and before the
    executor/subject/intent/resource matching checks (5-9) that perform the semantic binding.
