@@ -131,11 +131,12 @@ pub const GrantLedger = struct {
     // between recover and markPublished re-emits the orphan (at-least-once,
     // fail-safe). A partial trailing record is discarded cleanly.
     pub fn recover(self: *GrantLedger) LedgerError!Recovery {
-        // Read the whole log into a stack buffer bounded by the live cap: a
-        // healthy pruned log fits. A log larger than the buffer is treated as
-        // a resource-exhaustion failure rather than silently truncating.
-        var buf: [MAX_LIVE * COMMIT_LEN]u8 = undefined;
-        const n = self.file.readPositionalAll(self.io, &buf, 0) catch return error.DiskError;
+        // F2: heap-allocate buffer sized to actual file length. This avoids
+        // both stack overflow (85KB worst-case) and silent truncation (25KB
+        // fixed buffer). Recovery is a cold path (runs once at startup), so
+        // heap use is acceptable. BE-WIRE-01's no-heap rule applies only to
+        // the parser, not the ledger.
+        const file_len = self.file.length(self.io) catch return error.DiskError;
 
         // Reset all live sets for a clean rebuild.
         self.consumed_len = 0;
@@ -143,28 +144,35 @@ pub const GrantLedger = struct {
         self.published_len = 0;
         self.orphan_len = 0;
 
-        var i: usize = 0;
-        while (i < n) {
-            const tag = buf[i];
-            if (tag == TAG_COMMIT and i + COMMIT_LEN <= n) {
-                if (self.consumed_len >= MAX_LIVE) return error.ResourceExhausted;
-                @memcpy(&self.consumed[self.consumed_len], buf[i + 1 .. i + 1 + GRANT_ID_LEN]);
-                self.consumed_len += 1;
-                i += COMMIT_LEN;
-            } else if (tag == TAG_PUBLISHED and i + PUBLISHED_LEN <= n) {
-                if (self.published_len >= MAX_LIVE) return error.ResourceExhausted;
-                @memcpy(&self.published[self.published_len], buf[i + 1 .. i + 1 + GRANT_ID_LEN]);
-                self.published_len += 1;
-                i += PUBLISHED_LEN;
-            } else if (tag == TAG_REVOKE and i + REVOKE_LEN <= n) {
-                if (self.revoked_len >= MAX_LIVE) return error.ResourceExhausted;
-                @memcpy(&self.revoked[self.revoked_len], buf[i + 1 .. i + 1 + SIG_PUBKEY_LEN]);
-                self.revoked_len += 1;
-                i += REVOKE_LEN;
-            } else {
-                // Partial trailing record (crash mid-write before fsync): the
-                // grant was never durably committed. Discard and stop.
-                break;
+        if (file_len > 0) {
+            const allocator = std.heap.c_allocator;
+            const buf = allocator.alloc(u8, @intCast(file_len)) catch return error.DiskError;
+            defer allocator.free(buf);
+            const n = self.file.readPositionalAll(self.io, buf, 0) catch return error.DiskError;
+
+            var i: usize = 0;
+            while (i < n) {
+                const tag = buf[i];
+                if (tag == TAG_COMMIT and i + COMMIT_LEN <= n) {
+                    if (self.consumed_len >= MAX_LIVE) return error.ResourceExhausted;
+                    @memcpy(&self.consumed[self.consumed_len], buf[i + 1 .. i + 1 + GRANT_ID_LEN]);
+                    self.consumed_len += 1;
+                    i += COMMIT_LEN;
+                } else if (tag == TAG_PUBLISHED and i + PUBLISHED_LEN <= n) {
+                    if (self.published_len >= MAX_LIVE) return error.ResourceExhausted;
+                    @memcpy(&self.published[self.published_len], buf[i + 1 .. i + 1 + GRANT_ID_LEN]);
+                    self.published_len += 1;
+                    i += PUBLISHED_LEN;
+                } else if (tag == TAG_REVOKE and i + REVOKE_LEN <= n) {
+                    if (self.revoked_len >= MAX_LIVE) return error.ResourceExhausted;
+                    @memcpy(&self.revoked[self.revoked_len], buf[i + 1 .. i + 1 + SIG_PUBKEY_LEN]);
+                    self.revoked_len += 1;
+                    i += REVOKE_LEN;
+                } else {
+                    // Partial trailing record (crash mid-write before fsync): the
+                    // grant was never durably committed. Discard and stop.
+                    break;
+                }
             }
         }
 
@@ -271,8 +279,13 @@ pub const GrantLedger = struct {
     // check (check 11): a pruned grant replayed after its window is refused at
     // check 10 and never reaches the ledger. Revocations are never dropped.
     pub fn pruneExpired(self: *GrantLedger, now_ms: u64) LedgerError!void {
-        var buf: [MAX_LIVE * COMMIT_LEN]u8 = undefined;
-        const n = self.file.readPositionalAll(self.io, &buf, 0) catch return error.DiskError;
+        // F2: heap-allocate buffer sized to actual file length.
+        const file_len = self.file.length(self.io) catch return error.DiskError;
+        if (file_len == 0) return; // nothing to prune
+        const allocator = std.heap.c_allocator;
+        const buf = allocator.alloc(u8, @intCast(file_len)) catch return error.DiskError;
+        defer allocator.free(buf);
+        const n = self.file.readPositionalAll(self.io, buf, 0) catch return error.DiskError;
 
         var live_consumed: [MAX_LIVE][GRANT_ID_LEN]u8 = undefined;
         var live_len: usize = 0;
@@ -300,7 +313,8 @@ pub const GrantLedger = struct {
         // Second pass: emit survivor rows in original order. A commit survives
         // iff it is in live_consumed; published rows survive iff their grant is
         // live; revoke rows always survive.
-        var out: [MAX_LIVE * COMMIT_LEN]u8 = undefined;
+        const out = allocator.alloc(u8, @intCast(file_len)) catch return error.DiskError;
+        defer allocator.free(out);
         var out_len: usize = 0;
         i = 0;
         while (i < n) {
@@ -344,6 +358,15 @@ pub const GrantLedger = struct {
         tmp_buf[self.path_len + 3] = 'p';
         const tmp_path = tmp_buf[0 .. self.path_len + 4];
         const dir = std.Io.Dir.cwd();
+        // F3: open the parent directory (not cwd) so we can fsync it after rename.
+        // Dir.cwd() returns a special handle that cannot be fsynced on some systems.
+        const last_slash = std.mem.lastIndexOfScalar(u8, live_path, '/') orelse {
+            // No slash in path: file is in cwd, use "." as parent
+            return error.DiskError; // TODO: handle cwd-relative paths
+        };
+        const parent_path = live_path[0..last_slash];
+        var parent_dir = dir.openDir(self.io, parent_path, .{}) catch return error.DiskError;
+        defer parent_dir.close(self.io);
         // Clean any stale temp from a prior aborted prune, then create fresh.
         dir.deleteFile(self.io, tmp_path) catch {};
         const tf = dir.createFile(self.io, tmp_path, .{ .read = true, .truncate = true }) catch return error.DiskError;
@@ -365,6 +388,12 @@ pub const GrantLedger = struct {
         // Atomic swap: rename temp -> live. The old inode is unlinked; close
         // the stale handle and reopen the live path.
         dir.rename(tmp_path, dir, live_path, self.io) catch return error.DiskError;
+        // F3: fsync the parent directory to make the rename durable. POSIX
+        // only guarantees the rename is durable after the directory is synced;
+        // without this, a power loss can roll back to the old inode.
+        // Uses std.c.fsync (not fdatasync) because macOS returns EINVAL for
+        // fdatasync on directory fds.
+        if (std.c.fsync(parent_dir.handle) != 0) return error.DiskError;
         // D-063 phase 3 of 4: rename landed, live path points at the new log.
         if (grant_trace.enabled) grant_trace.emit(.prune_renamed, grant_trace.NO_PC, live_path, now_ms);
         self.file.close(self.io);
