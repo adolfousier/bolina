@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.5.0-draft · **Status:** OPEN · **Date:** 2026-08-20
+**Version:** 0.5.0 · **Status:** CLOSED AND SEALED · **Date:** 2026-08-20
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
