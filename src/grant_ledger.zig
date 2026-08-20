@@ -66,9 +66,11 @@ pub const MAX_LIVE: usize = 1024; // bounded in-memory cache; pruneExpired bound
 const TAG_COMMIT: u8 = 0x01;
 const TAG_PUBLISHED: u8 = 0x02;
 const TAG_REVOKE: u8 = 0x03;
+const TAG_FIRST_RECEIPT: u8 = 0x04; // F4: first-receipt time per grant_id
 const COMMIT_LEN: usize = 1 + GRANT_ID_LEN + 8;
 const PUBLISHED_LEN: usize = 1 + GRANT_ID_LEN;
 const REVOKE_LEN: usize = 1 + SIG_PUBKEY_LEN + 8;
+const FIRST_RECEIPT_LEN: usize = 1 + GRANT_ID_LEN + 8;
 
 pub const LedgerError = error{
     BadLog, // a committed record failed to parse outside the trailing partial
@@ -78,6 +80,12 @@ pub const LedgerError = error{
 
 pub const OrphanGrant = struct {
     grant_id: [GRANT_ID_LEN]u8,
+};
+
+// F4: first-receipt entry. Maps grant_id to the time it was first received.
+pub const FirstReceiptEntry = struct {
+    grant_id: [GRANT_ID_LEN]u8,
+    first_receipt_ms: u64,
 };
 
 // Recovery result (D-061). orphans borrows the ledger's internal orphan_buf
@@ -108,6 +116,12 @@ pub const GrantLedger = struct {
     // memory and recover can find orphans in a single forward pass.
     published: [MAX_LIVE][GRANT_ID_LEN]u8 = undefined,
     published_len: usize = 0,
+    // F4: first-receipt table. Maps grant_id -> first_receipt_ms. Persisted
+    // durably so the T_recv expiry check (SPEC §8.2 check 10c) can actually
+    // fire across restarts. Without this, first_receipt_ms = now_ms on every
+    // delivery, making the T_recv anchor dead.
+    first_receipt: [MAX_LIVE]FirstReceiptEntry = undefined,
+    first_receipt_len: usize = 0,
 
     // open (D-061): create the log if absent, otherwise open read-write. Does
     // not scan; call recover() to rebuild the in-memory sets and collect
@@ -143,6 +157,7 @@ pub const GrantLedger = struct {
         self.revoked_len = 0;
         self.published_len = 0;
         self.orphan_len = 0;
+        self.first_receipt_len = 0;
 
         if (file_len > 0) {
             const allocator = std.heap.c_allocator;
@@ -168,6 +183,13 @@ pub const GrantLedger = struct {
                     @memcpy(&self.revoked[self.revoked_len], buf[i + 1 .. i + 1 + SIG_PUBKEY_LEN]);
                     self.revoked_len += 1;
                     i += REVOKE_LEN;
+                } else if (tag == TAG_FIRST_RECEIPT and i + FIRST_RECEIPT_LEN <= n) {
+                    // F4: rebuild first-receipt table from log.
+                    if (self.first_receipt_len >= MAX_LIVE) return error.ResourceExhausted;
+                    @memcpy(&self.first_receipt[self.first_receipt_len].grant_id, buf[i + 1 .. i + 1 + GRANT_ID_LEN]);
+                    self.first_receipt[self.first_receipt_len].first_receipt_ms = std.mem.readInt(u64, buf[i + 1 + GRANT_ID_LEN ..][0..8], .little);
+                    self.first_receipt_len += 1;
+                    i += FIRST_RECEIPT_LEN;
                 } else {
                     // Partial trailing record (crash mid-write before fsync): the
                     // grant was never durably committed. Discard and stop.
@@ -273,6 +295,43 @@ pub const GrantLedger = struct {
         return self.revokedIndex(sig_pubkey) != null;
     }
 
+    // F4: recordFirstReceipt. Persist the first time a grant_id is received.
+    // Idempotent: if the grant_id already has a first-receipt entry, this is
+    // a no-op. The first-receipt time is used by the T_recv expiry check
+    // (SPEC §8.2 check 10c) to detect grants that have been in flight too long.
+    pub fn recordFirstReceipt(self: *GrantLedger, grant_id: [GRANT_ID_LEN]u8, now_ms: u64) LedgerError!void {
+        // Idempotent: if already recorded, skip.
+        if (self.firstReceiptIndex(grant_id) != null) return;
+        if (self.first_receipt_len >= MAX_LIVE) return error.ResourceExhausted;
+        // Append to log durably.
+        var row: [FIRST_RECEIPT_LEN]u8 = undefined;
+        row[0] = TAG_FIRST_RECEIPT;
+        @memcpy(row[1 .. 1 + GRANT_ID_LEN], &grant_id);
+        std.mem.writeInt(u64, row[1 + GRANT_ID_LEN ..][0..8], now_ms, .little);
+        try self.appendSync(&row);
+        // Update in-memory table.
+        @memcpy(&self.first_receipt[self.first_receipt_len].grant_id, &grant_id);
+        self.first_receipt[self.first_receipt_len].first_receipt_ms = now_ms;
+        self.first_receipt_len += 1;
+    }
+
+    // F4: getFirstReceipt. Returns the first-receipt time for a grant_id, or
+    // null if not recorded. Used by dispatch to populate GrantContext.first_receipt_ms.
+    pub fn getFirstReceipt(self: *const GrantLedger, grant_id: [GRANT_ID_LEN]u8) ?u64 {
+        if (self.firstReceiptIndex(grant_id)) |idx| {
+            return self.first_receipt[idx].first_receipt_ms;
+        }
+        return null;
+    }
+
+    fn firstReceiptIndex(self: *const GrantLedger, grant_id: [GRANT_ID_LEN]u8) ?usize {
+        var i: usize = 0;
+        while (i < self.first_receipt_len) : (i += 1) {
+            if (std.mem.eql(u8, &self.first_receipt[i].grant_id, &grant_id)) return i;
+        }
+        return null;
+    }
+
     // pruneExpired (BE-EXEC-01, D-061 ruling 4): compact the log, dropping
     // consumed grant_ids past their validity window. Sound because the expiry
     // check (section 2 check 10) runs before and independently of the ledger
@@ -306,6 +365,9 @@ pub const GrantLedger = struct {
                 i += PUBLISHED_LEN;
             } else if (tag == TAG_REVOKE and i + REVOKE_LEN <= n) {
                 i += REVOKE_LEN;
+            } else if (tag == TAG_FIRST_RECEIPT and i + FIRST_RECEIPT_LEN <= n) {
+                // F4: skip first-receipt rows in first pass (like published/revoke).
+                i += FIRST_RECEIPT_LEN;
             } else {
                 break;
             }
@@ -335,6 +397,13 @@ pub const GrantLedger = struct {
                 @memcpy(out[out_len..][0..REVOKE_LEN], buf[i .. i + REVOKE_LEN]);
                 out_len += REVOKE_LEN;
                 i += REVOKE_LEN;
+            } else if (tag == TAG_FIRST_RECEIPT and i + FIRST_RECEIPT_LEN <= n) {
+                // F4: first-receipt rows survive iff their grant is still live.
+                if (containsGrant(&live_consumed, live_len, buf[i + 1 .. i + 1 + GRANT_ID_LEN])) {
+                    @memcpy(out[out_len..][0..FIRST_RECEIPT_LEN], buf[i .. i + FIRST_RECEIPT_LEN]);
+                    out_len += FIRST_RECEIPT_LEN;
+                }
+                i += FIRST_RECEIPT_LEN;
             } else {
                 break;
             }

@@ -46,6 +46,7 @@ pub const DispatchError = error{
     NoPendingIntent, // grant names no pending intent
     UnknownSender, // session seam has no cert, or sender record missing
     ActionTooLarge, // intent action exceeds the phase-A seam bound
+    DiskError, // F4: grant ledger I/O failure (first-receipt recording)
 };
 
 pub const Outcome = enum {
@@ -251,6 +252,16 @@ pub const Dispatch = struct {
         // D-059 correction: the subject cert belongs to the intent sender and
         // rides the same session seam, never construction state.
         const subject_cert = hooks.cert_for_sender(&rec.sender) orelse return error.UnknownSender;
+        // F4: use the durable first-receipt time if recorded, otherwise record
+        // now_ms as the first receipt. This makes the T_recv expiry check
+        // (SPEC §8.2 check 10c) actually work across restarts.
+        var grant_id: [grant_ledger.GRANT_ID_LEN]u8 = undefined;
+        @memcpy(&grant_id, grant.grant_id[0..grant_ledger.GRANT_ID_LEN]);
+        const first_receipt_ms = if (durable_ledger) |*lg| blk: {
+            if (lg.getFirstReceipt(grant_id)) |t| break :blk t;
+            lg.recordFirstReceipt(grant_id, now_ms) catch return error.DiskError;
+            break :blk now_ms;
+        } else now_ms;
         const ctx = verify.GrantContext{
             .own_pubkey = self.own_pubkey,
             .trusted_ca_keys = self.trusted_ca_keys,
@@ -261,7 +272,7 @@ pub const Dispatch = struct {
             .pending_resource_id = entry.resource_id[0..entry.resource_len],
             .intent_action = rec.action[0..rec.action_len],
             .now_ms = now_ms,
-            .first_receipt_ms = now_ms,
+            .first_receipt_ms = first_receipt_ms,
             .t_max_s = T_MAX_S_DEFAULT,
             .t_recv_s = T_RECV_S_DEFAULT,
             .already_consumed = consumedHook,
