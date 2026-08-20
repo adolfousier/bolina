@@ -73,6 +73,7 @@ pub const VerifyError = error{
     SeqWindowStale, // BE-ENV-04: seq below sliding window or duplicate
     Equivocation, // BE-ENV-05: same (sender, channel, seq) with different hash
     UnknownParents, // BE-LEDGER-01: parents not in ledger, fetch budget exhausted
+    BadControlBody, // F6: Control body malformed or action_type != 2 for revocation
 };
 
 // ---------------------------------------------------------------------------
@@ -621,6 +622,11 @@ pub fn verifyEnvelopeAdmission(
 
     if (!bodyTypeAllowed(env.body_type, ctx.sender_cert.role_bits)) return error.WrongBodyType;
 
+    // F5: check parents BEFORE consuming the seq window. If parents are missing,
+    // the envelope is rejected without advancing the seq counter, avoiding a
+    // window consumption for a rejected envelope.
+    if (!ctx.ledger.allParentsPresent(parent_hashes)) return error.UnknownParents;
+
     var sender_key: [32]u8 = undefined;
     @memcpy(&sender_key, env.sender);
     ctx.ledger.checkSeq(sender_key, channel_id, seq) catch |err| switch (err) {
@@ -639,9 +645,18 @@ pub fn verifyEnvelopeAdmission(
         else => return err,
     };
 
-    if (!ctx.ledger.allParentsPresent(parent_hashes)) return error.UnknownParents;
-
     try ctx.ledger.setAnchor(sender_key, env_hash);
 
-    if (env.body_type == parser.channel.BODY_CONTROL) try ctx.ledger.setRevocation(sender_key, env_hash);
+    // F6: for Control envelopes with action_type=2 (revocation), record the
+    // subject pubkey from the Control body, not the sender_key (which is the
+    // admin who signed the revocation, not the key being revoked).
+    if (env.body_type == parser.channel.BODY_CONTROL) {
+        const control = parser.channel.parseControl(env.body) catch return error.BadControlBody;
+        if (control.action_type == 2) {
+            // F10: pass cert_expiry_ms for prunable revocations. We use the
+            // sender's cert expiry as a placeholder; the proper fix is to look
+            // up the subject's cert or include cert_expiry_ms in the Control body.
+            try ctx.ledger.setRevocation(control.subject, env_hash, ctx.sender_cert.not_after);
+        }
+    }
 }

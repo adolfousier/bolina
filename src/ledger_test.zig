@@ -179,7 +179,7 @@ test "BE_HIST_04 revocation recorded immediately when Revoke accepted" {
     const sender = [_]u8{0xdd} ** 32;
     const revoke_hash = hashOf("revoke");
 
-    try l.setRevocation(sender, revoke_hash);
+    try l.setRevocation(sender, revoke_hash, std.math.maxInt(u64));
 
     // Sender is now revoked.
     try std.testing.expect(l.isRevoked(sender));
@@ -190,8 +190,8 @@ test "BE_HIST_04 revocation is idempotent: setRevocation called twice succeeds" 
     const sender = [_]u8{0xee} ** 32;
     const revoke_hash = hashOf("revoke2");
 
-    try l.setRevocation(sender, revoke_hash);
-    try l.setRevocation(sender, revoke_hash); // idempotent
+    try l.setRevocation(sender, revoke_hash, std.math.maxInt(u64));
+    try l.setRevocation(sender, revoke_hash, std.math.maxInt(u64)); // idempotent
 }
 
 test "BE_HIST_04 revocation mismatched on second call causes divergence" {
@@ -200,9 +200,9 @@ test "BE_HIST_04 revocation mismatched on second call causes divergence" {
     const h1 = hashOf("revoke3a");
     const h2 = hashOf("revoke3b");
 
-    try l.setRevocation(sender, h1);
+    try l.setRevocation(sender, h1, std.math.maxInt(u64));
     // Second call with different hash: divergence.
-    try std.testing.expectError(ledger.LedgerError.Divergence, l.setRevocation(sender, h2));
+    try std.testing.expectError(ledger.LedgerError.Divergence, l.setRevocation(sender, h2, std.math.maxInt(u64)));
 }
 
 test "BE_HIST_04 revocation for a second pubkey is found past index zero" {
@@ -212,8 +212,8 @@ test "BE_HIST_04 revocation for a second pubkey is found past index zero" {
     const h1 = hashOf("revoke5a");
     const h2 = hashOf("revoke5b");
 
-    try l.setRevocation(p1, h1);
-    try l.setRevocation(p2, h2);
+    try l.setRevocation(p1, h1, std.math.maxInt(u64));
+    try l.setRevocation(p2, h2, std.math.maxInt(u64));
 
     // Both pubkeys must read as revoked, including the one at index 1.
     try std.testing.expect(l.isRevoked(p1));
@@ -431,7 +431,7 @@ test "BE_HIST_03 envelope descendant of revocation fails historical check" {
     try l.setAnchor(sender, anchor_hash);
 
     // Sender is revoked.
-    try l.setRevocation(sender, revoke_hash);
+    try l.setRevocation(sender, revoke_hash, std.math.maxInt(u64));
 
     // Record causal relationships: anchor -> revoke -> env.
     try d.insert(anchor_hash, revoke_hash);

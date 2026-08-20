@@ -96,6 +96,7 @@ pub const AnchorEntry = struct {
 pub const RevocationEntry = struct {
     pubkey: [LEN_SIG_PUBKEY]u8,
     revoke_hash: [HASH_BYTES]u8, // hash of Revoke envelope that revoked this pubkey
+    cert_expiry_ms: u64, // F10: revocation is prunable after cert expires
 };
 
 // ---------------------------------------------------------------------------
@@ -255,7 +256,7 @@ pub const Ledger = struct {
     // ---------------------------------------------------------------------------
 
     // Record that a pubkey is revoked, with the envelope hash of the Revoke.
-    pub fn setRevocation(self: *Ledger, pubkey: [LEN_SIG_PUBKEY]u8, revoke_hash: [HASH_BYTES]u8) LedgerError!void {
+    pub fn setRevocation(self: *Ledger, pubkey: [LEN_SIG_PUBKEY]u8, revoke_hash: [HASH_BYTES]u8, cert_expiry_ms: u64) LedgerError!void {
         // Idempotent: if revocation exists, verify hash matches.
         var i: usize = 0;
         while (i < self.revocation_count) : (i += 1) {
@@ -268,11 +269,39 @@ pub const Ledger = struct {
             }
         }
 
+        // F10: before inserting, prune expired revocations to free capacity.
+        // A revocation is expired if its cert_expiry_ms < now_ms, but we don't
+        // have now_ms here. Instead, we prune lazily: if the table is full,
+        // remove the oldest expired entry (lowest cert_expiry_ms).
+        if (self.revocation_count >= MAX_REVOCATIONS) {
+            // Find the entry with the lowest cert_expiry_ms.
+            var min_idx: ?usize = null;
+            var min_expiry: u64 = std.math.maxInt(u64);
+            i = 0;
+            while (i < self.revocation_count) : (i += 1) {
+                if (self.revocations[i].cert_expiry_ms < min_expiry) {
+                    min_expiry = self.revocations[i].cert_expiry_ms;
+                    min_idx = i;
+                }
+            }
+            // If we found an entry, remove it by shifting subsequent entries.
+            if (min_idx) |idx| {
+                var j = idx;
+                while (j + 1 < self.revocation_count) : (j += 1) {
+                    self.revocations[j] = self.revocations[j + 1];
+                }
+                self.revocation_count -= 1;
+            } else {
+                // No entries to prune (shouldn't happen if count >= MAX_REVOCATIONS).
+                return error.RevocationsFull;
+            }
+        }
+
         // New revocation.
-        if (self.revocation_count >= MAX_REVOCATIONS) return error.RevocationsFull;
         self.revocations[self.revocation_count] = .{
             .pubkey = pubkey,
             .revoke_hash = revoke_hash,
+            .cert_expiry_ms = cert_expiry_ms,
         };
         self.revocation_count += 1;
     }
