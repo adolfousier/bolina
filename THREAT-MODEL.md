@@ -347,13 +347,17 @@ Bolina's guarantees hold only if all of these hold. Each is a place the whole th
 | # | Assumption | If false |
 |---|---|---|
 | T0 | The four primitives (Ed25519, X25519, ChaCha20-Poly1305, BLAKE2s) and the Noise_IK construction are sound | Everything fails; not Bolina-specific |
-| T1 | Zig's `std.crypto` implementations of those four are correct and constant-time with respect to secret data | Key recovery by timing. **This is the one place the zero-dependency posture is a statement about someone else's code**: the reference implementation writes none of the four and vendors none of them — they come from the language's standard library, with an upstream, a release cadence, and a review process none of which are ours. §4.8 |
+| T1 | Zig's `std.crypto` implementations of those four are correct and constant-time with respect to secret data | Key recovery by timing. **This is the one place the zero-dependency posture is a statement about someone else's code**: the reference implementation writes none of the four and vendors none of them — they come from the language's standard library, with an upstream, a release cadence, and a review process none of which are ours. §4.8. Note: `std.crypto` ships inside the Zig toolchain archive, which is hash-pinned (§4.8); the pin exists one level up and covers it. |
 | T2 | CA private keys are offline and uncompromised | §2.4 |
 | T3 | Approver private keys are held only by the humans they name | §4.2 |
 | T4 | Executors report observations truthfully | §4.3 |
 | T5 | The approving human reads what BE-GRANT-07 renders | §4.1 |
 | T6 | Implementations are conformant | The spec constrains nothing on its own |
-| T7 | The local clock is not adversarially controlled *at the verifier* | BE-GRANT-05's second condition (time-since-receipt) is what limits this; it bounds but does not eliminate the dependency |
+| T7 | The local clock is not adversarially controlled *at the verifier* | BE-GRANT-05's second condition (time-since-receipt) is what limits this; it bounds but does not eliminate the dependency. BE-GRANT-05/06a assume the executor's clock is *monotonic*, not merely non-adversarial — a backwards step un-expires grants and extends T_pending. |
+| T8 | Issuance verifies possession and uniqueness | The CA confirms the subject controls both private keys (PoP) and refuses duplicate sig_pubkey (one key, one overlay address) and duplicate kex_pubkey. Without this, BE-ID-01's "the address is a commitment to the key" can be squatted at issuance, and F1's kex-binding fix has nothing firm to bind. |
+| T9 | Executor-local storage is honest and exclusive | The grant ledger's guarantees assume fsync semantics hold (no lying disk write-cache) and exactly one process owns the log (BE-EXEC-01, currently unenforced — two daemon instances sharing one grant-ledger path interleave positional appends at a stale eof and corrupt the log). |
+| T10 | Every node's RNG is sound | Ephemeral X25519 keys, cookie secrets, session indexes, and grant_id nonces all draw from it. Grant_id collision fails closed via the consumed ledger, but ephemeral-key predictability breaks the handshake outright. T0/T1 cover the primitives, not the entropy feeding them. |
+| T11 | Resource naming is not attacker-influenced | scope_ids are second-preimage resistant at 64 bits against the deployment's actual adversary. BE-RES-02 refuses unknown resources, so resource names are operator-controlled; this is F8's security argument. |
 
 **T4 and T5 are the load-bearing ones.** They are also the two that cryptography cannot help with,
 which is why they are named here rather than buried in a table.
