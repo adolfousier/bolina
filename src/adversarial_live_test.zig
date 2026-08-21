@@ -302,7 +302,7 @@ test "ADV_LIVE S1 clean run: real dispatch output reconciles to M1==0 M2==N" {
     try std.testing.expectEqual(@as(usize, 3), effect_count);
 
     // Independent durable view: recover from the log on disk, then audit.
-    var view = try grant_ledger.GrantLedger.open(ictx.io, path);
+    var view = try grant_ledger.GrantLedger.openReadOnly(ictx.io, path);
     defer view.close();
     _ = try view.recover();
 

@@ -490,7 +490,7 @@ test "DAEMON_D durable seam: commit row and publish tombstone both on disk after
     // The durable witness: an independent ledger view over the same file
     // sees G_GRANT_ID consumed AND published (the tombstone landed after the
     // effect returned), so the next recovery reports zero orphans.
-    var view = try grant_ledger_mod.GrantLedger.open(sl.io, sl.path);
+    var view = try grant_ledger_mod.GrantLedger.openReadOnly(sl.io, sl.path);
     defer view.close();
     const r = try view.recover();
     try std.testing.expect(view.isConsumed(G_GRANT_ID));
@@ -521,7 +521,7 @@ test "DAEMON_D durable seam: refused effect leaves a durable unpublished orphan 
     // Independent view over the same file: consumed WITHOUT the tombstone.
     // The spent capability is a durable orphan under BE-GRANT-01a; publishing
     // it would be false evidence under the D-067 correspondence rule.
-    var view = try grant_ledger_mod.GrantLedger.open(sl.io, sl.path);
+    var view = try grant_ledger_mod.GrantLedger.openReadOnly(sl.io, sl.path);
     defer view.close();
     const r = try view.recover();
     try std.testing.expect(view.isConsumed(G_GRANT_ID));
@@ -782,7 +782,7 @@ test "F4 regression guard: revoked-approver grant REFUSED, BE-REV-02 wired at ch
     try std.testing.expectEqual(@as(usize, 0), n); // a revoke row is not an orphan
     // Witness: the durable revocation is recorded and recoverable.
     {
-        var view = try grant_ledger_mod.GrantLedger.open(io, path);
+        var view = try grant_ledger_mod.GrantLedger.openReadOnly(io, path);
         defer view.close();
         _ = try view.recover();
         try std.testing.expect(view.isRevoked(approver_pub));

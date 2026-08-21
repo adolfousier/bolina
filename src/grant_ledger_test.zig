@@ -352,3 +352,25 @@ test "BE_GRANT_01 crash during prune: atomic rewrite leaves the live log intact 
     dir.deleteFile(io, path) catch {};
     dir.deleteFile(io, tmp_path) catch {};
 }
+
+test "MD3 flock: second open of the live log fails Locked; close releases it" {
+    var ctx = IoCtx.init();
+    ctx.io = ctx.threaded.io();
+    const io = ctx.io;
+    const dir = std.Io.Dir.cwd();
+
+    const path_buf = tempPath("md3");
+    const path = cstr(&path_buf);
+    dir.deleteFile(io, path) catch {};
+    var lg = try gl.GrantLedger.open(io, path);
+    // flock is per open file description, so a second open of the same path,
+    // even inside this same process, must fail fast (T9, BE-EXEC-01): the
+    // alternative is two writers interleaving positional appends at stale
+    // eofs and corrupting the log.
+    try std.testing.expectError(error.Locked, gl.GrantLedger.open(io, path));
+    // close releases the advisory lock: the log is openable again.
+    lg.close();
+    var lg2 = try gl.GrantLedger.open(io, path);
+    lg2.close();
+    dir.deleteFile(io, path) catch {};
+}

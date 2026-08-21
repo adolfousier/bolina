@@ -72,10 +72,22 @@ const PUBLISHED_LEN: usize = 1 + GRANT_ID_LEN;
 const REVOKE_LEN: usize = 1 + SIG_PUBKEY_LEN + 8;
 const FIRST_RECEIPT_LEN: usize = 1 + GRANT_ID_LEN + 8;
 
+// MD3: exclusive advisory lock so a second daemon instance cannot interleave
+// positional appends into one log (T9, BE-EXEC-01 single writer). std.c.flock
+// does not exist in Zig 0.16, so the libc symbol is declared directly, the
+// same pattern as src/listener.zig. The op bits are identical on macOS and
+// Linux (BSD heritage).
+const LOCK_EX: c_int = 2;
+const LOCK_NB: c_int = 4;
+const libc = struct {
+    extern "c" fn flock(fd: c_int, operation: c_int) c_int;
+};
+
 pub const LedgerError = error{
     BadLog, // a committed record failed to parse outside the trailing partial
     ResourceExhausted, // live cache cap reached; pruneExpired did not free enough
     DiskError, // a file operation failed
+    Locked, // MD3: another open file description holds the exclusive log lock
 };
 
 pub const OrphanGrant = struct {
@@ -130,6 +142,28 @@ pub const GrantLedger = struct {
     pub fn open(io: std.Io, path: []const u8) LedgerError!GrantLedger {
         const dir = std.Io.Dir.cwd();
         const f = dir.createFile(io, path, .{ .read = true, .truncate = false }) catch return error.DiskError;
+        // MD3: fail fast instead of silently sharing the log. flock is per
+        // open file description, so even a second open() in the same process
+        // collides; a distinct error, never silent takeover.
+        if (libc.flock(f.handle, LOCK_EX | LOCK_NB) != 0) return error.Locked;
+        const len = f.length(io) catch return error.DiskError;
+        if (path.len > 128) return error.BadLog;
+        var lg = GrantLedger{ .io = io, .file = f, .eof = len };
+        @memcpy(lg.path_buf[0..path.len], path);
+        lg.path_len = @intCast(path.len);
+        return lg;
+    }
+
+    // MD3 read-only companion: opens the log WITHOUT the exclusive lock, for
+    // audit views and test witnesses over the live file. Writer exclusivity
+    // is preserved: the mutating ops (commitConsumed, markPublished,
+    // commitRevocation, pruneExpired) write through the read-only handle and
+    // fail with DiskError. Readers never block the daemon, and pruneExpired's
+    // atomic rename means a concurrent reader sees either the old complete
+    // log or the new one, never a torn write.
+    pub fn openReadOnly(io: std.Io, path: []const u8) LedgerError!GrantLedger {
+        const dir = std.Io.Dir.cwd();
+        const f = dir.openFile(io, path, .{ .mode = .read_only }) catch return error.DiskError;
         const len = f.length(io) catch return error.DiskError;
         if (path.len > 128) return error.BadLog;
         var lg = GrantLedger{ .io = io, .file = f, .eof = len };
@@ -467,6 +501,10 @@ pub const GrantLedger = struct {
         if (grant_trace.enabled) grant_trace.emit(.prune_renamed, grant_trace.NO_PC, live_path, now_ms);
         self.file.close(self.io);
         self.file = dir.openFile(self.io, live_path, .{ .mode = .read_write }) catch return error.DiskError;
+        // MD3: the close above released the lock with the old open file
+        // description; re-acquire on the new handle. A second instance that
+        // grabbed the live path inside the prune window surfaces Locked here.
+        if (libc.flock(self.file.handle, LOCK_EX | LOCK_NB) != 0) return error.Locked;
         self.eof = out_len;
         self.file.sync(self.io) catch return error.DiskError;
         // D-063 phase 4 of 4: live handle reopened and directory state durable.
