@@ -154,13 +154,13 @@ pub const GrantContext = struct {
     trusted_ca_keys: []const []const u8,
     approver_cert: parser.session.Cert,
     subject_cert: parser.session.Cert,
-    // Checks 6, 7 and 8: the pending intent's sender, id, and canonical
-    // resource_id, matched against the grant.
-    intent_sender: []const u8,
-    pending_intent_id: []const u8,
-    pending_resource_id: []const u8,
-    // Check 9 (BE-GRANT-02): the pending intent's action bytes, re-hashed here.
-    intent_action: []const u8,
+    // F13: the intent table and sender table, passed by reference so the
+    // routine owns its lookups. Checks 6-9 bind to state the routine fetched
+    // itself, not caller-assembled values. The intent table provides the
+    // resource_id (check 8); the sender table provides the sender (check 6)
+    // and action (check 9).
+    intent_table: *intent.Table,
+    sender_table: *const SenderTable,
     // Check 10 (BE-GRANT-05): the executor's clock and the grant's receipt time.
     now_ms: u64,
     first_receipt_ms: u64,
@@ -180,6 +180,36 @@ pub const GrantContext = struct {
     // re-checked here against the approver (check 3) and the subject (check 4).
     // Backed by grant_ledger.isRevoked (D-063 durable revocation set).
     is_revoked: *const fn (sig_pubkey: []const u8) bool,
+};
+
+// SenderTable: the sender record table from dispatch.zig, exposed for F13.
+// This allows verifyGrantThen to look up the sender and action by intent_id
+// itself, rather than trusting the caller to assemble the values correctly.
+pub const SenderTable = struct {
+    // Executor-side storage bound for the sender record's action copy
+    // (dispatch policy). NOT parser.channel.MAX_ACTION (the 256 KiB wire
+    // ceiling): Entry is stored inline in Dispatch.senders[MAX_PENDING], so
+    // the wire ceiling would inflate one entry to ~256 KiB and the pool to
+    // ~64 MiB. Actions longer than this bound are refused at admission.
+    pub const MAX_ACTION: usize = 512;
+    pub const LEN_INTENT_ID = parser.channel.LEN_INTENT_ID;
+
+    pub const Entry = struct {
+        intent_id: [LEN_INTENT_ID]u8,
+        sender: [32]u8,
+        action: [MAX_ACTION]u8,
+        action_len: usize,
+    };
+
+    entries: []const Entry,
+    len: usize,
+
+    pub fn lookup(self: *const SenderTable, intent_id: []const u8) ?*const Entry {
+        for (self.entries[0..self.len]) |*entry| {
+            if (std.mem.eql(u8, entry.intent_id[0..], intent_id)) return entry;
+        }
+        return null;
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -222,6 +252,13 @@ pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.ch
     // 0. Grant.version must be 2 (RED-TEAM-08 F6: the field is read, not ignored).
     if (grant.version != 2) return error.BadVersion;
     if (grant_trace.enabled) grant_trace.emit(.verify_check, 0, grant.grant_id, ctx.now_ms);
+
+    // F13: look up the intent and sender record by grant.intent_id. This makes
+    // checks 6-9 bind to state the routine fetched itself, not caller-assembled
+    // values. If the intent doesn't exist, the lookup fails here (NoMatchingIntent).
+    const intent_idx = ctx.intent_table.matchForGrant(grant.intent_id) orelse return error.NoMatchingIntent;
+    const intent_entry = &ctx.intent_table.entries[intent_idx];
+    const sender_entry = ctx.sender_table.lookup(grant.intent_id) orelse return error.NoMatchingIntent;
 
     // 1. The grant arrived as a body_type=3 envelope whose sender is the approver.
     if (env.body_type != parser.channel.BODY_GRANT) return error.BadEnvelopeBinding;
@@ -267,20 +304,20 @@ pub fn verifyGrantThen(env: parser.channel.Envelope, grant_ptr: *const parser.ch
     if (grant_trace.enabled) grant_trace.emit(.verify_check, 5, grant.grant_id, ctx.now_ms);
 
     // 6. The grant's subject is the pending intent's sender.
-    if (!std.mem.eql(u8, grant.subject, ctx.intent_sender)) return error.WrongSubject;
+    if (!std.mem.eql(u8, grant.subject, sender_entry.sender[0..])) return error.WrongSubject;
     if (grant_trace.enabled) grant_trace.emit(.verify_check, 6, grant.grant_id, ctx.now_ms);
 
     // 7. intent_id matches the pending intent.
-    if (!std.mem.eql(u8, grant.intent_id, ctx.pending_intent_id)) return error.NoMatchingIntent;
+    if (!std.mem.eql(u8, grant.intent_id, intent_entry.intent_id[0..])) return error.NoMatchingIntent;
     if (grant_trace.enabled) grant_trace.emit(.verify_check, 7, grant.grant_id, ctx.now_ms);
 
     // 8. resource_id matches the pending intent's canonical resource_id.
-    if (!std.mem.eql(u8, grant.resource_id, ctx.pending_resource_id)) return error.WrongResource;
+    if (!std.mem.eql(u8, grant.resource_id, intent_entry.resource_id[0..intent_entry.resource_len])) return error.WrongResource;
     if (grant_trace.enabled) grant_trace.emit(.verify_check, 8, grant.grant_id, ctx.now_ms);
 
     // 9. Grant.action_digest equals BLAKE2s recomputed over the intent's action
     //    bytes (BE-GRANT-02). Exact match, no partial or semantic matching.
-    const digest = actionDigest(ctx.intent_action);
+    const digest = actionDigest(sender_entry.action[0..sender_entry.action_len]);
     if (!std.mem.eql(u8, &digest, grant.action_digest)) return error.ActionDigestMismatch;
     if (grant_trace.enabled) grant_trace.emit(.verify_check, 9, grant.grant_id, ctx.now_ms);
 
@@ -437,7 +474,7 @@ fn scopeCoversResource(cert: parser.session.Cert, resource_id: []const u8) bool 
         end = new_end - 1; // Exclude the '/' itself from the next prefix.
     }
     return false;
-} 
+}
 // The genesis envelope's signature
 // and the admin cert's chain are verified separately; this runs the
 // genesis-specific invariants over the parsed body.

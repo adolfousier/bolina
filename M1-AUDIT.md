@@ -852,3 +852,27 @@ a panic or a differential divergence (that night's evidence is a counter-
 example and the item returns to unsealed), or the owner requiring literal
 continuity, which per D-070 ruling 2 needs a dedicated long-lived runner and
 a separate ruling.
+
+## D-087 F13 verify-owns-state addendum (2026-08-21)
+
+Crypto-review finding F13 (recorded in DECISION-LOG.md D-087): GrantContext
+checks 6-9 previously compared against caller-assembled fields; verify now
+fetches the pending intent and sender record itself through `intent_table`
+and `sender_table` references. Declared bounds correction carried by the
+same ruling: the sender record's action copy is executor storage policy at
+512 bytes (refused above by `ActionTooLarge` at admission), never the
+256 KiB wire ceiling of `parser.channel.MAX_ACTION`; the half-landed version
+of F13 sized the record from the wire ceiling, which put roughly 64 MiB
+inline in the `Dispatch` value and segfaulted every by-value construction.
+A regression test pins the bound (`dispatch_test.zig`, "F13: sender-record
+Entry uses the executor storage bound, not the wire ceiling"). No M1 marker
+changes and no new surface files (verify.zig and dispatch.zig are non-surface
+per D-052/D-059/D-062/D-064); the one surface-budget change this round is
+D-087 ruling 4: the F1 binding fix grew `src/binding.zig` 179 to 190, so
+SPEC v0.5.1 re-floors the session-state sub-unit cap 748 to 759 and
+rebalances the sync sub-unit 100 to 89 (sub-cap sum stays 1500; measured
+post-authentication total 1488 of 1500). Dispatch's public refusal taxonomy
+is unchanged (a grant naming no PENDING intent still refuses
+`NoPendingIntent` at the seam). The 120-second store-and-forward TTL from
+the F7 fix stands as written above. Mutation receipt: the full suite
+re-runs at this HEAD at closeout; the receipt bump follows its clean finish.

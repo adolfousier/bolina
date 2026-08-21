@@ -37,7 +37,10 @@ pub const T_RECV_S_DEFAULT: u64 = 300;
 // Seam bounds (D-059): dispatch copies intent sender and action at admit
 // time because intent.Entry carries neither; phase B sizes both from the
 // session MTU.
-pub const MAX_ACTION: usize = 512;
+// F13: single source of truth for the sender-record action bound lives in
+// verify.SenderTable (the type dispatch stores); this alias keeps every
+// comparison against it in dispatch consistent.
+pub const MAX_ACTION: usize = verify.SenderTable.MAX_ACTION;
 
 pub const DispatchError = error{
     BadEnvelope, // structural verification refused
@@ -157,12 +160,9 @@ fn isRevokedHook(sig_pubkey: []const u8) bool {
     return lg.isRevoked(key);
 }
 
-const SenderRecord = struct {
-    intent_id: [channel.LEN_INTENT_ID]u8,
-    sender: [32]u8,
-    action: [MAX_ACTION]u8,
-    action_len: usize,
-};
+// F13: use verify.SenderTable.Entry so the sender table can be passed directly
+// to verifyGrantThen without type conversion.
+const SenderRecord = verify.SenderTable.Entry;
 
 pub const Dispatch = struct {
     intents: intent_mod.Table,
@@ -245,13 +245,13 @@ pub const Dispatch = struct {
 
     fn dispatchGrant(self: *Dispatch, env: channel.Envelope, hooks: Hooks, now_ms: u64) (DispatchError || verify.VerifyError || intent_mod.IntentError)!Outcome {
         const grant = channel.parseGrant(env.body) catch return error.BadBody;
-        const idx = self.intents.matchForGrant(grant.intent_id) orelse return error.NoPendingIntent;
-        const entry = self.intents.entries[idx];
-        const rec = self.senderFor(entry.intent_id) orelse return error.UnknownSender;
+        // F13 keeps verify's checks 6-9 bound to state verify fetches itself,
+        // but dispatch's public refusal taxonomy is settled here first: a
+        // grant naming no PENDING intent is NoPendingIntent (no service),
+        // regardless of sender-record or cert state. Verify re-matches on its
+        // own below; this gate is taxonomy, not binding.
+        if (self.intents.matchForGrant(grant.intent_id) == null) return error.NoPendingIntent;
         const approver_cert = hooks.cert_for_sender(env.sender) orelse return error.UnknownSender;
-        // D-059 correction: the subject cert belongs to the intent sender and
-        // rides the same session seam, never construction state.
-        const subject_cert = hooks.cert_for_sender(&rec.sender) orelse return error.UnknownSender;
         // F4: use the durable first-receipt time if recorded, otherwise record
         // now_ms as the first receipt. This makes the T_recv expiry check
         // (SPEC §8.2 check 10c) actually work across restarts.
@@ -262,15 +262,19 @@ pub const Dispatch = struct {
             lg.recordFirstReceipt(grant_id, now_ms) catch return error.DiskError;
             break :blk now_ms;
         } else now_ms;
+        // F13: pass the intent table and sender table to verifyGrantThen so it
+        // owns its lookups (checks 6-9 bind to state the routine fetched itself).
+        const sender_table = verify.SenderTable{
+            .entries = &self.senders,
+            .len = self.senders_len,
+        };
         const ctx = verify.GrantContext{
             .own_pubkey = self.own_pubkey,
             .trusted_ca_keys = self.trusted_ca_keys,
             .approver_cert = approver_cert,
-            .subject_cert = subject_cert,
-            .intent_sender = &rec.sender,
-            .pending_intent_id = &entry.intent_id,
-            .pending_resource_id = entry.resource_id[0..entry.resource_len],
-            .intent_action = rec.action[0..rec.action_len],
+            .subject_cert = undefined, // will be set below after subject lookup
+            .intent_table = &self.intents,
+            .sender_table = &sender_table,
             .now_ms = now_ms,
             .first_receipt_ms = first_receipt_ms,
             .t_max_s = T_MAX_S_DEFAULT,
@@ -278,7 +282,13 @@ pub const Dispatch = struct {
             .already_consumed = consumedHook,
             .is_revoked = isRevokedHook,
         };
-        const effect_outcome = try verify.verifyGrantThen(env, &grant, ctx, hooks.execute_effect);
+        // D-059 correction: the subject cert belongs to the intent sender and
+        // rides the same session seam, never construction state. We need to
+        // look up the sender from the sender table first.
+        const sender_entry = sender_table.lookup(grant.intent_id) orelse return error.UnknownSender;
+        var ctx_mut = ctx;
+        ctx_mut.subject_cert = hooks.cert_for_sender(&sender_entry.sender) orelse return error.UnknownSender;
+        const effect_outcome = try verify.verifyGrantThen(env, &grant, ctx_mut, hooks.execute_effect);
         // Brief 9.1: the outcome is the publication boundary's evidence
         // source. A refused effect never reaches markPublished: publishing
         // a grant whose effect never fired would be false evidence under
@@ -308,6 +318,7 @@ pub const Dispatch = struct {
         // successful verify frame. Dispatch is single-threaded in memory, so
         // the match-to-transition frame race BE-GRANT-03a names does not
         // exist until the phase-B listener owns the frame.
+        const idx = self.intents.matchForGrant(grant.intent_id) orelse return error.NoPendingIntent;
         try self.intents.beginExecuting(idx);
         if (grant_trace.enabled) grant_trace.emit(.record_executing_witness, grant_trace.NO_PC, grant.grant_id, now_ms);
         return Outcome.grant_executed;

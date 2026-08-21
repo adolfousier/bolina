@@ -1542,3 +1542,25 @@ model's assumptions are not merely self-reinforcing.
 **Reversible:** The five new mutants and the regex fix revert if the scope encoding changes. Nothing depends on them outside the mutation harness and verify_test.zig.
 
 **Evidence.** Mutation-test.py grant domain output (22/22 killed, HEAD a02aa0f), prumo-verify M3 PASS, zig build test 385/392 pass 7 skip 0 fail.
+
+## D-087 - 2026-08-21 - F13: verify owns checks 6-9 state (intent/sender tables by reference)
+
+**Date:** 2026-08-21
+**Decision:** Close crypto-review finding F13. GrantContext stops carrying caller-assembled check values (`intent_sender`, `pending_intent_id`, `pending_resource_id`, `intent_action`) and instead holds `intent_table: *intent.Table` and `sender_table: *const SenderTable`; `verifyGrantThen` fetches the pending intent and the sender record itself, so checks 6-9 bind to state the verifier fetched, never to what its caller assembled.
+**Reasoning:** BE-GRANT-03's checks 6-9 bind a grant to PENDING executor state. When the caller assembles those fields, the verifier is trusting the one party the composition review cannot clear: any caller bug (or a future seam) that assembles mismatched values would verify against fiction. The lookups belong inside the routine, exactly as check 11's consumed consult and checks 3-4's revocation consult already do. The change was started by the prior session and left half-landed in the working tree; this ruling records the converged shape.
+
+**Ruling 1 - SenderTable uses the executor storage bound, not the wire ceiling.** `verify.SenderTable.MAX_ACTION = 512`, dispatch's historical seam bound (actions above it are refused `ActionTooLarge` at admission). The half-landed version sized the record from `parser.channel.MAX_ACTION` (the 256 KiB wire ceiling): Entry lives inline in `Dispatch.senders[MAX_PENDING]`, so that put ~64 MiB inside the Dispatch value and segfaulted every by-value construction. One source of truth: `dispatch.MAX_ACTION` aliases `verify.SenderTable.MAX_ACTION`. Regression test in `dispatch_test.zig` pins 512 < wire ceiling and the Entry size.
+
+**Ruling 2 - dispatch's refusal taxonomy is unchanged.** A grant naming no PENDING intent refuses `NoPendingIntent` at the dispatch seam before any cert or sender work (taxonomy gate); verify's own `NoMatchingIntent` remains for direct callers as defense in depth. The half-landed reorder leaked `UnknownSender`/`NoMatchingIntent` for this case; three existing DAEMON_A/DAEMON_D tests pin the taxonomy.
+
+**Ruling 3 - No M1 ratchet or surface change.** verify.zig and dispatch.zig are non-surface (D-052/D-059/D-062/D-064); no new BE-* marker; checks 6-9 remain sub-checks of the existing BE-GRANT-03 mutants.
+
+**Ruling 4 - BE-SURF-03 session-state cap re-floored, sync rebalanced.** The sealed v0.5.0 tree shipped M11 failing: the F1 `kex_pubkey` binding fix (19b9df0) grew `src/binding.zig` from 179 to 190 lines without re-running prumo-verify or ratcheting SPEC, putting the session-state sub-unit at 759 against its 748 cap. The cap follows the measured floor: SPEC v0.5.1 sets session-state 759. Because the sub-cap sum MUST stay within 1500 and both other sub-units sit at their floors (wire-parser 652, sync measured 77), the sync sub-unit cap is rebalanced 100 to 89: 652 + 759 + 89 = 1500, measured total 1488 of 1500. Shrinking freshly crypto-reviewed binding code to fit the old number was rejected: the cap measures the auditable surface, and the fix IS the audited change.
+
+**What this seals.** F13 mechanically: the full 392-test suite green at this HEAD, including the taxonomy regressions and the new layout regression test.
+
+**What this does NOT seal.** The mutation receipt at this HEAD. The grant-domain mutants over checks 6-9 were anchored against the caller-assembled comparison lines; the full suite is re-run at this HEAD at closeout and the receipt bump follows its clean finish (tools/m2-mutation-receipt).
+
+**Reversible:** Pure seam refactor. No wire format, no SPEC change, no storage format change.
+
+**Evidence.** zig build test 0 fail (392 total) at this commit; zig fmt --check clean; prumo-verify PASS; regression test `F13: sender-record Entry uses the executor storage bound, not the wire ceiling` (src/dispatch_test.zig).

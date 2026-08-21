@@ -889,3 +889,16 @@ test "F4 fail-safe: no durable ledger, grant REFUSED before the effect (D-064 ru
     try std.testing.expectError(verify.VerifyError.ApproverRevoked, d.dispatch(grantEnvelopeSigned(grant_wire), hooks, GRANT_NOW_MS));
     try std.testing.expectEqual(@as(usize, 0), effect_count); // no ledger: fail-safe refusal, effect never runs
 }
+
+test "F13: sender-record Entry uses the executor storage bound, not the wire ceiling" {
+    // D-087 ruling 1. SenderTable.Entry once sized its action copy from
+    // parser.channel.MAX_ACTION (the 256 KiB wire ceiling). Entry lives inline
+    // in Dispatch.senders[MAX_PENDING], so the wire ceiling put ~64 MiB in the
+    // Dispatch value and segfaulted every by-value construction. The record is
+    // executor storage policy: 512 bytes, refused above by ActionTooLarge at
+    // admission.
+    try std.testing.expectEqual(@as(usize, 512), dispatch_mod.MAX_ACTION);
+    try std.testing.expectEqual(@as(usize, 512), verify.SenderTable.MAX_ACTION);
+    try std.testing.expect(verify.SenderTable.MAX_ACTION < channel.MAX_ACTION);
+    try std.testing.expect(@sizeOf(verify.SenderTable.Entry) <= 1024);
+}

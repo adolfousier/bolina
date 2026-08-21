@@ -11,6 +11,7 @@ const std = @import("std");
 const parser = @import("parser.zig");
 const verify = @import("verify.zig");
 const binding = @import("binding.zig");
+const intent_mod = @import("intent.zig");
 const cth = @import("cert_test_helpers.zig");
 
 const Ed = std.crypto.sign.Ed25519;
@@ -153,16 +154,42 @@ fn grantEnvelope(grant: parser.channel.Grant) parser.channel.Envelope {
     };
 }
 
+// F13: default tables owned at file scope so the context handed out by
+// baseContext points at storage that outlives the helper's frame (pointers
+// into a returned-from frame dangle). Reset on every call: pre-F13
+// baseContext was stateless per call and tests rely on fresh state.
+var default_intent_table = intent_mod.Table.init();
+var default_sender_entries: [1]verify.SenderTable.Entry = undefined;
+var default_sender_table: verify.SenderTable = .{ .entries = &default_sender_entries, .len = 0 };
+
 fn baseContext(action: []const u8, hook: *const fn ([]const u8, u64, u64) bool) verify.GrantContext {
+    // F13: create intent and sender tables for the test. The routine owns its
+    // lookups, so we need to populate the tables with the test data.
+    default_intent_table = intent_mod.Table.init();
+    default_intent_table.admit(.{
+        .intent_id = &cth.INTENT_ID,
+        .resource_id = cth.RESOURCE_ID,
+        .action = action,
+        .rationale = &[_]u8{},
+    }, NOW_MS) catch unreachable;
+
+    @memcpy(&default_sender_entries[0].intent_id, &cth.INTENT_ID);
+    @memcpy(&default_sender_entries[0].sender, &cth.SUBJECT_PUB);
+    const action_len = @min(action.len, verify.SenderTable.MAX_ACTION);
+    @memcpy(default_sender_entries[0].action[0..action_len], action[0..action_len]);
+    default_sender_entries[0].action_len = action_len;
+    default_sender_table = .{
+        .entries = &default_sender_entries,
+        .len = 1,
+    };
+
     return .{
         .own_pubkey = &EXECUTOR_BYTES,
         .trusted_ca_keys = cth.trustedSet(),
         .approver_cert = cth.approverCert(),
         .subject_cert = cth.subjectCert(),
-        .intent_sender = &cth.SUBJECT_PUB,
-        .pending_intent_id = &cth.INTENT_ID,
-        .pending_resource_id = cth.RESOURCE_ID,
-        .intent_action = action,
+        .intent_table = &default_intent_table,
+        .sender_table = &default_sender_table,
         .now_ms = NOW_MS,
         .first_receipt_ms = FIRST_RECEIPT_MS,
         .t_max_s = T_MAX_S,
@@ -622,8 +649,27 @@ test "BE_GRANT_03 check 6 subject not the pending intent sender refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
     const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
+    // F13: modify the sender table to have a different sender (not the grant's subject).
+    var intent_table = intent_mod.Table.init();
+    intent_table.admit(.{
+        .intent_id = &cth.INTENT_ID,
+        .resource_id = cth.RESOURCE_ID,
+        .action = ACTION,
+        .rationale = &[_]u8{},
+    }, NOW_MS) catch unreachable;
+    var sender_entries: [1]verify.SenderTable.Entry = undefined;
+    @memcpy(&sender_entries[0].intent_id, &cth.INTENT_ID);
+    @memcpy(&sender_entries[0].sender, &cth.APPROVER_PUB); // not the grant's subject
+    const action_len = @min(ACTION.len, verify.SenderTable.MAX_ACTION);
+    @memcpy(sender_entries[0].action[0..action_len], ACTION[0..action_len]);
+    sender_entries[0].action_len = action_len;
+    const sender_table = verify.SenderTable{
+        .entries = &sender_entries,
+        .len = 1,
+    };
     var ctx = baseContext(ACTION, &ledgerFresh);
-    ctx.intent_sender = cth.APPROVER_PUB[0..]; // not the grant's subject
+    ctx.intent_table = &intent_table;
+    ctx.sender_table = &sender_table;
     resetEffect();
     try std.testing.expectError(error.WrongSubject, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
     try std.testing.expectEqual(@as(usize, 0), effect_calls);
@@ -633,9 +679,28 @@ test "BE_GRANT_03 check 7 intent_id matching no pending intent refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
     const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
-    var ctx = baseContext(ACTION, &ledgerFresh);
+    // F13: modify the intent table to have a different intent_id (no match).
+    var intent_table = intent_mod.Table.init();
     const wrong = decodeHex("ffffffffffffffffffffffffffffffff");
-    ctx.pending_intent_id = &wrong;
+    intent_table.admit(.{
+        .intent_id = &wrong,
+        .resource_id = cth.RESOURCE_ID,
+        .action = ACTION,
+        .rationale = &[_]u8{},
+    }, NOW_MS) catch unreachable;
+    var sender_entries: [1]verify.SenderTable.Entry = undefined;
+    @memcpy(&sender_entries[0].intent_id, &wrong);
+    @memcpy(&sender_entries[0].sender, &cth.SUBJECT_PUB);
+    const action_len = @min(ACTION.len, verify.SenderTable.MAX_ACTION);
+    @memcpy(sender_entries[0].action[0..action_len], ACTION[0..action_len]);
+    sender_entries[0].action_len = action_len;
+    const sender_table = verify.SenderTable{
+        .entries = &sender_entries,
+        .len = 1,
+    };
+    var ctx = baseContext(ACTION, &ledgerFresh);
+    ctx.intent_table = &intent_table;
+    ctx.sender_table = &sender_table;
     resetEffect();
     try std.testing.expectError(error.NoMatchingIntent, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
     try std.testing.expectEqual(@as(usize, 0), effect_calls);
@@ -645,8 +710,27 @@ test "BE_GRANT_03 check 8 resource_id mismatch refused" {
     const grant_bytes = decodeHex(GRANT_HEX);
     const grant = try parser.channel.parseGrant(&grant_bytes);
     const env = grantEnvelope(grant);
+    // F13: modify the intent table to have a different resource_id.
+    var intent_table = intent_mod.Table.init();
+    intent_table.admit(.{
+        .intent_id = &cth.INTENT_ID,
+        .resource_id = "bol:other/resource",
+        .action = ACTION,
+        .rationale = &[_]u8{},
+    }, NOW_MS) catch unreachable;
+    var sender_entries: [1]verify.SenderTable.Entry = undefined;
+    @memcpy(&sender_entries[0].intent_id, &cth.INTENT_ID);
+    @memcpy(&sender_entries[0].sender, &cth.SUBJECT_PUB);
+    const action_len = @min(ACTION.len, verify.SenderTable.MAX_ACTION);
+    @memcpy(sender_entries[0].action[0..action_len], ACTION[0..action_len]);
+    sender_entries[0].action_len = action_len;
+    const sender_table = verify.SenderTable{
+        .entries = &sender_entries,
+        .len = 1,
+    };
     var ctx = baseContext(ACTION, &ledgerFresh);
-    ctx.pending_resource_id = "bol:other/resource";
+    ctx.intent_table = &intent_table;
+    ctx.sender_table = &sender_table;
     resetEffect();
     try std.testing.expectError(error.WrongResource, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
     try std.testing.expectEqual(@as(usize, 0), effect_calls);

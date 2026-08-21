@@ -174,6 +174,7 @@ Total: ~1,575 lines of Zig + the SPEC/THREAT-MODEL documents.
 | Issue | Status | Impact |
 |---|---|---|
 | scopeCoversResource ancestor walk was off-by-one | Fixed in D-085 (`93ea94d`) | Scope checks could pass for resources outside the cert's scope |
+| GrantContext checks 6-9 trusted caller-assembled field values (F13) | Fixed in D-087: verify fetches intent/sender state itself via `intent_table`/`sender_table` references | A dispatch bug or future seam assembling mismatched values would make verify bind the grant against fiction |
 | `pruneExpired` could empty the consumed-grant log on crash | Fixed in D-063 (atomic rename) | Committed grants could be re-executed after a crash |
 | Zig's `std.crypto` is not vendored or hash-pinned | Accepted risk (THREAT-MODEL §4.8) | Supply chain dependency on Zig upstream |
 | Coverage instrumentation is hand-rolled, not native | Accepted risk (THREAT-MODEL §4.6) | Uncounted branches invisible to fuzzing |

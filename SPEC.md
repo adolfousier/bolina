@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.5.0 · **Status:** CLOSED AND SEALED · **Date:** 2026-08-20
+**Version:** 0.5.1 · **Status:** CLOSED AND SEALED · **Date:** 2026-08-21
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -55,6 +55,8 @@ semantic change is the bound reduction and the resource-prefix interpretation. N
 span wire bytes change, no sub-unit cap changes.
 
 **Changes from v0.3.9-draft (prior):** v0.3.9 is closed and sealed. All eight §11 conformance items produce evidence and carry seal paragraphs. §11.4 advances from brief to instrumented conformance: the bounded grant-path TLA+ checks (BE-GRANT-01/01a/04, D-061/D-063/D-067 rulings encoded as invariants) are merged under `model/` with a pinned TLC runner in CI (D-083). BE-GRANT-06 (revocation) is projected as `RevokeGrant` with `RevokedGrantsNeverExecute` invariant; crash-recovery paths (`RecoverPublishInterrupted`, `RecoverMarkPublished`) guard against publishing revoked grants. Twelve Phase A conformance fixtures exercise the trace projector through a binding table. BE-SURF-03 places `src/grant_trace.zig` in the non-surface list (D-076): `bolina.grant-trace.v1`, the comptime-gated test-only instrumentation the ZIG-TLA conformance pilot reads; with the `trace` build option off every emit site compiles out with zero cost. The remaining five items (§11.1 bijection, §11.2 mutation testing, §11.3 test vectors, §11.7 no third-party deps, §11.8 measured build) are sealed by D-084 on mechanical evidence from CI gates. No wire bytes change, no sub-unit cap changes.
+
+**Changes from v0.5.0:** crypto-review follow-ups recorded after the v0.5.0 seal. F13 (D-087): the Grant verifier owns its checks 6-9 state, fetching the pending intent and sender record through `intent_table` and `sender_table` references instead of caller-assembled fields; the sender record's action copy is executor storage policy at 512 bytes, refused above by `ActionTooLarge` at admission, never sized from the 256 KiB wire ceiling. BE-SURF-03 housekeeping owed by the sealed v0.5.0 tree (D-087 ruling 4): the F1 `kex_pubkey` binding fix grew `src/binding.zig` from 179 to 190 lines, so the session-state sub-unit cap is re-floored 748 to 759 and the sync sub-unit cap rebalanced 100 to 89, keeping the sub-cap sum at 1500 (post-authentication measured total 1488 of 1500). No wire bytes change.
 
 ---
 
@@ -322,9 +324,10 @@ unit is subdivided into a handshake sub-unit (cap 990 lines), a relay sub-unit (
 and a listener sub-unit (cap 250 lines); all three caps MUST be enforced independently and the
 sum MUST NOT exceed 1500 lines. The
 post-authentication unit is subdivided into a wire-parser sub-unit (cap 652 lines), a
-session-state sub-unit (cap 748 lines), and a sync sub-unit (cap 100 lines); all three caps MUST
+session-state sub-unit (cap 759 lines), and a sync sub-unit (cap 89 lines); all three caps MUST
 be enforced independently and the sum MUST NOT exceed 1500 lines. (D-052, split and ratcheted by
-D-054.)
+D-054; session-state re-floored 748 to 759 and sync rebalanced 100 to 89 by D-087 after the F1
+kex_pubkey binding fix grew binding.zig past the old floor; the sub-cap sum stays 1500.)
 
 - **Pre-authentication unit:** subdivided into three sub-units:
   - **Handshake sub-unit:** `src/parser.zig`, `src/mac.zig`, `src/noise.zig` — cap 990 lines.
@@ -333,8 +336,8 @@ D-054.)
 - **Post-authentication unit:** subdivided into three sub-units, together everything an auditor must
   read to verify what a hostile authenticated peer's bytes can reach:
   - **Wire-parser sub-unit:** `src/parser/channel.zig`, `src/parser/session.zig` — cap 652 lines.
-  - **Session-state sub-unit:** `src/session.zig`, `src/binding.zig`, `src/replay.zig`, `src/reassembly.zig` — cap 748 lines.
-  - **Sync sub-unit:** `src/parser/sync.zig` — cap 100 lines.
+  - **Session-state sub-unit:** `src/session.zig`, `src/binding.zig`, `src/replay.zig`, `src/reassembly.zig` — cap 759 lines, re-floored from 748 by D-087 (the F1 binding fix grew binding.zig 179 to 190).
+  - **Sync sub-unit:** `src/parser/sync.zig` — cap 89 lines, rebalanced from 100 by D-087 so the sub-cap sum stays 1500 (measured floor 77).
 - **Non-surface:** `src/dag.zig`, `src/evidence.zig`, `src/verify.zig`, `src/ledger.zig`,
   `src/historical.zig`, `src/intent.zig`, `src/resolver.zig`, `src/render.zig`, `src/sync.zig`,
   `src/relay_store.zig`, `src/dispatch.zig`, `src/relay_serve.zig`, `src/grant_ledger.zig`,
