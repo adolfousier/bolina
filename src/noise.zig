@@ -128,23 +128,6 @@ fn hkdf2(ck: [HASHLEN]u8, ikm: []const u8) struct { o1: [HASHLEN]u8, o2: [HASHLE
     return .{ .o1 = o1, .o2 = o2 };
 }
 
-fn hkdf3(ck: [HASHLEN]u8, ikm: []const u8) struct { o1: [HASHLEN]u8, o2: [HASHLEN]u8, o3: [HASHLEN]u8 } {
-    var temp_key: [HASHLEN]u8 = undefined;
-    HmacBlake2s256.create(&temp_key, ikm, &ck);
-    var o1: [HASHLEN]u8 = undefined;
-    HmacBlake2s256.create(&o1, &[_]u8{1}, &temp_key);
-    var chain: [HASHLEN + 1]u8 = undefined;
-    @memcpy(chain[0..HASHLEN], &o1);
-    chain[HASHLEN] = 2;
-    var o2: [HASHLEN]u8 = undefined;
-    HmacBlake2s256.create(&o2, chain[0..], &temp_key);
-    @memcpy(chain[0..HASHLEN], &o2);
-    chain[HASHLEN] = 3;
-    var o3: [HASHLEN]u8 = undefined;
-    HmacBlake2s256.create(&o3, chain[0..], &temp_key);
-    return .{ .o1 = o1, .o2 = o2, .o3 = o3 };
-}
-
 // ---------------------------------------------------------------------------
 // The Noise symmetric state.
 
@@ -180,18 +163,6 @@ pub const SymmetricState = struct {
         const out = hkdf2(self.ck, &ikm);
         self.ck = out.o1;
         self.k = out.o2;
-        self.n = 0;
-        self.has_key = true;
-    }
-
-    // ck, h, k = HKDF(ck, ikm, 3); ck=o1, MixHash(o2), k=o3. Used by PSK
-    // patterns; IK does not call it, but the symmetric state exposes the full
-    // Noise API and it is unit-tested.
-    pub fn mixKeyAndHash(self: *SymmetricState, ikm: []const u8) void {
-        const out = hkdf3(self.ck, ikm);
-        self.ck = out.o1;
-        self.mixHash(&out.o2);
-        self.k = out.o3;
         self.n = 0;
         self.has_key = true;
     }
