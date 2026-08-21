@@ -1564,3 +1564,22 @@ model's assumptions are not merely self-reinforcing.
 **Reversible:** Pure seam refactor. No wire format, no SPEC change, no storage format change.
 
 **Evidence.** zig build test 0 fail (392 total) at this commit; zig fmt --check clean; prumo-verify PASS; regression test `F13: sender-record Entry uses the executor storage bound, not the wire ceiling` (src/dispatch_test.zig).
+
+## D-088 - 2026-08-21 - Mutation criterion refined: documented-equivalent mutants (check 7) + dispatch-subject-seam re-anchor
+
+**Date:** 2026-08-21
+**Decision:** The full mutation run at HEAD 31a88d0 returned 158/159 killed with exactly one survivor, `grant/CHECK-ABSENCE check 7 intent_id never matched against the pending intent`, and a second silent loss: the denominator had dropped 160 to 159 because the `dispatch-subject-seam` (WRONG-SOURCE) anchor was orphaned by the F13 refactor (the subject-cert line moved from `const subject_cert = hooks.cert_for_sender(&rec.sender)` to `ctx_mut.subject_cert = hooks.cert_for_sender(&sender_entry.sender)`), so the mutant silently skipped and the gap printed only as "UNCOVERED dispatch properties". Two rulings close both.
+
+**Ruling 1 - check 7 is an equivalent mutant, documented and excluded, not a gap to be brute-forced.** F13 made `verifyGrantThen` fetch the pending intent itself via `intent_table.matchForGrant(grant.intent_id)`. The table is keyed by `intent_id`, BE-GRANT-06b enforces intent_id uniqueness at admission (the lookup finds at most one PENDING intent), and BE-GRANT-10 states check 7 drops non-PENDING intents "by construction since it matches PENDING intents only". The matched entry's `intent_id` therefore equals `Grant.intent_id` by construction, and the explicit comparison at verify.zig is defense-in-depth, not the enforcement point. No test can kill the CHECK-ABSENCE mutant: its removal changes no observable behavior. Restructuring the code to make the comparison non-tautological was rejected: the grant's identity is (subject, intent_id, resource_id, action) and the table must be keyed by one of them, so keying by any grant field tautologizes that check instead (key by (sender, resource) and check 8 or 6 dies; key by an internal slot id and the wire reference breaks BE-GRANT-06b's per-id matching). The SPEC already names this construction in two places; the criterion is refined rather than the code contorted against the spec. `tools/mutation-test.py` gains an `EQUIVALENT` set, one documented rationale per entry (this one cites BE-GRANT-06b + BE-GRANT-10); equivalent mutants are excluded from the kill-rate denominator, reported as `equivalent=N` on the receipt's `total=` line, and a killed equivalent prints a broken-proof flag so the mark can never hide a real kill.
+
+**Ruling 2 - the M2 gate keeps zero exceptions on survivors; the equivalents set is source under the drift gate.** `survived=0` is unchanged: any non-equivalent survivor still fails. The equivalents set lives in `tools/mutation-test.py`, which the M2 drift gate already treats as source, so widening the set to absorb a future survivor invalidates the receipt and forces a clean re-run. The receipt line becomes `total=<killed>/<non-equivalent denominator> survived=0 equivalent=<N>`. SPEC §11.2 carries the D-088 amendment (viable refined, one documented equivalent: check 7).
+
+**Ruling 3 - dispatch-subject-seam re-anchored, denominator restored to 160.** The WRONG-SOURCE anchor now matches the post-F13 line; the mutant re-enters the population. The D-059 tests that killed it before F13 are unchanged, so the re-anchor is expected to return KILLED; if it survives, that is a real post-F13 gap the suite has just earned the right to report.
+
+**What this seals.** The mutation criterion is now closed under the F13 shape: 160 evaluated = 159 non-equivalent + 1 documented equivalent, no silent skips, no uncovered-property gap.
+
+**What this does NOT seal.** The receipt at this HEAD. The full suite re-runs against the committed fix; the receipt bump (sha = that commit, total=159/159 survived=0 equivalent=1) lands with prumo-verify green.
+
+**Reversible:** Script-only plus SPEC amendment. Reverting removes the equivalent clause and re-anchors the seam; the code never changed.
+
+**Evidence.** Run at 31a88d0: `total: 158/159 mutants killed, 1 survived` (log logs/mutation_head_31a88d0.log); bracket diff against the 91f05f7 reference isolates exactly the missing `[dispatch/WRONG-SOURCE]`; SPEC BE-GRANT-06b/BE-GRANT-10 "by construction" passages quoted in the EQUIVALENT rationale.

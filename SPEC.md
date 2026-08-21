@@ -1839,12 +1839,30 @@ between declared BEs and passing tests: no BE without a test, no orphan test. *(
 
 ### 11.2 Mutation testing
 
-100% of viable mutants killed in §8's state machine and §7's verifier. A surviving mutant there means
+100% of viable mutants killed in §8's state machine and §7's verifier (equivalent
+mutants excluded from the denominator, D-088). A surviving mutant there means
 an exploitable bypass. Survivors elsewhere are recorded with a cause (R3), not merely counted. The
 mutant population MUST be large enough that the result does not turn on a single mutant; a 100% kill
 rate over a handful of mutants is noise wearing the costume of evidence.
 
 *Sealed (D-086, 2026-08-19). 160/160 viable mutants killed at HEAD 91f05f7 (full non-chunked run, receipt sha bumped 861672f). The mutation suite targets §8's state machine and §7's verifier over eighteen domains; every survivor carries a documented cause (R3). The population is large enough that the result does not turn on any single mutant. The D-085 scope checks (3a approver scope, 4a subject scope) add five mutants to the grant domain (CHECK-ABSENCE 3a/4a, WRONG-OPERATOR 3a/4a, WRONG-LOGIC scopeCoversResource); all five killed by the scope binding tests in `verify_test.zig`. The mutation harness regex was also fixed to parse "3a"/"4a" as distinct check keys (previously collapsed to 3/4 by `\d+` matching). Receipt: `tools/m2-mutation-receipt`. What this seal does NOT claim: that mutation testing exhausts the attack surface of §11.5's adversarial vectors or §11.6's fuzzing domain, each conformance item tests a different failure mode.*
+
+*Amendment (D-088, 2026-08-21). Viable is refined: a mutant is equivalent, and therefore outside
+the viability denominator, when the SPEC makes the mutated behavior hold by construction
+elsewhere, so no test can observe its removal. Equivalent mutants are documented in
+`tools/mutation-test.py` (the `EQUIVALENT` set, one rationale per entry, each citing the SPEC
+passage that establishes the construction), excluded from the kill-rate denominator, and
+reported as `equivalent=N` on the receipt's `total=` line. A mutant killed despite an
+equivalence mark is a broken proof: it is counted as killed and flagged, never silently
+absorbed, and the mark must be removed or the construction re-examined. The set of
+documented equivalents is source under the M2 drift gate: changing it invalidates the
+receipt, so the set cannot be widened to hide a survivor. As of this amendment exactly one
+mutant is documented equivalent: BE-GRANT-03 check 7 (CHECK-ABSENCE), whose explicit
+comparison is structurally satisfied by the intent_id-keyed PENDING lookup (BE-GRANT-06b
+enforces intent_id uniqueness at admission, so the lookup finds at most one intent and the
+matched entry's intent_id equals `Grant.intent_id` by construction; BE-GRANT-10 matches
+PENDING intents only, so non-PENDING names are dropped by construction). The D-086 seal
+stands for what it measured; this amendment changes the criterion, not that measurement.*
 
 ### 11.3 Cross-implementation test vectors
 

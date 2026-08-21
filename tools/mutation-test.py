@@ -1263,8 +1263,8 @@ MUTANTS = [
      "        // MUTANT: envelope signature gate skipped"),
     ("dispatch", "dispatch.zig", "WRONG-SOURCE", "dispatch-subject-seam",
      "subject cert taken from the approver, not the intent sender seam",
-     "        const subject_cert = hooks.cert_for_sender(&rec.sender) orelse return error.UnknownSender;",
-     "        const subject_cert = approver_cert; // MUTANT: subject cert taken from the approver"),
+     "        ctx_mut.subject_cert = hooks.cert_for_sender(&sender_entry.sender) orelse return error.UnknownSender;",
+     "        ctx_mut.subject_cert = approver_cert; // MUTANT: subject cert taken from the approver"),
     ("dispatch", "dispatch.zig", "CHECK-ABSENCE", "dispatch-executing-transition",
      "EXECUTING transition skipped after the grant frame",
      "        try self.intents.beginExecuting(idx);",
@@ -2065,6 +2065,27 @@ def main():
         else:
             sys.exit(f"FATAL: mutant '{name}' in unknown domain '{domain}'")
 
+    # 2b. equivalent mutants (D-088)
+    #
+    # A mutant is EQUIVALENT when removing it cannot change observable
+    # behavior, because the SPEC makes the behavior hold by construction
+    # elsewhere. An equivalent mutant is unkillable by any test, so it is
+    # excluded from the kill-rate denominator and reported as
+    # "documented equivalent" (receipt field equivalent=N, SPEC §11.2).
+    # Keyed by (domain, mutant name). Each entry cites the SPEC passages
+    # that establish the construction. If an equivalent-marked mutant is
+    # ever KILLED, the equivalence proof was wrong: it is counted as killed
+    # and flagged, so the mark can never hide a real kill.
+    EQUIVALENT = {
+        ("grant", "check 7 intent_id never matched against the pending intent"):
+            "BE-GRANT-06b: intent_id uniqueness is enforced at admission, so "
+            "the lookup by intent_id finds at most one PENDING intent and the "
+            "matched entry's intent_id equals grant.intent_id by construction; "
+            "BE-GRANT-10: check 7 drops non-PENDING intents by construction "
+            "(it matches PENDING intents only). The explicit comparison in "
+            "verify.zig is defense-in-depth, not the enforcement point.",
+    }
+
     # 3. run mutants
     # Optional domain filter (MUTATION_DOMAIN env var) so a chunked run stays
     # under the tool-timeout ceiling. A SIGKILL mid-run bypasses the finally
@@ -2092,9 +2113,18 @@ def main():
             path.write_text(ORIGINALS[target].replace(find, replace, 1))
             rc, _ = run_suite()
             is_killed = rc != 0
+            equiv = (domain, name) in EQUIVALENT
+            if equiv:
+                if is_killed:
+                    print(f"KILLED  [{domain}/{klass}] {name} "
+                          f"(marked EQUIVALENT but killed: proof was wrong, D-088)")
+                else:
+                    print(f"EQUIV   [{domain}/{klass}] {name} (documented equivalent, D-088)")
+            else:
+                print(f"{'KILLED  ' if is_killed else 'SURVIVED'} [{domain}/{klass}] {name}")
             results.append({"domain": domain, "klass": klass, "key": key,
-                            "name": name, "killed": is_killed, "skipped": False})
-            print(f"{'KILLED  ' if is_killed else 'SURVIVED'} [{domain}/{klass}] {name}")
+                            "name": name, "killed": is_killed, "skipped": False,
+                            "equivalent": equiv})
     finally:
         for name, path in TARGETS.items():
             path.write_text(ORIGINALS[name])
@@ -2117,8 +2147,13 @@ def main():
             return [], [], [], True
         run = [r for r in results if r["domain"] == dom and not r["skipped"]]
         killed_keys = {r["key"] for r in run if r["killed"]}
-        survivors = [r["name"] for r in run if not r["killed"]]
-        uncovered = sorted(str(x) for x in (set(keys) - killed_keys))
+        # Documented-equivalent mutants (D-088) are neither survivors nor an
+        # uncovered gap: the SPEC makes them hold by construction, so they
+        # leave the denominator entirely.
+        equiv_keys = {r["key"] for r in run if r.get("equivalent")}
+        survivors = [r["name"] for r in run
+                     if not r["killed"] and not r.get("equivalent")]
+        uncovered = sorted(str(x) for x in (set(keys) - killed_keys - equiv_keys))
         cb = callback_key in killed_keys if callback_key is not None else True
         return run, survivors, uncovered, cb
 
@@ -2218,9 +2253,18 @@ def main():
               f"properties covered by killed mutants")
     total_run = [r for r in results if not r["skipped"]]
     total_killed = sum(1 for r in total_run if r["killed"])
-    print(f"total:   {total_killed}/{len(total_run)} mutants killed, "
-          f"{len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv) + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv) + len(i_surv) + len(f_surv) + len(v_surv) + len(w_surv) + len(dp_surv) + len(dmn_surv) + len(rs_surv) + len(gr_surv)}"
-          f" survived")
+    total_equiv = [r for r in total_run if r.get("equivalent")]
+    total_surv = (len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv)
+                  + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv)
+                  + len(i_surv) + len(f_surv) + len(v_surv) + len(w_surv)
+                  + len(dp_surv) + len(dmn_surv) + len(rs_surv) + len(gr_surv))
+    non_equiv = len(total_run) - len(total_equiv)
+    print(f"total:   {total_killed}/{non_equiv} non-equivalent mutants killed, "
+          f"{total_surv} survived, {len(total_equiv)} documented equivalent "
+          f"({len(total_run)} evaluated)")
+    for r in total_equiv:
+        print(f"  EQUIVALENT: [{r['domain']}] {r['name']}")
+        print(f"    rationale: {EQUIVALENT[(r['domain'], r['name'])]}")
     if g_surv:
         print(f"  grant SURVIVORS: {g_surv}")
     if e_surv:

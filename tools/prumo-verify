@@ -157,7 +157,11 @@ fi
 # domains), so it runs offline and writes tools/m2-mutation-receipt.
 # prumo-verify checks: (a) receipt exists, (b) survived = 0, (c) no src/
 # or tools/mutation-test.py changed since the receipt SHA. A stale receipt
-# (source drift) is PENDING; a receipt with survivors is FAIL.
+# (source drift) is PENDING; a receipt with survivors is FAIL. The
+# equivalent=N field (D-088) counts documented-equivalent mutants, which
+# the suite excludes from the kill-rate denominator; their rationale lives
+# in tools/mutation-test.py (EQUIVALENT set), so any change to that set is
+# source drift and invalidates the receipt.
 M2_RECEIPT="tools/m2-mutation-receipt"
 m2_verdict="PASS"
 m2_detail=""
@@ -168,6 +172,7 @@ else
     m2_sha="$(grep '^sha=' "$M2_RECEIPT" | head -1 | sed 's/^sha=//')"
     m2_total_line="$(grep '^total=' "$M2_RECEIPT" | head -1)"
     m2_survived="$(printf '%s\n' "$m2_total_line" | grep -o 'survived=[0-9]*' | sed 's/survived=//')"
+    m2_equiv="$(printf '%s\n' "$m2_total_line" | grep -o 'equivalent=[0-9]*' | sed 's/equivalent=//')"
     m2_killed="$(printf '%s\n' "$m2_total_line" | sed 's/total=\([0-9]*\)\/.*/\1/')"
     m2_denom="$(printf '%s\n' "$m2_total_line" | sed 's/total=[0-9]*\/\([0-9]*\).*/\1/')"
     if [ -z "$m2_sha" ] || [ -z "$m2_total_line" ]; then
@@ -186,7 +191,7 @@ else
             m2_verdict="FAIL"
             m2_detail="$m2_survived survivor(s) in $m2_denom mutants (receipt at $m2_sha)"
         else
-            m2_detail="$m2_killed/$m2_denom mutants killed, 0 survived (receipt at $m2_sha, SPEC.md section 11.2)"
+            m2_detail="$m2_killed/$m2_denom non-equivalent mutants killed, 0 survived, ${m2_equiv:-0} documented equivalent (receipt at $m2_sha, SPEC.md section 11.2)"
         fi
     fi
 fi
