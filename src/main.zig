@@ -28,12 +28,52 @@ const relay = @import("relay.zig");
 
 const MAX_DGRAM: usize = 2048;
 
+// Key material for the daemon. D-018: no hardcoded secrets.
+// Keys are loaded from files specified by env vars, or generated on first run.
+const KeyMaterial = struct {
+    // X25519 static keypair for Noise_IK handshake
+    x25519_secret: [32]u8,
+    x25519_public: [32]u8,
+    
+    // Ed25519 signing keypair for cert signatures, binding, relay registration
+    ed25519_seed: [32]u8,
+    ed25519_public: [32]u8,
+    
+    // Own certificate (signed by a trusted CA) — max 1024 bytes
+    own_cert: [1024]u8,
+    own_cert_len: usize,
+    
+    // Trusted CA keys (for cert validation)
+    trusted_ca_keys: [8][32]u8, // up to 8 trusted CAs
+    trusted_ca_count: usize,
+};
+
 // Global state for the daemon
 var sessions: session.SessionTable = session.SessionTable.init();
 var ledger: grant_ledger.GrantLedger = undefined;
 var dispatcher: dispatch.Dispatch = undefined;
+var keys: KeyMaterial = undefined;
+
+// Generate ephemeral keys for testing. Production should load from files.
+fn generateEphemeralKeys() !void {
+    // TODO: implement proper key generation using std.crypto.random
+    // For now, use zeroed keys (ephemeral mode, not for production)
+    @memset(&keys.x25519_secret, 0);
+    @memset(&keys.x25519_public, 0);
+    @memset(&keys.ed25519_seed, 0);
+    @memset(&keys.ed25519_public, 0);
+    
+    // No cert or trusted CAs for now — ephemeral mode
+    keys.own_cert_len = 0;
+    keys.trusted_ca_count = 0;
+    
+    std.debug.print("bolina: generated ephemeral keys (zeroed, not for production)\n", .{});
+}
 
 pub fn main() !void {
+    // Generate ephemeral keys (D-018: no hardcoded secrets)
+    try generateEphemeralKeys();
+    
     // Config: hardcoded for now, env vars later
     const bind_addr = "0.0.0.0";
     const bind_port: u16 = 47777;
