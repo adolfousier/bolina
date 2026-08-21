@@ -133,6 +133,18 @@ pub const Listener = struct {
         return @intCast(rc);
     }
 
+    // recvFrom: receive a datagram and capture the sender's address.
+    // Returns the number of bytes received and writes the sender's sockaddr
+    // into out_addr (which must be at least 28 bytes). The out_addr_len
+    // parameter receives the actual sockaddr length.
+    pub fn recvFrom(self: *Listener, buf: []u8, out_addr: *[28]u8, out_addr_len: *c_uint) ListenError!usize {
+        var addr_len: c_uint = 28;
+        const rc = libc.recvfrom(self.fd, buf.ptr, buf.len, 0, out_addr, &addr_len);
+        if (rc < 0) return error.RecvFailed;
+        out_addr_len.* = addr_len;
+        return @intCast(rc);
+    }
+
     pub fn close(self: *Listener) void {
         if (self.fd >= 0) _ = libc.close(self.fd);
         self.fd = -1;

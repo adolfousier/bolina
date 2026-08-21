@@ -25,6 +25,7 @@ const grant_ledger = @import("grant_ledger.zig");
 const binding = @import("binding.zig");
 const noise = @import("noise.zig");
 const relay = @import("relay.zig");
+const handshake = @import("handshake.zig");
 
 const MAX_DGRAM: usize = 2048;
 
@@ -53,6 +54,7 @@ var sessions: session.SessionTable = session.SessionTable.init();
 var ledger: grant_ledger.GrantLedger = undefined;
 var dispatcher: dispatch.Dispatch = undefined;
 var keys: KeyMaterial = undefined;
+var handshake_server: handshake.HandshakeServer = undefined;
 
 // Generate ephemeral keys for testing. Production should load from files.
 fn generateEphemeralKeys() !void {
@@ -88,13 +90,30 @@ pub fn main() !void {
     try lis.bind(&registry, bind_addr, bind_port);
     defer lis.close();
 
+    // Initialize std.Io context for handshake (Zig 0.16 std.Io)
+    var threaded_io = std.Io.Threaded.init_single_threaded;
+    const io = threaded_io.io;
+
+    // Initialize handshake server with our keys
+    handshake_server = handshake.HandshakeServer{
+        .fd = lis.fd,
+        .responder_static = noise.X25519KeyPair{
+            .secret = keys.x25519_secret,
+            .public = keys.x25519_public,
+        },
+        .responder_sig_pubkey = keys.ed25519_public,
+        .io = io,
+    };
+
     std.debug.print("bolina: listener bound, entering recv loop\n", .{});
 
     // Recv loop
     var buf: [MAX_DGRAM]u8 = undefined;
+    var sender_addr: [28]u8 = undefined;
+    var sender_addr_len: c_uint = 0;
 
     while (true) {
-        const n = lis.recv(&buf) catch |err| {
+        const n = lis.recvFrom(&buf, &sender_addr, &sender_addr_len) catch |err| {
             std.debug.print("bolina: recv error: {}\n", .{err});
             continue;
         };
@@ -109,8 +128,12 @@ pub fn main() !void {
         switch (dgram[0]) {
             1, 2, 3 => {
                 // Handshake messages (types 1-3)
-                std.debug.print("bolina: handshake type {} from peer\n", .{dgram[0]});
-                // TODO: wire handshake.zig + binding.zig
+                const slot = handshake_server.processDatagram(dgram, &sender_addr, sender_addr_len, 0) catch |err| {
+                    std.debug.print("bolina: handshake error: {}\n", .{err});
+                    continue;
+                };
+                std.debug.print("bolina: handshake completed, session slot {}\n", .{slot});
+                // TODO: transition session to session.SessionTable for type 4 handling
             },
             parser.MSG_TRANSPORT_DATA => {
                 // Type 4: transport data — decrypt, parse envelope, dispatch
