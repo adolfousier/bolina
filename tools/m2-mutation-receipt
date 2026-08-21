@@ -1,26 +1,26 @@
-# Mutation testing receipt (SPEC.md §11.2)
+# Mutation testing receipt (SPEC.md §11.2, D-088 amendment)
 # Written by: python3 tools/mutation-test.py (full, non-chunked run)
 # Updated: bump this file after every clean full-suite run.
-# Format: one line per domain "domain=killed/total", final "total=" line.
+# Format: one line per domain "domain=killed/total" (total includes documented
+# equivalent mutants), final "total=" line parsed by prumo-verify.
 # SHA must be HEAD or an ancestor; prumo-verify gates on it.
-sha=91f05f7
-grant=14/14
+sha=7e3b375
+channel=8/8
+daemon=7/7
+dispatch=6/6
 evidence=11/11
-transport=9/9
-session=16/16
-channel=7/7
-mesh=5/5
-relay=5/5
-ledger=10/10
-intent=8/8
-refusal=5/5
-resolver=6/6
-render=2/2
-sync=12/12
-dispatch=12/12
-daemon=4/4
+grant=21/22 (1 documented equivalent: BE-GRANT-03 check 7, see EQUIVALENT in tools/mutation-test.py)
+grant_ledger=7/7
+grant_revocation=4/4
+intent=6/6
+ledger=13/13
+mesh=13/13
+refusal=3/3
+relay=11/11
 relay_serve=6/6
-grant_ledger=8/8
-grant_revocation=10/10
-callback=1/1
-total=160/160 survived=0
+render=6/6
+resolver=10/10
+session=11/11
+sync=12/12
+transport=4/4
+total=159/159 survived=0 equivalent=1
