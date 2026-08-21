@@ -110,11 +110,7 @@ pub const Listener = struct {
     // the registry never says owned for an endpoint the socket does not hold.
     pub fn bind(self: *Listener, registry: *EndpointRegistry, addr: []const u8, port: u16) ListenError!void {
         if (self.bound) return error.EndpointBusy;
-        const want_len: usize = switch (self.family) {
-            .ipv4 => 4,
-            .ipv6 => 16,
-        };
-        if (addr.len != want_len) return error.FamilyMismatch;
+        if (addr.len != (if (self.family == .ipv4) @as(usize, 4) else 16)) return error.FamilyMismatch;
         registry.claim(addr, port) catch return error.EndpointBusy;
         var sa: [28]u8 = undefined;
         const sa_len = makeSockaddr(self.family, addr, port, &sa);
@@ -157,24 +153,11 @@ pub const Listener = struct {
 // Port is big-endian in both. Returns the sockaddr length to pass to bind.
 fn makeSockaddr(family: Family, addr: []const u8, port: u16, out: *[28]u8) c_uint {
     out.* = .{0} ** 28;
-    const af: u8 = switch (family) {
-        .ipv4 => @intCast(AF_INET),
-        .ipv6 => @intCast(AF_INET6),
-    };
-    const sa_len: c_uint = switch (family) {
-        .ipv4 => 16,
-        .ipv6 => 28,
-    };
-    switch (builtin.os.tag) {
-        .macos, .freebsd, .openbsd, .netbsd, .dragonfly => {
-            out[0] = @intCast(sa_len);
-            out[1] = af;
-        },
-        else => {
-            out[0] = af;
-            out[1] = 0;
-        },
-    }
+    const af: u8 = if (family == .ipv4) @as(u8, @intCast(AF_INET)) else @as(u8, @intCast(AF_INET6));
+    const sa_len: c_uint = if (family == .ipv4) 16 else 28;
+    const bsd = switch (builtin.os.tag) { .macos, .freebsd, .openbsd, .netbsd, .dragonfly => true, else => false };
+    out[0] = if (bsd) @intCast(sa_len) else af;
+    out[1] = if (bsd) af else 0;
     out[2] = @intCast(port >> 8);
     out[3] = @intCast(port & 0xff);
     switch (family) {
