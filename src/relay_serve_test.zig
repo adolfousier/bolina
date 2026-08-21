@@ -466,16 +466,28 @@ test "BE_EXEC_04 registration gates: signature, overlay, relay_index, skew, tabl
     try testing.expectEqual(@as(usize, 0), table.count);
 
     // Table bound: a full table refuses new registrations (BE-MESH-04).
+    // MD5: fill with DISTINCT marker addresses (byte 15 = 0xEE); a repeated
+    // address is now an in-place refresh, so a fill on one address would
+    // spin forever without ever raising count.
+    var fill = overlay_b;
+    fill[15] = 0xEE;
+    try testing.expect(overlay_b[15] != 0xEE); // the marker keeps every fill distinct from the real registration
     while (table.count < relay.MAX_RELAY_TABLE) {
-        _ = table.insert(.{ .overlay_addr = overlay_b, .relay_index = 0, .client_index = @intCast(table.count), .expiry = NOW_S + 3600 });
+        fill[0] = @intCast(table.count & 0xff);
+        fill[1] = @intCast((table.count >> 8) & 0xff);
+        _ = table.insert(.{ .overlay_addr = fill, .relay_index = 0, .client_index = @intCast(table.count), .expiry = NOW_S + 3600 });
     }
     buildRegistration(&reg_pkt, @intCast(slot_b), CLIENT_B_INDEX, NOW_S, overlay_b, NOW_S + 3600, cth.keypair(B_SIG_PREFIX));
     try serveFromFd(&serve, b_fd, &reg_pkt, 45706);
     try testing.expectEqual(relay.MAX_RELAY_TABLE, table.count);
 
     // Expired entries are pruned before a new registration (BE-MESH-05).
+    // MD5: the expired corpse carries a DIFFERENT address than the incoming
+    // registration. With the same address, insert-refresh rebuilds the
+    // identical final state with or without the prune, and the prune mutant
+    // would survive: an equivalence the dedup created.
     table.count = 0;
-    _ = table.insert(.{ .overlay_addr = overlay_b, .relay_index = 0, .client_index = 5, .expiry = NOW_S - 1 }); // expired
+    _ = table.insert(.{ .overlay_addr = fill, .relay_index = 0, .client_index = 5, .expiry = NOW_S - 1 }); // expired, foreign address
     buildRegistration(&reg_pkt, @intCast(slot_b), CLIENT_B_INDEX, NOW_S, overlay_b, NOW_S + 3600, cth.keypair(B_SIG_PREFIX));
     try serveFromFd(&serve, b_fd, &reg_pkt, 45706);
     try testing.expectEqual(@as(usize, 1), table.count);

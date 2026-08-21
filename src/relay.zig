@@ -50,18 +50,13 @@ pub fn parseRelayRoute(buf: []const u8) parser.ParseError!RelayRoute {
     const msg_type = try c.u8r();
     if (msg_type != MSG_RELAY_ROUTE) return coverage.reject(.relay_route_type);
     const reserved = try c.take(LEN_RESERVED);
-    if (reserved[0] != 0 or reserved[1] != 0 or reserved[2] != 0)
-        return coverage.reject(.relay_route_reserved);
+    if ((reserved[0] | reserved[1] | reserved[2]) != 0) return coverage.reject(.relay_route_reserved);
     const sender_index = try c.u32be();
     const recipient_index = try c.u32be();
     const timestamp = try c.u64be();
     if (c.pos != buf.len) return coverage.reject(.relay_route_trailing);
     coverage.accept(.relay_route_accepted);
-    return .{
-        .sender_index = sender_index,
-        .recipient_index = recipient_index,
-        .timestamp = timestamp,
-    };
+    return .{ .sender_index = sender_index, .recipient_index = recipient_index, .timestamp = timestamp };
 }
 
 // ---------------------------------------------------------------------------
@@ -126,8 +121,13 @@ pub const RelayTable = struct {
         return .{ .entries = undefined };
     }
 
-    // Insert a registration entry. Returns false if the table is full.
+    // Insert: same overlay_addr re-registers as an in-place refresh (MD5):
+    // newest wins, a stale route never shadows a live one, no clone floods;
+    // false only for a NEW address at a full table.
     pub fn insert(self: *RelayTable, entry: RelayEntry) bool {
+        for (self.entries[0..self.count]) |*e| {
+            if (std.mem.eql(u8, &e.overlay_addr, &entry.overlay_addr)) { e.* = entry; return true; }
+        }
         if (self.count >= MAX_RELAY_TABLE) return false;
         self.entries[self.count] = entry;
         self.count += 1;

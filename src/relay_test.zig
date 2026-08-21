@@ -135,7 +135,10 @@ test "BE_MESH_02 RelayTable rejects insert when full" {
         };
         try std.testing.expect(table.insert(entry));
     }
-    // Table is now full; next insert should fail.
+    // Table is now full; a NEW address must fail. The last loop addr is
+    // already present, and MD5 turns its re-insert into a refresh, so flip a
+    // byte no loop entry ever set (addr[2] stays 0 inside the loop).
+    addr[2] = 1;
     const entry = relay.RelayEntry{
         .overlay_addr = addr,
         .relay_index = 1,
@@ -155,6 +158,21 @@ test "BE_MESH_02 RelayTable prunes expired entries" {
     try std.testing.expectEqual(@as(usize, 1), table.count);
     try std.testing.expect(table.lookup(&addr1) == null);
     try std.testing.expect(table.lookup(&addr2) != null);
+}
+
+test "MD5 re-registration refreshes in place, no duplicate route" {
+    var table = relay.RelayTable.init();
+    const addr = decodeHex("fd0102030405060708090a0b0c0d0e0f");
+    _ = table.insert(.{ .overlay_addr = addr, .relay_index = 1, .client_index = 1, .expiry = 100 });
+    // The same address re-registers with a new client_index and expiry: a
+    // refresh, not a second route. Before MD5 this appended a clone and the
+    // stale first entry shadowed every lookup.
+    _ = table.insert(.{ .overlay_addr = addr, .relay_index = 1, .client_index = 42, .expiry = 500 });
+    try std.testing.expectEqual(@as(usize, 1), table.count);
+    const found = table.lookup(&addr);
+    try std.testing.expect(found != null);
+    try std.testing.expectEqual(@as(u32, 42), found.?.client_index);
+    try std.testing.expectEqual(@as(u64, 500), found.?.expiry);
 }
 
 test "BE_MESH_02 forwardPacket returns packet unchanged" {
