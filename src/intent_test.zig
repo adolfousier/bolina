@@ -81,8 +81,10 @@ test "BE_GRANT_06a T_pending timeout expires pending and releases the lock" {
     try std.testing.expectEqual(intent.State.pending, t.entries[0].state);
 
     // At the timeout (non-strict: now >= admitted + T): collapses to EXPIRED.
+    // MD4: the sweep reclaims the dead slot itself, so EXPIRED is observable
+    // as absence (len drops to zero), not as a corpse at entries[0].
     try std.testing.expectEqual(@as(usize, 1), t.expireTimeouts(intent.T_PENDING_MS));
-    try std.testing.expectEqual(intent.State.expired, t.entries[0].state);
+    try std.testing.expectEqual(@as(usize, 0), t.len);
 
     // The lock is released: the resource can be re-admitted.
     try t.admit(intentWith(&id_b, "res-1"), 0);
@@ -97,7 +99,9 @@ test "BE_GRANT_09 matched refusal rejects a pending intent" {
     try t.admit(intentWith(&id_a, "res-1"), 0);
 
     try std.testing.expectEqual(intent.RefusalOutcome.rejected, t.applyRefusal(refusalWith(&id_a)));
-    try std.testing.expectEqual(intent.State.rejected, t.entries[0].state);
+    // MD4: terminal REJECTED leaves the table entirely; the observable
+    // rejection is the reclaimed slot, not a corpse at entries[0].
+    try std.testing.expectEqual(@as(usize, 0), t.len);
 
     // Lock released: the resource is free immediately, without T_pending.
     try t.admit(intentWith(&id_b, "res-1"), 0);
@@ -149,4 +153,31 @@ test "beginExecuting on a non-pending entry is refused" {
     try t.beginExecuting(idx); // pending -> executing
     // Already executing: not pending, so a second transition is refused.
     try std.testing.expectError(error.NotPending, t.beginExecuting(idx));
+}
+
+// ---------------------------------------------------------------------------
+// MD4: dead slots free capacity, not just locks.
+// ---------------------------------------------------------------------------
+
+test "MD4 churn: expired generations never exhaust the table" {
+    var t = intent.Table.init();
+    // Three full generations of admissions through the expiry sweep. Before
+    // compaction the corpses piled up: the MAX_PENDING+1st admit hit
+    // TableFull forever, a capacity leak dressed as a bound. Now every sweep
+    // reclaims the dead slots, so churn never exhausts the table.
+    var gen: usize = 0;
+    while (gen < 3) : (gen += 1) {
+        var i: usize = 0;
+        while (i < intent.MAX_PENDING) : (i += 1) {
+            const seq: u128 = @intCast(gen * intent.MAX_PENDING + i + 1);
+            var id: [16]u8 = undefined;
+            std.mem.writeInt(u128, &id, seq, .little);
+            var rbuf: [24]u8 = undefined;
+            const r = std.fmt.bufPrint(&rbuf, "res-{d}", .{seq}) catch unreachable;
+            try t.admit(intentWith(&id, r), 0);
+        }
+        try std.testing.expectEqual(intent.MAX_PENDING, t.len);
+        _ = t.expireTimeouts(intent.T_PENDING_MS);
+        try std.testing.expectEqual(@as(usize, 0), t.len);
+    }
 }

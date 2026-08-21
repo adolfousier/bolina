@@ -148,6 +148,8 @@ pub const Table = struct {
     pub fn applyRefusal(self: *Table, refusal: Refusal) RefusalOutcome {
         const idx = self.findPendingByIntentId(refusal.intent_id) orelse return .no_match;
         self.entries[idx].state = .rejected;
+        // MD4: a terminal entry holds no lock; now it holds no slot either.
+        self.compact();
         return .rejected;
     }
 
@@ -166,7 +168,27 @@ pub const Table = struct {
         // Brief section 6: after the expiry transition returns. pc carries
         // the collapse count; a zero-count sweep emits nothing.
         if (grant_trace.enabled and collapsed > 0) grant_trace.emit(.expire_pending, @intCast(collapsed), "intent-table", now_ms);
+        // MD4: the sweep released the locks; reclaim the capacity too.
+        if (collapsed > 0) self.compact();
         return collapsed;
+    }
+
+    // compact (MD4): dead slots hold no lock, but until now they held array
+    // capacity: a table that churned MAX_PENDING intents went TableFull
+    // forever on EXPIRED/REJECTED corpses, a capacity leak dressed as a
+    // bound. Shifts live survivors (PENDING/EXECUTING) to the front and
+    // resets len, so expiry frees capacity, not just locks. Survivor order
+    // is preserved. Caller-held indices from matchForGrant are consumed in
+    // the same frame (BE-GRANT-03a), so no index dangles across the shift.
+    fn compact(self: *Table) void {
+        var live: usize = 0;
+        for (self.entries[0..self.len]) |*e| {
+            if (e.state == .pending or e.state == .executing) {
+                self.entries[live] = e.*;
+                live += 1;
+            }
+        }
+        self.len = live;
     }
 
     // --- internal lookups --------------------------------------------------

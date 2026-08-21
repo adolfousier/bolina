@@ -720,12 +720,12 @@ test "DAEMON_A refusal happy path: REJECTED inside the frame, on_rejected once" 
     // 2. The approver refuses it: REJECTED transition inside the verify frame.
     const refusal_wire = buildRefusalWire(R_INTENT_ID, R_NOTE);
     try std.testing.expectEqual(dispatch_mod.Outcome.refusal_applied, try d.dispatch(refusalEnvelopeSigned(refusal_wire), hooks, GRANT_NOW_MS));
-    // 3. The intent is REJECTED; on_rejected fired exactly once, literal id.
-    var found_rejected = false;
+    // 3. MD4: terminal REJECTED leaves the table entirely; the observable
+    // rejection is absence (no entry carries the intent_id in any state)
+    // plus on_rejected fired exactly once with the literal id.
     for (d.intents.entries[0..d.intents.len]) |e| {
-        if (std.mem.eql(u8, &e.intent_id, &R_INTENT_ID) and e.state == .rejected) found_rejected = true;
+        try std.testing.expect(!std.mem.eql(u8, &e.intent_id, &R_INTENT_ID));
     }
-    try std.testing.expect(found_rejected);
     try std.testing.expectEqual(@as(usize, 1), rejected_count);
     try std.testing.expectEqual(R_INTENT_ID, rejected_intent_id);
 }
