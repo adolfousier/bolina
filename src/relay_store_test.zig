@@ -67,7 +67,7 @@ test "BE_MESH_03 global cap is 1024 slots across recipients" {
     try std.testing.expectEqual(@as(u64, 1), store.refused_quota);
 }
 
-test "BE_MESH_03 TTL expires at 72 hours on the caller clock, lazily" {
+test "BE_MESH_03 TTL expires at 120 seconds on the caller clock, lazily" {
     store.reset();
     try store.store(ADDR_A, 1, BODY_ONE, 0);
     // One ms before expiry: still deliverable.

@@ -769,14 +769,19 @@ recipient's registration is known (an unexpired type-6 entry maps the `recipient
 `overlay_addr`) but live-path delivery is not possible. Storage is keyed by the recipient's
 `overlay_addr`; the storage unit is the whole forward packet (route header and ciphertext body).
 Bounds are declared: at most 64 stored packets per recipient, at most 4 MiB aggregate per
-recipient, stored bodies of at most 2048 bytes, and a TTL of 72 hours from storage. Bounds are
-enforced at store time; the TTL purges lazily at store and drain against the caller's clock. A
-relay MUST NOT store for recipients it cannot identify: the no-service rule for unknown
-`recipient_index` values above extends to storage. When a stored recipient registers (a type-6
-registration accepted for its `overlay_addr`), the relay MUST drain that recipient's stored queue
-in store order, rewriting each packet's relay-layer `recipient_index` to the fresh
-`client_index`; the Noise ciphertext body is forwarded byte-for-byte unchanged (BE-MESH-02).
-Quota exhaustion drops the store, surfaces a counter, and never blocks live forwarding.
+recipient, stored bodies of at most 2048 bytes, and a TTL of 120 seconds (one rekey interval,
+BE-TR-02) from storage. The TTL is bounded by the session-key lifetime: stored bodies are
+encrypted under the sender-recipient session key, and BE-TR-02 requires session keys to be
+replaced every 120 seconds; a longer TTL would retain ciphertext under a key past its mandated
+rotation, extending the compromise window. A recipient restart during the offline window flushes
+the stored queue (session keys are in-memory only). Bounds are enforced at store time; the TTL
+purges lazily at store and drain against the caller's clock. A relay MUST NOT store for
+recipients it cannot identify: the no-service rule for unknown `recipient_index` values above
+extends to storage. When a stored recipient registers (a type-6 registration accepted for its
+`overlay_addr`), the relay MUST drain that recipient's stored queue in store order, rewriting
+each packet's relay-layer `recipient_index` to the fresh `client_index`; the Noise ciphertext
+body is forwarded byte-for-byte unchanged (BE-MESH-02). Quota exhaustion drops the store,
+surfaces a counter, and never blocks live forwarding.
 
 #### Type 6 — Relay registration (124 bytes)
 

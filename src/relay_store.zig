@@ -6,11 +6,15 @@
 // index, a recipient overlay_addr, and opaque ciphertext bytes, and this
 // module never parses the body (BE-MESH-02 opacity).
 //
-// Bounds are declared in SPEC v0.3.4-draft: at most 64 stored packets and
-// 4 MiB in aggregate per recipient, body at most 2048 bytes, TTL 72 hours,
-// 1024 global slots. Quota exhaustion refuses the store and counts it; live
-// forwarding is never blocked. TTL purge is lazy, driven by the caller's
-// clock (now_ms): no timers before the daemon milestone.
+// Bounds are declared in SPEC v0.5.0: at most 64 stored packets and
+// 4 MiB in aggregate per recipient, body at most 2048 bytes, TTL 120 seconds
+// (one rekey interval, BE-TR-02), 1024 global slots. Quota exhaustion refuses
+// the store and counts it; live forwarding is never blocked. TTL purge is lazy,
+// driven by the caller's clock (now_ms): no timers before the daemon milestone.
+// The TTL is bounded by the session-key lifetime: stored bodies are encrypted
+// under the sender-recipient session key, and BE-TR-02 requires session keys
+// to be replaced every 120 seconds; a longer TTL would retain ciphertext under
+// a key past its mandated rotation.
 //
 // Storage keys by overlay_addr, not client_index (D-058): indexes die with
 // the session, overlay_addr persists (BE-ID-01). Drain returns packets in
@@ -23,7 +27,7 @@ const std = @import("std");
 pub const MAX_BODY: usize = 2048;
 pub const MAX_PER_RECIPIENT: usize = 64;
 pub const MAX_BYTES_PER_RECIPIENT: usize = 4 * 1024 * 1024;
-pub const TTL_MS: u64 = 72 * 60 * 60 * 1000;
+pub const TTL_MS: u64 = 120 * 1000; // one rekey interval (BE-TR-02)
 pub const MAX_STORED: usize = 1024;
 
 pub const StoreError = error{

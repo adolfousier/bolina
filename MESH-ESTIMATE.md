@@ -58,7 +58,7 @@ recipient coming back on a new session. The ruling:
 ## 4. Declared constants proposed for the SPEC edit
 
 Per overlay_addr: at most 64 stored packets and 4 MiB aggregate stored bytes.
-TTL: 72 hours (259200 s), relay-local clock, same relativity as the type-5 skew
+TTL: 120 seconds (one rekey interval, BE-TR-02), relay-local clock, same relativity as the type-5 skew
 rule. Max stored packet body: 2048 bytes; a larger body is forwarded live or
 refused, never stored. All five numbers are declared in the SPEC edit, all are
 ratchet-friendly constants in code.

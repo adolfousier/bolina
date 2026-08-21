@@ -599,8 +599,8 @@ die with the session; drain rewrites the relay-layer recipient_index at
 registration time and never touches the ciphertext body (BE-MESH-02 opacity);
 BE-MESH-04's no-service rule for unknown indexes extends to storage. Declared
 bounds: 64 packets and 4 MiB per recipient (the byte bound is
-defense-in-depth, dominated by 64 times 2048), 2048-byte body cap, 72-hour
-TTL on the caller clock, 1024 global slots; quota exhaustion counts and never
+defense-in-depth, dominated by 64 times 2048), 2048-byte body cap, 120-second
+TTL (one rekey interval, BE-TR-02) on the caller clock, 1024 global slots; quota exhaustion counts and never
 blocks live forwarding.
 
 Implementation: src/relay_store.zig 139 lines (non-surface per D-058, zero
