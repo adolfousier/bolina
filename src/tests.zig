@@ -34,4 +34,5 @@ comptime {
     _ = @import("adversarial_live_test.zig");
     _ = @import("adversarial_semantic_test.zig");
     _ = @import("grant_trace_test.zig");
+    _ = @import("keys_test.zig");
 }
