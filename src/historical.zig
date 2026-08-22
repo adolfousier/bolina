@@ -24,7 +24,19 @@ pub const HistoricalError = error{
     NotDescendantOfAnchor, // BE-HIST-03: envelope not causally after anchor
     DescendantOfRevocation, // BE-HIST-03: envelope causally after revocation
     AnchorNotFound, // BE-HIST-02: sender has no anchor in the ledger
-    RevokeHashNotFound, // BE-HIST-04: revoked but revoke hash not exposed
+    // BE-HIST-01: certificate chain failures surfaced through the audit path.
+    // Superset of binding.BindingError so the delegation below coerces without
+    // a lossy switch. CertExpired is carried for set completeness only: the
+    // NoClock chain takes no time input, so this path cannot emit it.
+    MalformedKey,
+    BadCASignature,
+    UntrustedCA,
+    CertExpired,
+    CertTooLongLived,
+    RoleAgentApprover,
+    RoleAgentExecutor,
+    RoleApproverExecutor,
+    ApproverNoQuorum,
 };
 
 // ---------------------------------------------------------------------------
@@ -55,55 +67,39 @@ pub fn historicalValidity(
     sender: [32]u8,
     ctx: AuditContext,
 ) HistoricalError!void {
+    // BE-HIST-01: the sender's certificate is revalidated structurally, with
+    // no clock. A committed signature stays valid after its cert expires; a
+    // cert whose CHAIN was never sound was never valid at any time.
+    try validateCertNoClock(ctx.sender_cert, ctx.trusted_ca_keys);
+
     // BE-HIST-03: check that the envelope is a causal descendant of its anchor.
     const anchor_hash = ctx.ledger.getAnchor(sender) orelse return error.AnchorNotFound;
     if (!ctx.dag.isAncestor(anchor_hash, env_hash)) {
         return error.NotDescendantOfAnchor;
     }
 
-    // BE-HIST-04: check that the envelope is NOT a causal descendant of a
-    // revocation. The ledger.isRevoked check is the immediate-for-admission
-    // gate; for audit we need the causal position.
-    if (ctx.ledger.isRevoked(sender)) {
-        // TODO: expose revoke_hash from ledger and check DAG ancestry here.
-        // Current ledger.isRevoked returns bool, not the hash. When that
-        // changes, add: const revoke_hash = ctx.ledger.getRevokeHash(sender);
-        // if (ctx.dag.supersedes(revoke_hash, env_hash, env_hash)) {
-        //     return error.DescendantOfRevocation;
-        // }
-        // For now, treat any revoked sender as violating BE-HIST-03.
-        return error.DescendantOfRevocation;
+    // BE-HIST-04 causal form: the ledger exposes the revoke envelope's hash,
+    // and the violation exists only when the audited envelope is a causal
+    // DESCENDANT of that revoke. An envelope committed before the revocation
+    // stays historically valid at commit time; admission (ledger.isRevoked)
+    // remains the immediate gate for anything arriving now.
+    if (ctx.ledger.getRevokeHash(sender)) |revoke_hash| {
+        if (ctx.dag.isAncestor(revoke_hash, env_hash)) {
+            return error.DescendantOfRevocation;
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
 // BE-HIST-01 helper: validate a certificate at commit time WITHOUT clock.
 //
-// This is the same as binding.validateCert except it skips the validity
-// window check (BE-ID-03), because historical validity does not recheck
-// the clock on committed signatures. The certificate chain, role constraints,
-// and CA signatures are still verified.
+// Delegates to binding.validateCertNoClock (the chain split lives there, next
+// to the clocked validateCert it mirrors). Skips only the validity-window
+// check (BE-ID-03): historical validity does not recheck the clock on
+// committed signatures. Chain, role constraints, BE-REV-01 lifetime-span cap,
+// and CA signatures are all still verified.
 // ---------------------------------------------------------------------------
 
 pub fn validateCertNoClock(cert: parser.session.Cert, trusted_ca_keys: []const []const u8) HistoricalError!void {
-    // Run binding.validateCert with a fixed now_ms that makes the window
-    // always pass. This is a cheap expedient: we want the chain and role
-    // checks, but we deliberately make the temporal check trivially true.
-    // The correct fix would be to expose a variant of validateCert that
-    // skips the window, but that requires changes to binding.zig.
-    //
-    // Use a very early timestamp (0) and a very late not_after (u64::MAX)
-    // to make the window always pass. This is NOT correct for real clock
-    // semantics, but it achieves the goal: the cert chain and role checks
-    // run, while the temporal check is neutralized for the audit path.
-    //
-    // TODO: expose a validateCertChainNoClock function from binding.zig
-    // that does the full chain check without the temporal window.
-    _ = cert;
-    _ = trusted_ca_keys;
-    // Temporary: just return success. The real implementation needs the
-    // chain validation from binding.zig, but for the slice we defer to the
-    // actual binding.validateCert and document that the clock check is
-    // skipped conceptually. The audit path is TODO-complete pending a
-    // binding.zig refactor.
+    return binding.validateCertNoClock(cert, trusted_ca_keys);
 }

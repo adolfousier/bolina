@@ -11,6 +11,21 @@ const verify = @import("verify.zig");
 const dag = @import("dag.zig");
 const parser = @import("parser.zig");
 const binding = @import("binding.zig");
+const cth = @import("cert_test_helpers.zig");
+
+// A real participant cert (one trusted CA) for the historical fixtures. The
+// audit path now validates the chain structurally (BE-HIST-01), so the
+// AuditContext needs a genuine certificate, not an undefined literal.
+fn auditCert(wire: []u8, not_before: u64, not_after: u64) parser.session.Cert {
+    return cth.buildCertInto(
+        wire,
+        cth.pubkeyOf(0xa1),
+        0, // participant: no privileged-role lifetime cap in play
+        &[_]u8{0xc0},
+        not_before,
+        not_after,
+    );
+}
 
 fn hashOf(s: []const u8) [32]u8 {
     var out: [32]u8 = undefined;
@@ -387,11 +402,12 @@ test "BE_HIST_03 envelope descendant of anchor passes historical check" {
     // Record causal relationship: anchor -> env (anchor precedes env).
     try d.insert(anchor_hash, env_hash);
 
+    var wire: [512]u8 = undefined;
     const ctx = historical.AuditContext{
         .ledger = &l,
         .dag = &d,
-        .sender_cert = undefined, // not used for anchor check
-        .trusted_ca_keys = &[_][]const u8{},
+        .sender_cert = auditCert(&wire, cth.CERT_NOT_BEFORE, cth.CERT_NOT_AFTER),
+        .trusted_ca_keys = cth.trustedSet(),
     };
 
     // Env is descendant of anchor: passes historical check.
@@ -408,11 +424,12 @@ test "BE_HIST_03 envelope not descendant of anchor fails historical check" {
     try l.setAnchor(sender, anchor_hash);
 
     // No causal relationship recorded: env is not descendant of anchor.
+    var wire: [512]u8 = undefined;
     const ctx = historical.AuditContext{
         .ledger = &l,
         .dag = &d,
-        .sender_cert = undefined,
-        .trusted_ca_keys = &[_][]const u8{},
+        .sender_cert = auditCert(&wire, cth.CERT_NOT_BEFORE, cth.CERT_NOT_AFTER),
+        .trusted_ca_keys = cth.trustedSet(),
     };
 
     // Not descendant: fails historical check.
@@ -437,11 +454,12 @@ test "BE_HIST_03 envelope descendant of revocation fails historical check" {
     try d.insert(anchor_hash, revoke_hash);
     try d.insert(revoke_hash, env_hash);
 
+    var wire: [512]u8 = undefined;
     const ctx = historical.AuditContext{
         .ledger = &l,
         .dag = &d,
-        .sender_cert = undefined,
-        .trusted_ca_keys = &[_][]const u8{},
+        .sender_cert = auditCert(&wire, cth.CERT_NOT_BEFORE, cth.CERT_NOT_AFTER),
+        .trusted_ca_keys = cth.trustedSet(),
     };
 
     // Descendant of revocation: fails historical check.
@@ -449,17 +467,93 @@ test "BE_HIST_03 envelope descendant of revocation fails historical check" {
 }
 
 // ---------------------------------------------------------------------------
+// BE-HIST-04 causal form (D-090): a revocation poisons only envelopes
+// causally AFTER the revoke envelope. An envelope committed before the
+// revocation stays historically valid at commit time even though the sender
+// is revoked NOW. Admission (ledger.isRevoked) remains the immediate gate.
+// ---------------------------------------------------------------------------
+
+test "BE_HIST_04 envelope committed BEFORE the revoke stays historically valid" {
+    var l = ledger.Ledger.init();
+    var d: dag.Dag = .{};
+    const sender = [_]u8{0xf1} ** 32;
+    const anchor_hash = hashOf("anchor7");
+    const env_hash = hashOf("env7"); // committed first
+    const revoke_hash = hashOf("revoke5"); // revoked later
+
+    try l.setAnchor(sender, anchor_hash);
+    try l.setRevocation(sender, revoke_hash, std.math.maxInt(u64));
+
+    // Causal shape: anchor -> env and anchor -> revoke are siblings; the
+    // revoke does NOT precede the envelope.
+    try d.insert(anchor_hash, env_hash);
+    try d.insert(anchor_hash, revoke_hash);
+
+    // The audit reads the causal position from the exposed revoke hash.
+    try std.testing.expectEqual(revoke_hash, l.getRevokeHash(sender).?);
+
+    var wire: [512]u8 = undefined;
+    const ctx = historical.AuditContext{
+        .ledger = &l,
+        .dag = &d,
+        .sender_cert = auditCert(&wire, cth.CERT_NOT_BEFORE, cth.CERT_NOT_AFTER),
+        .trusted_ca_keys = cth.trustedSet(),
+    };
+
+    // Sender is revoked NOW, but this envelope predates the revocation:
+    // historically valid at commit time.
+    try historical.historicalValidity(env_hash, sender, ctx);
+}
+
+test "BE_HIST_04 getRevokeHash returns the recorded hash, null when absent" {
+    var l = ledger.Ledger.init();
+    const sender = [_]u8{0xf2} ** 32;
+    const other = [_]u8{0xf3} ** 32;
+    const revoke_hash = hashOf("revoke6");
+
+    try std.testing.expect(l.getRevokeHash(sender) == null);
+    try l.setRevocation(sender, revoke_hash, 12345);
+    try std.testing.expectEqual(revoke_hash, l.getRevokeHash(sender).?);
+    try std.testing.expect(l.getRevokeHash(other) == null);
+}
+
+// ---------------------------------------------------------------------------
 // BE-HIST-01: no clock checks on committed signatures (BE-HIST-01).
 // ---------------------------------------------------------------------------
 
-test "BE_HIST_01 historical validity does not recheck the clock on cert" {
-    // The historical path calls validateCertNoClock, which skips the
-    // temporal window check. This test documents the shape; the actual
-    // implementation is TODO pending binding.zig refactor (see
-    // src/historical.zig validateCertNoClock).
-    //
-    // When implemented, this test will pass a cert with an expired
-    // not_after and expect success (no clock check), whereas the admission
-    // path would reject the same cert.
-    _ = historical.validateCertNoClock;
+test "BE_HIST_01 audit path runs the chain but not the clock" {
+    // A cert whose validity window closed in the past: admission rejects it
+    // (the clock check), the audit path accepts it (no clock input exists).
+    var wire: [512]u8 = undefined;
+    const expired = cth.buildCertInto(
+        &wire,
+        cth.pubkeyOf(0xa1),
+        0,
+        &[_]u8{0xc0},
+        1000, // not_before long past
+        2000, // not_after long past
+    );
+
+    // Admission: clocked validation rejects with CertExpired.
+    try std.testing.expectError(error.CertExpired, binding.validateCert(expired, cth.trustedSet(), 3000));
+
+    // Audit: structural revalidation accepts -- the signature was committed
+    // while the cert was live, and BE-HIST-01 forbids rechecking the clock.
+    try historical.validateCertNoClock(expired, cth.trustedSet());
+}
+
+test "BE_HIST_01 audit path still enforces the chain without a clock" {
+    // Same shape as above, but signed by CA 0xd0, which is NOT in the trusted
+    // set {0xc0, 0xc1, 0xc2}. Removing the clock must not remove the chain:
+    // an untrusted CA is rejected on the audit path too.
+    var wire: [512]u8 = undefined;
+    const rogue = cth.buildCertInto(
+        &wire,
+        cth.pubkeyOf(0xa1),
+        0,
+        &[_]u8{0xd0},
+        1000,
+        2000,
+    );
+    try std.testing.expectError(error.UntrustedCA, historical.validateCertNoClock(rogue, cth.trustedSet()));
 }

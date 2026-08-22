@@ -108,7 +108,7 @@ pub fn deriveOverlayAddr(sig_pubkey: []const u8) [LEN_OVERLAY_ADDR]u8 {
 // approver+executor. Checked at receipt as well as issuance: a buggy or
 // compromised CA MUST NOT mint a self-approving identity a peer accepts.
 
-pub fn checkRoleConstraints(role_bits: u8) BindingError!void {
+pub fn checkRoleConstraints(role_bits: u8) CertChainError!void {
     const agent = (role_bits & ROLE_AGENT) != 0;
     const approver = (role_bits & ROLE_APPROVER) != 0;
     const executor = (role_bits & ROLE_EXECUTOR) != 0;
@@ -129,14 +129,44 @@ pub fn checkRoleConstraints(role_bits: u8) BindingError!void {
 // function receives and is not re-checked here.
 
 pub fn validateCert(cert: Cert, trusted_ca_keys: []const []const u8, now_ms: u64) BindingError!void {
+    try validateCertChain(cert, trusted_ca_keys);
+
+    // Validity window: inclusive at not_before, exclusive at not_after (X.509
+    // convention; a cert is expired the instant its not_after is reached).
+    if (now_ms < cert.not_before or now_ms >= cert.not_after) return error.CertExpired;
+}
+
+// BE-HIST-01: every structural certificate check with the clock removed. This
+// is what an audit of a committed signature runs: the validity window is the
+// ONLY conjunct that reads a clock (now_ms), and BE-HIST-01 forbids rechecking
+// it on committed signatures. Everything here is a pure function of the cert
+// bytes and the trust set: role pairings (BE-ROLE-01/02/04), approver quorum
+// (BE-ID-04), the BE-REV-01 lifetime-span cap (a property of the cert's own
+// not_before/not_after span, not of any clock), and every CA signature over
+// tbs verified against the local trust set (BE-ID-02). The function takes no
+// time input at all, so the type system proves no clock check can hide here,
+// and its narrow error set cannot name a clock failure.
+pub const CertChainError = error{
+    MalformedKey,
+    BadCASignature,
+    UntrustedCA,
+    CertTooLongLived,
+    RoleAgentApprover,
+    RoleAgentExecutor,
+    RoleApproverExecutor,
+    ApproverNoQuorum,
+};
+
+pub fn validateCertNoClock(cert: Cert, trusted_ca_keys: []const []const u8) CertChainError!void {
+    return validateCertChain(cert, trusted_ca_keys);
+}
+
+fn validateCertChain(cert: Cert, trusted_ca_keys: []const []const u8) CertChainError!void {
     try checkRoleConstraints(cert.role_bits);
 
     if ((cert.role_bits & ROLE_APPROVER) != 0 and cert.ca_sig_count < APPROVER_QUORUM)
         return error.ApproverNoQuorum;
 
-    // Validity window: inclusive at not_before, exclusive at not_after (X.509
-    // convention; a cert is expired the instant its not_after is reached).
-    if (now_ms < cert.not_before or now_ms >= cert.not_after) return error.CertExpired;
     if ((cert.role_bits & (ROLE_APPROVER | ROLE_EXECUTOR)) != 0 and
         cert.not_after - cert.not_before > MAX_PRIVILEGED_LIFETIME_MS) return error.CertTooLongLived;
 
