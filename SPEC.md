@@ -928,7 +928,9 @@ Control :=
   u8    version              ; = 2
   u8    action_type          ; 1 = Genesis (body is ControlGenesis), 2 = Revoke
   [32]  subject              ; sig_pubkey; zero-filled for Genesis
-  u16   body_len, body       ; ControlGenesis for action_type 1, empty for 2
+  u16   body_len, body       ; ControlGenesis for action_type 1;
+                              ; for action_type 2: u64be subject_cert_expiry_ms
+                              ;   (D-090), or empty (pre-D-090 producers)
 ```
 
 The envelope's own `sig` (§6.2) authenticates the control message; there is no second signature.
@@ -941,6 +943,13 @@ forward-compatibility path; §2.2 has no extension mechanism by design.
 **BE-CTRL-02** — A `Revoke` MUST be rejected unless the envelope sender's certificate carries the
 channel's `admin_scope`. Authority is read from the certificate at verification time, never from
 accumulated channel state.
+
+**BE-CTRL-03** (D-090) — A `Revoke` body SHOULD carry the revoked subject's own certificate expiry
+(`u64be` milliseconds) so the node can prune the revocation entry once that expiry has passed. A
+body without the field, or shorter than eight bytes, means NEVER pruned. The field is a capacity
+hint only: it never gates admission, and no node may substitute a different principal's expiry for
+it. Fail-closed by construction: an unprunable revocation costs table capacity, a forgotten one
+fails admission open.
 
 ### 6.2 Envelope
 
