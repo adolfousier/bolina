@@ -181,3 +181,35 @@ test "MD4 churn: expired generations never exhaust the table" {
         try std.testing.expectEqual(@as(usize, 0), t.len);
     }
 }
+
+// ---------------------------------------------------------------------------
+// BE-GRANT-10 under the lookup filter itself. The internal lookups ignore
+// EXPIRED/REJECTED entries ("a dead slot holds no lock"). MD4 compaction
+// removes terminal entries eagerly, so no production path ever observes one;
+// this pins the filter directly with a hand-set REJECTED entry, defense in
+// depth if compaction ever goes lazy.
+// ---------------------------------------------------------------------------
+
+test "BE_GRANT_10 lookups never match a rejected entry" {
+    var t = intent.Table.init();
+    try t.admit(intentWith(&id_a, "res-1"), 0);
+    // Hand-set the terminal state: bypasses compact() on purpose.
+    t.entries[0].state = .rejected;
+
+    // Dedupe ignores REJECTED: the same intent_id is admissible again...
+    try t.admit(intentWith(&id_a, "res-2"), 5);
+    // ...and exclusivity ignores it too: res-1 freed the moment the entry
+    // left PENDING, so a second holder is admitted, never queued.
+    try t.admit(intentWith(&id_b, "res-1"), 6);
+
+    // A second corpse with an id nothing else holds: a Refusal naming it is
+    // a no_match, no transition out of a terminal state, not even another
+    // Refusal.
+    try t.admit(intentWith(&id_c, "res-3"), 7);
+    t.entries[3].state = .rejected;
+    try std.testing.expectEqual(intent.RefusalOutcome.no_match, t.applyRefusal(refusalWith(&id_c)));
+
+    // Nothing above disturbed the table: three live entries plus the corpse
+    // (the no_match path must not compact either).
+    try std.testing.expectEqual(@as(usize, 4), t.len);
+}
