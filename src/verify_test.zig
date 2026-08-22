@@ -1410,3 +1410,22 @@ test "BE_GRANT_09 a verified refusal matching no pending intent is dropped" {
     try std.testing.expectEqual(@as(usize, 0), rejected_calls);
     try std.testing.expectEqual(@as(usize, 0), table.len);
 }
+
+// ---------------------------------------------------------------------------
+// F10/D-090: a Revoke body carries the SUBJECT's cert expiry as u64be. The
+// reader is pure; admission wiring calls it in the F6 block of
+// verifyEnvelopeAdmission. Absent field = never prune (fail-closed).
+// ---------------------------------------------------------------------------
+
+test "F10_D090 revoke body expiry read as u64be" {
+    var body: [8]u8 = undefined;
+    std.mem.writeInt(u64, &body, 1_700_000_000_000, .big);
+    try std.testing.expectEqual(@as(u64, 1_700_000_000_000), verify.revokePruneExpiry(&body));
+}
+
+test "F10_D090 revoke body without the expiry field never prunes" {
+    // Pre-D-090 bodies (empty or short) carry no subject expiry: the only
+    // safe reading is maxInt, i.e. the revocation is never pruned.
+    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), verify.revokePruneExpiry(&[_]u8{}));
+    try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), verify.revokePruneExpiry(&[_]u8{ 0x01, 0x02, 0x03 }));
+}

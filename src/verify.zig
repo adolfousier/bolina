@@ -646,6 +646,17 @@ pub fn bodyTypeAllowed(body_type: u8, role_bits: u16) bool {
     };
 }
 
+// F10/D-090: the prunable expiry a Revoke body carries. The SUBJECT's cert
+// expiry travels in the Control body as u64be (SPEC 6.1c); it is a capacity
+// hint ONLY. A body without the field predates D-090 and yields maxInt, i.e.
+// never pruned -- fail-closed, because pruning on a guessed expiry could
+// forget a revocation whose subject cert is still live, and isRevoked would
+// fail open for that key afterwards.
+pub fn revokePruneExpiry(body: []const u8) u64 {
+    if (body.len >= 8) return std.mem.readInt(u64, body[0..8], .big);
+    return std.math.maxInt(u64);
+}
+
 // Admission check: runs all gates and records the envelope on success.
 pub fn verifyEnvelopeAdmission(
     env: parser.channel.Envelope,
@@ -690,10 +701,11 @@ pub fn verifyEnvelopeAdmission(
     if (env.body_type == parser.channel.BODY_CONTROL) {
         const control = parser.channel.parseControl(env.body) catch return error.BadControlBody;
         if (control.action_type == 2) {
-            // F10: pass cert_expiry_ms for prunable revocations. We use the
-            // sender's cert expiry as a placeholder; the proper fix is to look
-            // up the subject's cert or include cert_expiry_ms in the Control body.
-            try ctx.ledger.setRevocation(control.subject, env_hash, ctx.sender_cert.not_after);
+            // F10/D-090: prunable revocations carry the SUBJECT's cert expiry,
+            // not the admin's. It travels in the Revoke body as u64be
+            // subject_cert_expiry_ms (SPEC 6.1c); bodies without the field
+            // predate D-090 and never prune (fail-closed).
+            try ctx.ledger.setRevocation(control.subject, env_hash, revokePruneExpiry(control.body));
         }
     }
 }
