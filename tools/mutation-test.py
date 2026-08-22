@@ -520,6 +520,31 @@ RELAY_SERVE_PROPS = [
 ]
 
 
+# --- D-089 defence denominator, derived from the D-089 rulings --------------
+#
+# The MD3/MD4/MD5 defence lines (exclusive flock, intent-table compaction,
+# relay re-registration dedup) are hardening added by the daemon closeout.
+# They carry no new SPEC markers (D-064 precedent: seam code without its own
+# SPEC sentence gets a hardcoded denominator keyed to the ruling text), so
+# their keys derive from the recorded D-089 rulings, hardcoded here.
+
+D089_DEFENCE_PROPS = [
+    # (denominator key, what D-089 records)
+    ("md3-flock", "D-089 MD3 (T9, BE-EXEC-01 single writer): open() takes "
+     "flock(LOCK_EX|LOCK_NB) and re-locks after pruneExpired's reopen; a "
+     "second writer gets error.Locked, never silent log sharing"),
+    ("md4-compact", "D-089 MD4: expire/refuse collapse dead intent slots via "
+     "compact(), freeing capacity so churn can never exhaust the table"),
+    ("md5-dedup", "D-089 MD5: RelayTable.insert dedups overlay_addr in place "
+     "(re-registration refreshes the route, never appends a duplicate)"),
+]
+
+
+def d089_defence_properties():
+    """The set of D-089 defence properties the slice must prove."""
+    return {key for key, _what in D089_DEFENCE_PROPS}
+
+
 def relay_serve_properties():
     """The set of phase-C serve-loop properties the slice must prove, each
     derived from a BE-EXEC-04 sub-obligation recorded in the D-060 ruling."""
@@ -1893,15 +1918,15 @@ MUTANTS = [
      "            if (sendto(self.fd, dgram.ptr, dgram.len, 0, &ep.sa, ep.sa_len) != want) return self.drop();",
      "            if (sendto(self.fd, dgram.ptr, dgram.len - 1, 0, &ep.sa, ep.sa_len) != want) return self.drop(); // MUTANT: body truncated"),
     # --- D-089 closeout: MD3/MD4/MD5 defence mutants ----------------------
-    ("grant-ledger", "grant_ledger.zig", "CHECK-ABSENCE", "md3-flock",
+    ("d089", "grant_ledger.zig", "CHECK-ABSENCE", "md3-flock",
      "MD3 exclusive flock at open removed: a second writer silently shares the log",
      "        if (libc.flock(f.handle, LOCK_EX | LOCK_NB) != 0) return error.Locked;",
      "        // MUTANT: exclusive lock removed"),
-    ("intent", "intent.zig", "CHECK-ABSENCE", "md4-compact",
+    ("d089", "intent.zig", "CHECK-ABSENCE", "md4-compact",
      "MD4 compaction after expiry removed: dead slots leak capacity until TableFull forever",
      "        if (collapsed > 0) self.compact();",
      "        // MUTANT: compaction removed"),
-    ("relay", "relay.zig", "CHECK-ABSENCE", "md5-dedup",
+    ("d089", "relay.zig", "CHECK-ABSENCE", "md5-dedup",
      "MD5 re-registration dedup removed: refresh appends duplicate routes until the table fills",
      """        for (self.entries[0..self.count]) |*e| {
             if (std.mem.eql(u8, &e.overlay_addr, &entry.overlay_addr)) { e.* = entry; return true; }
@@ -1980,6 +2005,9 @@ def main():
     grant_revocation_props = grant_revocation_properties()
     if not grant_revocation_props:
         sys.exit("FATAL: no grant_revocation properties detected (D-064 missing?)")
+    d089_props = d089_defence_properties()
+    if not d089_props:
+        sys.exit("FATAL: no d089 defence properties detected (D-089 missing?)")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -2000,6 +2028,7 @@ def main():
     print(f"  dispatch properties (D-059):     {sorted(dispatch_props)} ({len(dispatch_props)})")
     print(f"  grant_ledger properties (D-061): {sorted(grant_ledger_props)} ({len(grant_ledger_props)})")
     print(f"  grant_revocation properties (D-064): {sorted(grant_revocation_props)} ({len(grant_revocation_props)})")
+    print(f"  d089 defence properties (D-089): {sorted(d089_props)} ({len(d089_props)})")
     print(f"  render properties (§8.3):        {sorted(render_props)} ({len(render_props)})")
     print(f"  sync properties (§6.4):          {sorted(sync_props)} ({len(sync_props)})")
     print()
@@ -2074,6 +2103,10 @@ def main():
             if key not in render_props:
                 sys.exit(f"FATAL: render mutant '{name}' attacks '{key}', which "
                          "SPEC section 8.3 does not declare (scope lie)")
+        elif domain == "d089":
+            if key not in d089_props:
+                sys.exit(f"FATAL: d089 mutant '{name}' attacks '{key}', which "
+                         "the D-089 rulings do not record (scope lie)")
         elif domain == "sync":
             if key not in sync_props:
                 sys.exit(f"FATAL: sync mutant '{name}' attacks '{key}', which "
