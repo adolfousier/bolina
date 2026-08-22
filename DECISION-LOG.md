@@ -1583,3 +1583,24 @@ model's assumptions are not merely self-reinforcing.
 **Reversible:** Script-only plus SPEC amendment. Reverting removes the equivalent clause and re-anchors the seam; the code never changed.
 
 **Evidence.** Run at 31a88d0: `total: 158/159 mutants killed, 1 survived` (log logs/mutation_head_31a88d0.log); bracket diff against the 91f05f7 reference isolates exactly the missing `[dispatch/WRONG-SOURCE]`; SPEC BE-GRANT-06b/BE-GRANT-10 "by construction" passages quoted in the EQUIVALENT rationale.
+
+## D-089 - 2026-08-22 - Daemon closeout: node core, node key material, binding-message wire format settled
+
+**Date:** 2026-08-22
+**Decision:** The daemon milestone's remaining work is ruled closed in four parts: the node key-material layer, the node core routing, the BE-TR-01 binding-message wire format, and the conformance pilot that exercises all of it over a real loopback.
+
+**Ruling 1 - BE-TR-01 carries no pre-binding envelope allowlist; the first plaintext IS the binding message.** The earlier design guess (an "intent+refusal candidate" allowlist of body types permitted before binding) is rejected as wrong against the SPEC text: the session-state gate is binary. The binding message layout is pinned as new **BE-TR-01a**: `u16be cert_len | cert | [64] Ed25519 signature` over `(0x05 || h)`, entire first plaintext, both directions, responder pushing immediately after handshake commit without waiting for the peer's frame. Until it verifies, every transport payload from that session drops unparsed. The signature binds the transcript hash, so replaying a captured binding frame against a fresh handshake fails by construction.
+
+**Ruling 2 - `src/keys.zig` replaces the zeroed-key skeleton; D-018 violation closed.** The boot skeleton held zeroed key arrays (a D-018 violation carried since the phase-B scaffold). keys.zig loads or generates real X25519 + Ed25519 statics under `BOLINA_DATA_DIR` with 0600 files in a 0700 dir, cross-checks every stored public key against the derived one (`PubMismatch` on tamper, `KeyFileCorrupt` on wrong length), loads `cert.bin` verbatim (absent = unbound-accept mode for peer-cert-only nodes), and reads trusted CA keys from fixed `ca/caN.pub` labels. An unparseable own cert is fatal at boot: a node that cannot state its identity must not run.
+
+**Ruling 3 - Relay serving is process wiring, not a credential.** Certificates carry no relay role (ROLE_AGENT/EXECUTOR/APPROVER are the whole vocabulary), so types 5/6 are served only when the process was constructed with a `RelayServe`; otherwise they are counted and dropped. No environment knob gates this: relaying is a deployment decision made in code at boot.
+
+**Ruling 4 - The shipped effect hook refuses; the pilot installs a recorder through a module-level seam.** The daemon's effect hook is fail-closed by design (executes nothing, returns refused). The conformance pilot drives the fired path over the real wire by installing `pilot_effect_hook`, a bare function pointer consulted before the refusal fallback; null (the shipped state) keeps behavior byte-for-byte identical. No env knob.
+
+**What this seals.** The wire path end to end: two nodes over real UDP loopback with certs carrying each side's REAL kex pubkey (F1 load-bearing), approver identity under a two-CA quorum cert (BE-ID-04), intent admitted, grant verified and committed durably, effect fired exactly once, restart recovering exactly one orphan from the refused-effect grant while the published grant stays tombstoned, wrong-kex cert never binding (F1), and a replayed packet dying in the session replay window. 395/402 tests green at the pilot commit; prumo-verify PASS except M2 PENDING (receipt stale until the final full run) and M6 PENDING (macOS informational).
+
+**What this does NOT seal.** The M2 mutation receipt at final HEAD: MD3 (flock), MD4 (intent compaction), MD5 (relay dedup) mutants are declared per design section 6 but not yet run; the receipt bump follows ONE clean full-suite run at final HEAD, then SPEC flips to CLOSED AND SEALED.
+
+**Reversible:** Additive modules plus SPEC amendment. Reverting removes keys.zig/daemon.zig/pilot_test.zig and the BE-TR-01a text; no sealed item regresses.
+
+**Evidence.** `src/pilot_test.zig` (D-089 section 5 scenario) green in the full suite at commit 041f47a; keys layer tests in `src/keys_test.zig`; THREAT-MODEL T9 flock sentence landed with code in the same commit per D-039.

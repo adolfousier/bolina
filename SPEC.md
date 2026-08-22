@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.5.1 · **Status:** CLOSED AND SEALED · **Date:** 2026-08-21
+**Version:** 0.5.2-draft · **Status:** DRAFT · **Date:** 2026-08-22
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -57,6 +57,8 @@ span wire bytes change, no sub-unit cap changes.
 **Changes from v0.3.9-draft (prior):** v0.3.9 is closed and sealed. All eight §11 conformance items produce evidence and carry seal paragraphs. §11.4 advances from brief to instrumented conformance: the bounded grant-path TLA+ checks (BE-GRANT-01/01a/04, D-061/D-063/D-067 rulings encoded as invariants) are merged under `model/` with a pinned TLC runner in CI (D-083). BE-GRANT-06 (revocation) is projected as `RevokeGrant` with `RevokedGrantsNeverExecute` invariant; crash-recovery paths (`RecoverPublishInterrupted`, `RecoverMarkPublished`) guard against publishing revoked grants. Twelve Phase A conformance fixtures exercise the trace projector through a binding table. BE-SURF-03 places `src/grant_trace.zig` in the non-surface list (D-076): `bolina.grant-trace.v1`, the comptime-gated test-only instrumentation the ZIG-TLA conformance pilot reads; with the `trace` build option off every emit site compiles out with zero cost. The remaining five items (§11.1 bijection, §11.2 mutation testing, §11.3 test vectors, §11.7 no third-party deps, §11.8 measured build) are sealed by D-084 on mechanical evidence from CI gates. No wire bytes change, no sub-unit cap changes.
 
 **Changes from v0.5.0:** crypto-review follow-ups recorded after the v0.5.0 seal. F13 (D-087): the Grant verifier owns its checks 6-9 state, fetching the pending intent and sender record through `intent_table` and `sender_table` references instead of caller-assembled fields; the sender record's action copy is executor storage policy at 512 bytes, refused above by `ActionTooLarge` at admission, never sized from the 256 KiB wire ceiling. BE-SURF-03 housekeeping owed by the sealed v0.5.0 tree (D-087 ruling 4): the F1 `kex_pubkey` binding fix grew `src/binding.zig` from 179 to 190 lines, so the session-state sub-unit cap is re-floored 748 to 759 and the sync sub-unit cap rebalanced 100 to 89, keeping the sub-cap sum at 1500 (post-authentication measured total 1488 of 1500). No wire bytes change.
+
+**Changes from v0.5.1:** the daemon milestone closes (D-089). `src/keys.zig` joins the tree as the node's key-material layer: load-or-generate X25519 + Ed25519 statics under `BOLINA_DATA_DIR` (0600 files, 0700 dir), stored public keys cross-checked against derived ones, `cert.bin` loaded verbatim or absent-as-unbound-accept, trusted CA keys from fixed `ca/caN.pub` labels — replacing the boot skeleton's zeroed-key placeholder and closing that D-018 violation. `src/daemon.zig` joins as the node core: one struct owns type 1/4/5/6 routing, pushes its BE-TR-01 binding frame immediately after handshake commit, gates every pre-bound transport payload behind the peer's verified binding, counts-and-drops every failure path, and treats relay serving as optional process wiring (certs carry no relay role; no env knob flips it). `src/main.zig` becomes env-only boot (`BOLINA_BIND` default 0.0.0.0:7420, `BOLINA_DATA_DIR`, `BOLINA_LEDGER`; `BOLINA_TEST_CA` is dev-only-fatal) with EADDRINUSE fatal and orphan tombstoning at recover. BE-TR-01a pins the binding message byte layout. Both files join the BE-SURF-03 non-surface list (D-089). No sub-unit cap changes.
 
 ---
 
@@ -341,7 +343,7 @@ kex_pubkey binding fix grew binding.zig past the old floor; the sub-cap sum stay
 - **Non-surface:** `src/dag.zig`, `src/evidence.zig`, `src/verify.zig`, `src/ledger.zig`,
   `src/historical.zig`, `src/intent.zig`, `src/resolver.zig`, `src/render.zig`, `src/sync.zig`,
   `src/relay_store.zig`, `src/dispatch.zig`, `src/relay_serve.zig`, `src/grant_ledger.zig`,
-  `src/adversarial_audit.zig`, `src/grant_trace.zig` — state over parsed values (D-018), not reached by
+  `src/adversarial_audit.zig`, `src/grant_trace.zig`, `src/keys.zig`, `src/daemon.zig` — state over parsed values (D-018), not reached by
   attacker bytes directly. intent.zig, resolver.zig and render.zig are placed ahead of their code
   (D-052), sync.zig ahead of its code by D-054, relay_store.zig ahead of its code by D-058,
   dispatch.zig ahead of its phase-B wiring by D-059, relay_serve.zig ahead of its phase-C wiring
@@ -349,6 +351,8 @@ kex_pubkey binding fix grew binding.zig past the old floor; the sub-cap sum stay
   post-creation as the §11.5 R2 post-hoc effect-log auditor (D-066): it reads the durable grant
   ledger's consumed/published/revoked sets to score M1 (effects without a valid grant chain) and
   M2 (intended grants that reached a tombstone), never touching the wire.
+  keys.zig (node key material, load-or-generate) and daemon.zig (the node core routing types
+  1/4/5/6 and owning the BE-TR-01 gate) join with their code by D-089.
 - **Harness and entry:** `src/main.zig`, `src/tests.zig`, `src/fuzz.zig`, `src/coverage.zig`,
   `src/evidence_test_helpers.zig`, `src/cert_test_helpers.zig`, and every `*_test.zig`.
 
@@ -506,6 +510,13 @@ session, its certificate together with an Ed25519 signature by `sig_pubkey` over
 handshake hash `h`. A session MUST NOT deliver application data upward until the peer's certificate
 has passed BE-ID-01/02/03 **and** that signature verifies against `h`. An unbound session is a
 session with an authenticated key and an unknown owner, and is useless.
+
+**BE-TR-01a (binding message layout)** — The binding message is the entire first plaintext a session
+carries in each direction: `u16be cert_len | cert | [64] Ed25519 signature`, the signature by
+`sig_pubkey` over `(0x05 || h)` per BE-SIG-01. There is no envelope header on it and no pre-binding
+allowlist of body types: until the peer's frame verifies, every transport-data payload from that
+session MUST drop without being parsed as an envelope. The responder MUST push its own binding frame
+immediately after handshake commit, without waiting for the peer's (D-089).
 
 ### 4.1a Transport wire formats
 
