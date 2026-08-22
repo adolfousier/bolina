@@ -545,6 +545,26 @@ def d089_defence_properties():
     return {key for key, _what in D089_DEFENCE_PROPS}
 
 
+D090_DEFENCE_PROPS = [
+    # (denominator key, what D-090 records)
+    ("hist01-chain", "D-090 BE-HIST-01: the audit path revalidates the "
+     "certificate chain structurally (roles, quorum, lifetime cap, CA sigs, "
+     "trust set) with NO clock input; only the validity window is skipped"),
+    ("hist04-causal", "D-090 BE-HIST-04: revocation poisons only envelopes "
+     "causally AFTER the revoke envelope; ledger.getRevokeHash exposes the "
+     "revoke hash and historicalValidity checks DAG ancestry instead of "
+     "blanket rejection of every envelope from a now-revoked sender"),
+    ("d090-expiry", "D-090 F10: a Revoke body carries the SUBJECT's cert "
+     "expiry as u64be (SPEC 6.1c); absent or short bodies mean never pruned "
+     "(fail-closed); the admin's expiry is never substituted"),
+]
+
+
+def d090_defence_properties():
+    """The set of D-090 audit-path defence properties the slice must prove."""
+    return {key for key, _what in D090_DEFENCE_PROPS}
+
+
 def relay_serve_properties():
     """The set of phase-C serve-loop properties the slice must prove, each
     derived from a BE-EXEC-04 sub-obligation recorded in the D-060 ruling."""
@@ -1932,6 +1952,37 @@ MUTANTS = [
             if (std.mem.eql(u8, &e.overlay_addr, &entry.overlay_addr)) { e.* = entry; return true; }
         }""",
      "        // MUTANT: dedup loop removed"),
+    # --- D-090 audit path hardening defence mutants ------------------------
+    ("d090", "binding.zig", "CHECK-ABSENCE", "hist01-chain",
+     "BE-HIST-01 clock check leaks into the NoClock audit path (committed signatures re-clocked)",
+     "pub fn validateCertNoClock(cert: Cert, trusted_ca_keys: []const []const u8) CertChainError!void {\n    return validateCertChain(cert, trusted_ca_keys);\n}",
+     "pub fn validateCertNoClock(cert: Cert, trusted_ca_keys: []const []const u8) CertChainError!void {\n    return validateCert(cert, trusted_ca_keys, 0); // MUTANT: audit path re-clocks\n}"),
+    ("d090", "historical.zig", "CHECK-ABSENCE", "hist01-chain",
+     "historicalValidity skips certificate validation entirely",
+     "    try validateCertNoClock(ctx.sender_cert, ctx.trusted_ca_keys);",
+     "    // MUTANT: audit skips cert validation"),
+    ("d090", "historical.zig", "CHECK-ABSENCE", "hist04-causal",
+     "BE-HIST-04 causal ancestry dropped: post-revocation envelopes pass audit",
+     "        if (ctx.dag.isAncestor(revoke_hash, env_hash)) {",
+     "        if (false) { // MUTANT: causal position ignored"),
+    ("d090", "historical.zig", "WRONG-LOGIC", "hist04-causal",
+     "BE-HIST-04 regressed to blanket rejection: pre-revocation envelopes fail audit",
+     """    if (ctx.ledger.getRevokeHash(sender)) |revoke_hash| {
+        if (ctx.dag.isAncestor(revoke_hash, env_hash)) {
+            return error.DescendantOfRevocation;
+        }
+    }""",
+     """    if (ctx.ledger.getRevokeHash(sender)) |_unused| {
+        return error.DescendantOfRevocation; // MUTANT: blanket rejection restored
+    }"""),
+    ("d090", "ledger.zig", "WRONG-FIELD", "hist04-causal",
+     "getRevokeHash never exposes the revoke hash (causal audit impossible)",
+     "                return self.revocations[i].revoke_hash;",
+     "                return null; // MUTANT: revoke hash never exposed"),
+    ("d090", "verify.zig", "WRONG-FIELD", "d090-expiry",
+     "prune expiry falls back to zero instead of never-prune (revocation forgotten immediately)",
+     "    if (body.len >= 8) return std.mem.readInt(u64, body[0..8], .big);\n    return std.math.maxInt(u64);",
+     "    if (body.len >= 8) return std.mem.readInt(u64, body[0..8], .big);\n    return 0; // MUTANT: immediately prunable"),
 ]
 
 
@@ -2008,6 +2059,9 @@ def main():
     d089_props = d089_defence_properties()
     if not d089_props:
         sys.exit("FATAL: no d089 defence properties detected (D-089 missing?)")
+    d090_props = d090_defence_properties()
+    if not d090_props:
+        sys.exit("FATAL: no d090 defence properties detected (D-090 missing?)")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -2029,6 +2083,7 @@ def main():
     print(f"  grant_ledger properties (D-061): {sorted(grant_ledger_props)} ({len(grant_ledger_props)})")
     print(f"  grant_revocation properties (D-064): {sorted(grant_revocation_props)} ({len(grant_revocation_props)})")
     print(f"  d089 defence properties (D-089): {sorted(d089_props)} ({len(d089_props)})")
+    print(f"  d090 defence properties (D-090): {sorted(d090_props)} ({len(d090_props)})")
     print(f"  render properties (§8.3):        {sorted(render_props)} ({len(render_props)})")
     print(f"  sync properties (§6.4):          {sorted(sync_props)} ({len(sync_props)})")
     print()
@@ -2107,6 +2162,10 @@ def main():
             if key not in d089_props:
                 sys.exit(f"FATAL: d089 mutant '{name}' attacks '{key}', which "
                          "the D-089 rulings do not record (scope lie)")
+        elif domain == "d090":
+            if key not in d090_props:
+                sys.exit(f"FATAL: d090 mutant '{name}' attacks '{key}', which "
+                         "the D-090 rulings do not record (scope lie)")
         elif domain == "sync":
             if key not in sync_props:
                 sys.exit(f"FATAL: sync mutant '{name}' attacks '{key}', which "

@@ -505,6 +505,38 @@ test "BE_HIST_04 envelope committed BEFORE the revoke stays historically valid" 
     try historical.historicalValidity(env_hash, sender, ctx);
 }
 
+test "BE_HIST_01 historicalValidity enforces the chain on the sender cert" {
+    // The audit path validates the certificate carried in the AuditContext
+    // before any causal check runs: a rogue-CA cert makes the whole audit
+    // fail even with perfect DAG positioning.
+    var l = ledger.Ledger.init();
+    var d: dag.Dag = .{};
+    const sender = [_]u8{0xf4} ** 32;
+    const anchor_hash = hashOf("anchor8");
+    const env_hash = hashOf("env8");
+
+    try l.setAnchor(sender, anchor_hash);
+    try d.insert(anchor_hash, env_hash);
+
+    var wire: [512]u8 = undefined;
+    const rogue_cert = cth.buildCertInto(
+        &wire,
+        cth.pubkeyOf(0xa1),
+        0,
+        &[_]u8{0xd0}, // NOT in the trusted set {0xc0, 0xc1, 0xc2}
+        cth.CERT_NOT_BEFORE,
+        cth.CERT_NOT_AFTER,
+    );
+    const ctx = historical.AuditContext{
+        .ledger = &l,
+        .dag = &d,
+        .sender_cert = rogue_cert,
+        .trusted_ca_keys = cth.trustedSet(),
+    };
+
+    try std.testing.expectError(error.UntrustedCA, historical.historicalValidity(env_hash, sender, ctx));
+}
+
 test "BE_HIST_04 getRevokeHash returns the recorded hash, null when absent" {
     var l = ledger.Ledger.init();
     const sender = [_]u8{0xf2} ** 32;
