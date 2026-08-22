@@ -1892,7 +1892,23 @@ MUTANTS = [
      "forwarded ciphertext body truncated by one byte",
      "            if (sendto(self.fd, dgram.ptr, dgram.len, 0, &ep.sa, ep.sa_len) != want) return self.drop();",
      "            if (sendto(self.fd, dgram.ptr, dgram.len - 1, 0, &ep.sa, ep.sa_len) != want) return self.drop(); // MUTANT: body truncated"),
+    # --- D-089 closeout: MD3/MD4/MD5 defence mutants ----------------------
+    ("grant-ledger", "grant_ledger.zig", "CHECK-ABSENCE", "md3-flock",
+     "MD3 exclusive flock at open removed: a second writer silently shares the log",
+     "        if (libc.flock(f.handle, LOCK_EX | LOCK_NB) != 0) return error.Locked;",
+     "        // MUTANT: exclusive lock removed"),
+    ("intent", "intent.zig", "CHECK-ABSENCE", "md4-compact",
+     "MD4 compaction after expiry removed: dead slots leak capacity until TableFull forever",
+     "        if (collapsed > 0) self.compact();",
+     "        // MUTANT: compaction removed"),
+    ("relay", "relay.zig", "CHECK-ABSENCE", "md5-dedup",
+     "MD5 re-registration dedup removed: refresh appends duplicate routes until the table fills",
+     """        for (self.entries[0..self.count]) |*e| {
+            if (std.mem.eql(u8, &e.overlay_addr, &entry.overlay_addr)) { e.* = entry; return true; }
+        }""",
+     "        // MUTANT: dedup loop removed"),
 ]
+
 
 
 def run_suite():
