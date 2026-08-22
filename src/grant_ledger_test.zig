@@ -374,3 +374,31 @@ test "MD3 flock: second open of the live log fails Locked; close releases it" {
     lg2.close();
     dir.deleteFile(io, path) catch {};
 }
+
+test "F4 first-receipt survives restart: recover replays the T_recv anchor row" {
+    var ctx = IoCtx.init();
+    ctx.io = ctx.threaded.io();
+    const io = ctx.io;
+    const dir = std.Io.Dir.cwd();
+    const path_buf = tempPath("f4");
+    const path = cstr(&path_buf);
+
+    var lg = try gl.GrantLedger.open(io, path);
+    const gid = [_]u8{0x52} ** 16;
+    try lg.recordFirstReceipt(gid, 111_222);
+    // Idempotent by grant_id: a redelivery must NOT move the first time -
+    // T_recv is a per-grant budget anchored at FIRST receipt (SPEC 8.2 10c).
+    try lg.recordFirstReceipt(gid, 999_999);
+    try std.testing.expectEqual(@as(u64, 111_222), lg.getFirstReceipt(gid).?);
+    lg.close();
+
+    // Restart: the in-memory table starts empty; recover()'s forward scan
+    // replays the receipt row from the log, so the T_recv anchor survives.
+    var lg2 = try gl.GrantLedger.open(io, path);
+    defer lg2.close();
+    _ = try lg2.recover();
+    try std.testing.expectEqual(@as(u64, 111_222), lg2.getFirstReceipt(gid).?);
+    // An unrecorded grant_id stays null.
+    try std.testing.expect(lg2.getFirstReceipt([_]u8{0x53} ** 16) == null);
+    dir.deleteFile(io, path) catch {};
+}
