@@ -7,11 +7,14 @@ message.**
 > jamming. Náutico like the rest of the family (Prumo, Caravela, Nau, Orbit), six letters, ASCII.
 > Change it in one line if you have better.
 
-**Status:** v0.5.0 (closed and sealed). Eight §11 conformance items produce evidence and carry seal
+**Status:** v0.5.2 (closed and sealed). Eight §11 conformance items produce evidence and carry seal
 paragraphs; every ruling names its receipt. The M1 milestone is built in Zig, held by mechanical
 gates, and the model checking (§11.4), adversarial evaluation (§11.5), fuzzing (§11.6), mutation
 testing (§11.2), test vectors (§11.3), bijection (§11.1), zero-deps (§11.7), and measured build
-(§11.8) are all sealed with documented receipts in `SPEC.md §11`.
+(§11.8) are all sealed with documented receipts in `SPEC.md §11`. v0.5.2 closes the daemon
+milestone (D-089): node key material (`src/keys.zig`), the node core (`src/daemon.zig`),
+env-only boot (`src/main.zig`), the BE-TR-01a binding-message layout, and a two-node conformance
+pilot over real loopback UDP.
 
 This is a research project, and a specification written ahead of its implementation is the normal
 working mode here, not a deficiency. Unproven claims are expected — what is *not* acceptable is an
@@ -28,7 +31,7 @@ ambition is unchanged by saying out loud which parts have been measured.
 
 ## Implementation status
 
-v0.5.0, in Zig 0.16.0, built `ReleaseSafe` with no optimisation flag exposed. `tools/prumo-verify`
+v0.5.2, in Zig 0.16.0, built `ReleaseSafe` with no optimisation flag exposed. `tools/prumo-verify`
 prints every gate on every run and returns non-zero if an enforced one fails.
 
 | Measure | Value | Gate |
@@ -36,16 +39,17 @@ prints every gate on every run and returns non-zero if an enforced one fails.
 | BE-\* items bound to a named test | 114 of 114 declared, high-water ratchet at 114 | M1, enforced |
 | Test vectors cross-verified (Zig against Python `cryptography`) | 77 passed, 0 failed | M3, enforced |
 | Differential fuzz divergences (production parser against an independent Python reference) | 0 divergences, 72 of 72 parser exit points reached (gate 20,000; extended 1,000,000; nightly soak 5 seeds x 1,000,068 records, 0 divergences, 72/72) | M4, enforced; SPEC §11.6 sealed (D-075) |
-| Mutants killed by the test suite | 160 of 160 | M2, measured but **not** wired into the exit code |
-| Pre-authentication attack surface | 1492 of 1500 lines | M5, enforced |
-| Post-authentication attack surface | 1477 of 1500 lines | M11, enforced |
+| Mutants killed by the test suite | 162 of 162 non-equivalent (163 evaluated, 1 documented equivalent per D-088), full run at HEAD `7fcc336` | M2, enforced |
+| Pre-authentication attack surface | 1458 of 1500 lines | M5, enforced |
+| Post-authentication attack surface | 1488 of 1500 lines | M11, enforced |
 | Parser exit points with a matching `Branch` member | 72 of 72, zero raw error returns | M9, enforced |
 | Pointer-minting builtins in `src/` | 0 | M8, enforced |
 | Call sites able to reach an effect | 1, from `verifyGrantThen` | M10, enforced |
 
-Ten gates are enforced. One is printed and excluded on purpose: **M2** (mutation testing) has a
-working harness whose result is quoted above but no wiring into the verdict. That gap is visible in
-the tool's own output rather than absent from it, which is the point of printing all of them.
+Eleven gates are enforced. One is printed and excluded on purpose: **M6** (offline build) has no
+network-namespace facility on Darwin, so the plain build it runs is informational only and stays
+out of the exit code. That gap is visible in the tool's own output rather than absent from it,
+which is the point of printing all of them.
 
 **M4** is honest about its own reach rather than its verdict. The oracle compares the production
 parser against an independent Python reference written from the SPEC field tables alone, and zero

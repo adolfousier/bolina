@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.5.2-draft · **Status:** DRAFT · **Date:** 2026-08-22
+**Version:** 0.5.2 · **Status:** CLOSED AND SEALED · **Date:** 2026-08-22
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -1874,6 +1874,18 @@ enforces intent_id uniqueness at admission, so the lookup finds at most one inte
 matched entry's intent_id equals `Grant.intent_id` by construction; BE-GRANT-10 matches
 PENDING intents only, so non-PENDING names are dropped by construction). The D-086 seal
 stands for what it measured; this amendment changes the criterion, not that measurement.*
+
+*Sealed (D-089, 2026-08-22, v0.5.2 closeout). 162/162 non-equivalent mutants killed at HEAD
+`7fcc336` (full non-chunked run, 163 evaluated, 1 documented equivalent, receipt sha bumped with
+this seal). The daemon milestone's defences enter the population as the `d089` CHECK-ABSENCE
+family: MD3 exclusive-flock removal (killed by the double-open test in `grant_ledger_test.zig`),
+MD4 compaction removal (killed by the churn test in `intent_test.zig`), MD5 re-registration dedup
+removal (killed by the refresh test in `relay_test.zig`). The run also surfaced one real orphan:
+the WRONG-LOGIC terminality mutant survived while MD4's eager compaction kept REJECTED corpses
+out of every lookup's reach; `intent_test.zig` now pins the terminality filter directly with
+hand-set corpses (commit `31c7a1b`), and the intent chunk kills 6/6. The population claim is
+superseded: the same eighteen source domains plus the `d089` defence family (three mutants).
+Receipt: `tools/m2-mutation-receipt`.*
 
 ### 11.3 Cross-implementation test vectors
 

@@ -876,3 +876,30 @@ is unchanged (a grant naming no PENDING intent still refuses
 `NoPendingIntent` at the seam). The 120-second store-and-forward TTL from
 the F7 fix stands as written above. Mutation receipt: the full suite
 re-runs at this HEAD at closeout; the receipt bump follows its clean finish.
+
+## v0.5.2 daemon-closeout addendum (2026-08-22)
+
+The closeout promised by the D-087 addendum above is delivered. The daemon
+milestone closed under D-089: `src/keys.zig` (node key material, D-018
+zeroed-key violation dead), `src/daemon.zig` (node core: type 1/4/5/6
+routing, BE-TR-01 binding frame pushed inside the encrypted session both
+directions, fail-closed drop on every failure path), `src/main.zig`
+(env-only boot, EADDRINUSE fatal), and a two-node conformance pilot over
+real loopback UDP (`pilot_test.zig`: handshake, mutual binding, Intent,
+Grant, ledger commit, effect, restart orphan recovery; wrong-kex and
+intent-replay rejected). No M1 marker changes (114/114, high water 114).
+Surface budget unchanged: keys/daemon/main join the BE-SURF-03 non-surface
+list per D-089; pre-authentication measured 1458/1500, post-authentication
+1488/1500.
+
+Mutation receipt bumped at HEAD `7fcc336` after a full non-chunked run:
+162/162 non-equivalent mutants killed, 0 survived, 1 documented equivalent
+(D-088), 163 evaluated. The `d089` CHECK-ABSENCE family joins the
+population (MD3 flock removal, MD4 compaction removal, MD5 dedup removal;
+all three killed). The run surfaced one real test gap before the clean
+finish: the intent WRONG-LOGIC terminality mutant survived while MD4's
+eager compaction kept REJECTED corpses beyond every lookup's reach;
+`intent_test.zig` now pins the terminality filter with hand-set corpses
+(`31c7a1b`) and the F4 first-receipt restart-survival property gained its
+own ledger test (`7fcc336`). Suite at seal: 397 passed, 7 skipped,
+0 failed. prumo-verify: all enforced gates PASS, M6 informational only.
