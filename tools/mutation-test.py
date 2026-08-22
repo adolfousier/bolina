@@ -1418,7 +1418,7 @@ MUTANTS = [
     # expects Malformed; without the check the buffer parses.
     ("relay", "relay.zig", "CHECK-ABSENCE", "relay-route-format",
      "route reserved bytes never checked",
-     "    if (reserved[0] != 0 or reserved[1] != 0 or reserved[2] != 0)\n        return coverage.reject(.relay_route_reserved);",
+     "    if ((reserved[0] | reserved[1] | reserved[2]) != 0) return coverage.reject(.relay_route_reserved);",
      "    _ = reserved; // MUTANT: route reserved bytes never checked"),
     # relay-reg-format: reserved check dropped. The registration
     # non-zero-reserved test expects Malformed; without the check it parses.
@@ -1606,8 +1606,8 @@ MUTANTS = [
     # the intent_test GRANT-09 case (expects .rejected) dies.
     ("intent", "intent.zig", "WRONG-VALUE", "intent-refusal-transition",
      "refusal transition dropped (always returns no_match)",
-     "        self.entries[idx].state = .rejected;\n        return .rejected;",
-     "        _ = idx;\n        return .no_match; // MUTANT: transition removed"),
+     "        self.entries[idx].state = .rejected;\n        // MD4: a terminal entry holds no lock; now it holds no slot either.\n        self.compact();\n        return .rejected;",
+     "        // MUTANT: refusal transition + compaction removed\n        return .no_match;"),
     # intent-terminal-rejected (BE-GRANT-10): REJECTED is terminal, so a later
     # match on the same intent_id finds nothing. Widening findPendingByIntentId
     # to also match REJECTED breaks terminality.
@@ -1843,7 +1843,7 @@ MUTANTS = [
     # wrong-family test expecting FamilyMismatch kills this.
     ("daemon", "listener.zig", "CHECK-ABSENCE", "daemon-exec-03",
      "address family length gate removed",
-     "        if (addr.len != want_len) return error.FamilyMismatch;",
+     "        if (addr.len != (if (self.family == .ipv4) @as(usize, 4) else 16)) return error.FamilyMismatch;",
      "        // MUTANT: address family length gate removed"),
     # daemon-exec-03: the socket in open() is created with the ipv6 family
     # for an ipv4 listener. The getsockname family witness (the created
