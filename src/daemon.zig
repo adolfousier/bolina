@@ -302,12 +302,18 @@ extern "c" fn sendto(fd: c_int, buf: [*]const u8, len: usize, flags: c_int, dest
 // miss fails closed.
 // ---------------------------------------------------------------------------
 
+// Pilot effect seam (D-089 section 5): the conformance pilot installs a
+// recorder here to drive the fired path over the real wire. Null (shipped
+// state) keeps the fail-closed refusal byte-for-byte; no env knob gates it.
+pub var pilot_effect_hook: ?*const fn (channel.Grant) verify.EffectOutcome = null;
+
+
 // Fail-closed default effect (D-089 section 2): the shipped binary executes
 // nothing. The grant verifies, the ledger commits, the effect refuses and
 // the refusal surfaces upward. An effect backend replaces this hook in code;
 // no env knob gates it.
 fn hookEffect(g: channel.Grant) verify.EffectOutcome {
-    _ = g;
+    if (pilot_effect_hook) |hook| return hook(g);
     return .refused;
 }
 
