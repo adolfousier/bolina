@@ -316,4 +316,18 @@ pub const Ledger = struct {
         }
         return false;
     }
+
+    // BE-HIST-04: the revoke envelope's hash for a revoked pubkey, so the
+    // audit path can position the revocation causally in the DAG instead of
+    // blanket-rejecting every envelope from a now-revoked sender. Null when
+    // the pubkey is not revoked.
+    pub fn getRevokeHash(self: *const Ledger, pubkey: [LEN_SIG_PUBKEY]u8) ?[HASH_BYTES]u8 {
+        var i: usize = 0;
+        while (i < self.revocation_count) : (i += 1) {
+            if (std.mem.eql(u8, &self.revocations[i].pubkey, &pubkey)) {
+                return self.revocations[i].revoke_hash;
+            }
+        }
+        return null;
+    }
 };
