@@ -1,14 +1,10 @@
 // relay.zig
 //
-// Relay surface: pre-authentication parsing and forwarding for Bolina's
-// relay role (SPEC.md §5.2a, BE-MESH-02, D-043/D-044). Two fixed-size
-// packet types are parsed before authentication; both are role-gated to
-// the relay role. The relay holds no key material, cannot decrypt, and
-// forwards Noise transport packets unchanged.
-//
-// Budget: relay sub-unit ≤ 510 lines (BE-SURF-03 subdivision, D-043).
-// Tripwire: if this file reaches 510 lines before BE-MESH-02 is done,
-// work stops and the relay defers to M2.
+// Relay surface: pre-authentication parsing and forwarding for the relay
+// role (SPEC.md §5.2a, BE-MESH-02, D-043/D-044). Two fixed-size packet
+// types parsed before authentication, both role-gated; the relay holds no
+// key material, cannot decrypt, forwards Noise transport packets unchanged.
+// Budget: relay sub-unit ≤ 256 lines (BE-SURF-03; ratcheted from 510 by v0.3.5).
 
 const std = @import("std");
 const parser = @import("parser.zig");

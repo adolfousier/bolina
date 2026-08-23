@@ -1,23 +1,15 @@
 // binding.zig
 //
-// LANGUAGE.md session slice: the certificate identity chain (SPEC section 3.2,
-// BE-ID-01..04) and the post-handshake session binding (SPEC section 4.1,
-// BE-TR-01). This is the post-authentication surface: a hostile authenticated
-// peer's certificate and binding-signature bytes reach this module, so every
-// check fails closed and nothing is trusted on the strength of the encrypted
-// session that carried it. The Noise handshake authenticates X25519 static
-// keys; a certificate binds an Ed25519 identity key, and BE-TR-01 is the one
-// act that binds the two, inside the session, after the handshake (BE-TR-07
-// forbids certificates in the handshake itself).
+// Certificate identity chain (SPEC 3.2, BE-ID-01..04) and post-handshake
+// session binding (SPEC 4.1, BE-TR-01): the post-authentication surface. A
+// hostile authenticated peer's cert and binding-signature bytes reach this
+// module, so every check fails closed; the encrypted session carrying them
+// authenticates nothing here (BE-TR-07 keeps certs out of the handshake).
 //
-// Zero-heap. Ed25519 is checked with the stdlib streaming Verifier so the
-// one-byte BE-SIG-01 domain tag and the to-be-signed region are fed as two
-// chunks; no buffer is allocated to prepend the tag. The certificate arrives
-// already parsed (parser.session.Cert), and its CA-signature region is walked
-// here as (ca_key || ca_sig) pairs, re-verifying every signature against the
-// cert's to-be-signed bytes. The identity chain is its own concern; verify.zig
-// (non-surface state) reaches in here for cert validation but binding.zig never
-// reaches back, so the dependency runs one way.
+// Zero-heap: Ed25519 via the stdlib streaming Verifier fed the one-byte
+// BE-SIG-01 domain tag and the tbs region as two chunks. The cert arrives
+// parsed (parser.session.Cert); verify.zig (non-surface) reaches in for cert
+// validation, binding.zig never reaches back: the dependency runs one way.
 
 const std = @import("std");
 const parser = @import("parser.zig");
@@ -63,12 +55,10 @@ pub const BindingError = error{
     KexPubkeyMismatch, // F1: cert kex_pubkey != remote static key from handshake
 };
 
-// BE-SIG-01 domain-separated Ed25519 verification (internal).
-//
-// Verifies `sig` over (tag || tbs) against `pubkey`, feeding the one-byte tag
-// and the tbs region as two chunks so no tagged-message buffer is allocated.
-// MalformedKey is an unparseable key; SignatureRejected is a verification
-// failure the caller maps to its check-specific error.
+// BE-SIG-01 domain-separated Ed25519 verification (internal): verifies `sig`
+// over (tag || tbs) against `pubkey`, tag and tbs fed as two chunks so no
+// tagged-message buffer is allocated. MalformedKey = unparseable key;
+// SignatureRejected = verification failure the caller maps per check.
 
 const SigError = error{ MalformedKey, SignatureRejected };
 
@@ -86,13 +76,10 @@ fn verifySig(tag: u8, tbs: []const u8, sig: []const u8, pubkey: []const u8) SigE
     v.verify() catch return error.SignatureRejected;
 }
 
-// BE-ID-01: derive a peer's overlay address from its sig_pubkey.
-//
-// overlay_addr = 0xfd || BLAKE2s-256(sig_pubkey)[0..15], a 16-byte fd00::/8
-// ULA. [0..15] is exclusive-end (first 15 bytes), giving 16 total (SPEC 3.2,
-// section 11.3 test vector). The address is a commitment to the key: there is
-// no resolution step to poison, and a node MUST NOT accept an address asserted
-// by any other party (BE-ID-01).
+// BE-ID-01: overlay_addr = 0xfd || BLAKE2s-256(sig_pubkey)[0..15], a 16-byte
+// fd00::/8 ULA (first 15 hash bytes, 16 total; section 11.3 test vector). The
+// address is a commitment to the key: no resolution step to poison, and a
+// node MUST NOT accept an address asserted by any other party.
 
 pub fn deriveOverlayAddr(sig_pubkey: []const u8) [LEN_OVERLAY_ADDR]u8 {
     var full: [32]u8 = undefined;
@@ -117,16 +104,11 @@ pub fn checkRoleConstraints(role_bits: u8) CertChainError!void {
     if (approver and executor) return error.RoleApproverExecutor;
 }
 
-// BE-ID-02 / BE-ID-03 / BE-ID-04: validate a parsed certificate against the
-// local trust set and clock. Rejection is unconditional; there is no
-// warn-and-continue path (SPEC BE-ID-02).
-//
-// BE-ID-03: forbidden role pairings. BE-ID-04: an approver cert needs >= 2 CA
-// sigs. BE-ID-02: the validity window contains now_ms, every (ca_key, ca_sig)
-// verifies over cert.tbs (domain 0x01), and every ca_key is in the local trust
-// set. The strictly-ascending pairwise-distinct CA-key ordering is a parse
-// failure enforced by parseCert (SPEC 3.1), so it holds for every Cert this
-// function receives and is not re-checked here.
+// BE-ID-02/03/04: validate a parsed certificate against the local trust set
+// and clock; rejection is unconditional (no warn-and-continue path). The
+// validity window must contain now_ms, every (ca_key, ca_sig) must verify over
+// tbs (domain 0x01) against the local trust set, and the strictly-ascending
+// pairwise-distinct CA ordering is parse-enforced (SPEC 3.1), not re-checked.
 
 pub fn validateCert(cert: Cert, trusted_ca_keys: []const []const u8, now_ms: u64) BindingError!void {
     try validateCertChain(cert, trusted_ca_keys);
@@ -136,16 +118,12 @@ pub fn validateCert(cert: Cert, trusted_ca_keys: []const []const u8, now_ms: u64
     if (now_ms < cert.not_before or now_ms >= cert.not_after) return error.CertExpired;
 }
 
-// BE-HIST-01: every structural certificate check with the clock removed. This
-// is what an audit of a committed signature runs: the validity window is the
-// ONLY conjunct that reads a clock (now_ms), and BE-HIST-01 forbids rechecking
-// it on committed signatures. Everything here is a pure function of the cert
-// bytes and the trust set: role pairings (BE-ROLE-01/02/04), approver quorum
-// (BE-ID-04), the BE-REV-01 lifetime-span cap (a property of the cert's own
-// not_before/not_after span, not of any clock), and every CA signature over
-// tbs verified against the local trust set (BE-ID-02). The function takes no
-// time input at all, so the type system proves no clock check can hide here,
-// and its narrow error set cannot name a clock failure.
+// BE-HIST-01: the audit path. validateCertNoClock is every structural cert
+// check with the clock removed: no time parameter exists, so the type system
+// proves no clock check can hide here, and the narrow CertChainError set
+// cannot name a clock failure. Roles, quorum, the BE-REV-01 span cap (a
+// property of the cert's own span, not of any clock), and every CA signature
+// against the trust set are pure cert-byte functions.
 pub const CertChainError = error{
     MalformedKey,
     BadCASignature,
@@ -192,24 +170,16 @@ fn inTrustSet(ca_key: []const u8, trusted: []const []const u8) bool {
 }
 
 // BE-TR-01: bind an authenticated Noise static key to an Ed25519 identity.
-//
-// Immediately after the handshake, each side sends, inside the encrypted
-// session, its certificate and an Ed25519 signature by sig_pubkey over the
-// Noise handshake hash h (domain 0x05). A session MUST NOT deliver application
-// data upward until the peer's certificate passes BE-ID-01..04 AND that
-// signature verifies against h. This function performs the certificate and
-// signature checks; the caller flips session.bound on success (session.zig
-// gates upward delivery on that flag).
+// Right after the handshake, inside the encrypted session, each side sends
+// its certificate plus an Ed25519 signature by sig_pubkey over the Noise
+// handshake hash h (domain 0x05). No application data flows upward until the
+// cert passes BE-ID-01..04 AND the signature verifies against h; the caller
+// flips session.bound, which session.zig gates upward delivery on.
 
-// F1: bindSession now verifies that the cert's kex_pubkey matches the remote
-// static key from the handshake. This prevents a session binding to a cert
-// whose kex_pubkey doesn't match the actual key exchange key, which would
-// allow a MITM to substitute their own kex key while using a valid cert.
+// F1: the cert's kex_pubkey must equal the handshake's remote static key,
+// else a MITM substitutes its own kex key behind an otherwise valid cert.
 pub fn bindSession(cert: Cert, binding_sig: []const u8, handshake_hash: []const u8, remote_kex_pubkey: []const u8, trusted_ca_keys: []const []const u8, now_ms: u64) BindingError!void {
     try validateCert(cert, trusted_ca_keys, now_ms);
-    // F1: verify kex_pubkey binding. The cert's kex_pubkey must match the
-    // remote static key from the handshake. Without this, an attacker could
-    // present a valid cert with a different kex key.
     if (cert.kex_pubkey.len != remote_kex_pubkey.len or !std.mem.eql(u8, cert.kex_pubkey, remote_kex_pubkey)) {
         return error.KexPubkeyMismatch;
     }
