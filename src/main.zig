@@ -24,6 +24,7 @@ const daemon_mod = @import("daemon.zig");
 const dispatch_mod = @import("dispatch.zig");
 const grant_ledger = @import("grant_ledger.zig");
 const control_mod = @import("control.zig");
+const control_api = @import("control_api.zig");
 const token_mod = @import("token.zig");
 
 const MAX_DGRAM: usize = 2048;
@@ -128,12 +129,13 @@ pub fn main() !void {
     const data_dir = resolvePath(envOr("BOLINA_DATA_DIR") orelse "~/.bolina", &dir_buf);
     const keys_val = keys_mod.loadOrGenerate(io, data_dir) catch |e|
         fatal("key material under {s}: {s}", .{ data_dir, @errorName(e) });
-    var fp_buf: [17]u8 = undefined;
-    _ = hexBytes(&fp_buf, &keys_mod.fingerprint(&keys_val.sig_public));
-    std.debug.print("bolina: identity fingerprint {s}\n", .{fp_buf[0..16]});
-    _ = hexBytes(&fp_buf, &keys_mod.fingerprint(&keys_val.kex_public));
+    // fingerprint() already returns rendered hex (16 ASCII chars); printing
+    // it through hexBytes double-encoded the identity and made operators
+    // quote a fp no resolver would ever accept (found live in the P2 smoke:
+    // BOLINA_RESOURCES with the printed fp died ForeignExecutor).
+    std.debug.print("bolina: identity fingerprint {s}\n", .{keys_mod.fingerprint(&keys_val.sig_public)});
     std.debug.print("bolina: kex fingerprint {s} ({d} trusted CAs, {s})\n", .{
-        fp_buf[0..16],
+        keys_mod.fingerprint(&keys_val.kex_public),
         keys_val.trusted_ca_count,
         if (keys_val.own_cert_len > 0) "cert loaded" else "no cert: unbound-accept mode",
     });
@@ -177,6 +179,21 @@ pub fn main() !void {
 
     std.debug.print("bolina: node up on {s}, ledger {s}, entering recv loop\n", .{ bind_spec, ledger_path });
 
+    // Declared resources (D-091): the executor serves ONLY what it declares
+    // (BE-RES-02 unknown-refuse), so without BOLINA_RESOURCES the node admits
+    // nothing over wire or HTTP alike, which is exactly fail-closed.
+    // Comma-separated canonical ids ("bol:<fp>/<ns>/<name>"); a malformed or
+    // duplicate entry is fatal at boot rather than a silent admission gap.
+    if (envOr("BOLINA_RESOURCES")) |res_list| {
+        var res_it = std.mem.splitScalar(u8, res_list, ',');
+        while (res_it.next()) |raw| {
+            const name = std.mem.trim(u8, raw, " ");
+            if (name.len == 0) continue;
+            d.dispatcher.resolver.add(name) catch |e|
+                fatal("resource '{s}' refused by resolver: {s}", .{ name, @errorName(e) });
+        }
+    }
+
     // Control plane (D-091): opt-in via BOLINA_CONTROL ("a.b.c.d:port",
     // default 127.0.0.1:7421). The bearer token is load-or-generate under
     // the data dir; the print-once contract means the hex appears in boot
@@ -197,6 +214,18 @@ pub fn main() !void {
         }
         const ctl_node = control_mod.Control.init(&cbind.bytes, cbind.port, &token_hex) catch |e|
             fatal("control plane bind {s} refused ({s})", .{ spec, @errorName(e) });
+        // Attach the /v1 facade to the daemon's own dispatch machines (D-091
+        // zero-god-mode): the Api holds pointers into the static Daemon, so
+        // HTTP intents land in the SAME table/resolver the wire path uses,
+        // and grant events flow out through the same ring dispatch publishes.
+        var ring = control_api.EventRing{};
+        dispatch_mod.attachEvents(&ring);
+        var api = control_api.Api{
+            .resolver = &d.dispatcher.resolver,
+            .table = &d.dispatcher.intents,
+            .ring = &ring,
+        };
+        ctl_node.api = &api;
         _ = signal(SIGTERM, onRequestStop);
         _ = signal(SIGINT, onRequestStop);
         std.debug.print("bolina: control plane on {s}\n", .{spec});

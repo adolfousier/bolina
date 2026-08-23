@@ -190,3 +190,15 @@ test "P2 parseSince: absent query reads zero, junk reads error" {
     try std.testing.expectError(api_mod.ApiError.MalformedTarget, api_mod.Api.parseSince("/v1/events?page=2"));
     try std.testing.expectError(api_mod.ApiError.MalformedTarget, api_mod.Api.parseSince("/v1/events?since=x"));
 }
+
+test "P2 postIntent: retried intent_id reads idempotent 202, no double count" {
+    const f = makeApi();
+    var buf: [512]u8 = undefined;
+    var body: [512]u8 = undefined;
+    const raw = std.fmt.bufPrint(&body, "{{\"intent_id\":\"{s}\",\"resource_id\":\"{s}\",\"action\":\"read\",\"rationale\":\"e2e\"}}", .{ ID_A_HEX, RES_A }) catch unreachable;
+    try std.testing.expectEqual(@as(u16, 202), (try f.api.postIntent(raw, &buf, 1000)).status);
+    try std.testing.expectEqual(@as(u16, 202), (try f.api.postIntent(raw, &buf, 1001)).status);
+    // One admission, one table entry: the retry changed nothing.
+    try std.testing.expectEqual(@as(u64, 1), f.api.admitted_total);
+    try std.testing.expectEqual(@as(usize, 1), f.api.table.len);
+}

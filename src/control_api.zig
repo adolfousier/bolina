@@ -127,6 +127,13 @@ pub const Api = struct {
                 const text = std.fmt.bufPrint(out, "conflict {s}\n", .{hex_buf[0..]}) catch return error.OutBufferTooSmall;
                 return .{ .status = 409, .body_len = text.len };
             },
+            // F4 idempotency: a retried intent_id still PENDING is the SAME
+            // admission, not an error; the transport path treats it as a
+            // no-op and so does HTTP. Not counted again in admitted_total.
+            error.DuplicateIntentId => {
+                const text = std.fmt.bufPrint(out, "accepted {s}\n", .{hex_buf[0..]}) catch return error.OutBufferTooSmall;
+                return .{ .status = 202, .body_len = text.len };
+            },
             else => {
                 self.refused_unprocessable_total += 1;
                 if (UNPROCESSABLE.len > out.len) return error.OutBufferTooSmall;
