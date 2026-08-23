@@ -1,0 +1,124 @@
+openapi: 3.0.3
+info:
+  title: Bolina control plane
+  version: "0.6.0-p4"
+  description: >
+    Localhost HTTP facade over a running bolina node (D-091). The daemon
+    owns the UDP wire protocol; this surface deals in intents, events and
+    metrics only. Binds loopback by default, opt-in via BOLINA_CONTROL.
+    Bearer token lives at <data-dir>/control.token (mode 0600), printed
+    once at first boot.
+servers:
+  - url: http://127.0.0.1:7421
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: Node is alive
+          content:
+            text/plain:
+              schema: { type: string, example: "bolina ok" }
+  /v1/intents:
+    post:
+      summary: Submit an intent for admission
+      description: >
+        Delegates to the same resolver and intent table the UDP wire path
+        uses. Idempotent per intent_id while the intent is still pending
+        (a retry returns 202 and is not double-counted).
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [intent_id, resource_id, action]
+              properties:
+                intent_id:
+                  type: string
+                  pattern: "^[0-9a-f]{32}$"
+                  description: Client-generated unique id, 32 lowercase hex chars.
+                resource_id:
+                  type: string
+                  maxLength: 256
+                  description: Canonical id declared at boot, bol:<fp_hex16>/<ns>/<id>.
+                action:
+                  type: string
+                  maxLength: 64
+                  description: Opaque verb carried with the intent.
+                rationale:
+                  type: string
+                  maxLength: 512
+                  description: Optional free text for audit trails.
+      responses:
+        "202":
+          description: Admitted (or idempotent retry of a still-pending intent_id)
+        "400":
+          description: Malformed JSON body or field lengths violated
+        "403":
+          description: Missing/invalid bearer token
+        "409":
+          description: Resource already held by another pending/executing intent
+        "422":
+          description: Resource unknown to this node or fingerprinted to a foreign executor
+        "501":
+          description: Unsupported transfer encoding (e.g. chunked)
+  /v1/events:
+    get:
+      summary: Ledger event stream (SSE)
+      description: >
+        text/event-stream over a Connection: close response. Each data:
+        line is one JSON event; replay is cursor-based (?since=last seen
+        seq). The durable ring retains the most recent 256 committed
+        events; older cursors replay from the oldest retained entry.
+        Admissions alone emit nothing; grant/executed/refused commits do.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: since
+          schema: { type: integer, minimum: 0, default: 0 }
+          description: Return events with seq strictly greater than this.
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  data: {"seq":8,"kind":"grant_executed","grant_id":"..."}
+        "403":
+          description: Missing/invalid bearer token
+  /v1/{unknown}:
+    get:
+      summary: Any other authenticated path
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: unknown
+          required: true
+          schema: { type: string }
+      responses:
+        "404":
+          description: Not found (auth already passed)
+  /metrics:
+    get:
+      summary: Prometheus counters
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Metrics in Prometheus text exposition format
+          content:
+            text/plain:
+              schema: { type: string }
+        "403":
+          description: Missing/invalid bearer token
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Value of <data-dir>/control.token; verified constant-time.
