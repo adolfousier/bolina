@@ -53,7 +53,8 @@ fn joinPath(out: []u8, base: []const u8, name: []const u8) KeysError![]const u8 
 
 // Read exactly KEY_LEN bytes from one key file. Any other length is
 // corruption, not a format evolution: the files are raw fixed-size keys.
-fn readKeyFile(io: std.Io, path: []const u8, out: *[KEY_LEN]u8) KeysError!bool {
+// pub for ca_cli (D-091 section 5): one home for the key-file discipline.
+pub fn readKeyFile(io: std.Io, path: []const u8, out: *[KEY_LEN]u8) KeysError!bool {
     const dir = std.Io.Dir.cwd();
     const f = dir.openFile(io, path, .{}) catch |e| switch (e) {
         error.FileNotFound => return false,
@@ -65,7 +66,7 @@ fn readKeyFile(io: std.Io, path: []const u8, out: *[KEY_LEN]u8) KeysError!bool {
     return true;
 }
 
-fn writeKeyFile(io: std.Io, path: []const u8, bytes: []const u8) KeysError!void {
+pub fn writeKeyFile(io: std.Io, path: []const u8, bytes: []const u8) KeysError!void {
     const dir = std.Io.Dir.cwd();
     const f = dir.createFile(io, path, .{ .read = true, .truncate = true, .permissions = @enumFromInt(0o600) }) catch return error.DiskError;
     defer f.close(io);

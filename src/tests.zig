@@ -39,5 +39,7 @@ comptime {
     _ = @import("control_test.zig");
     _ = @import("control_api_test.zig");
     _ = @import("token_test.zig");
+    _ = @import("ca_cli_test.zig");
+    _ = @import("ca_material.zig");
     _ = @import("pilot_test.zig");
 }

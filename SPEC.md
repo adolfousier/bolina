@@ -338,6 +338,7 @@ kex_pubkey binding fix grew binding.zig past the old floor; the sub-cap sum stay
   - **Relay sub-unit:** `src/relay.zig` — cap 256 lines, ratcheted from 510 to its measured floor (PHASE-B-ESTIMATE.md).
   - **Listener sub-unit:** `src/listener.zig`, `src/handshake.zig` — cap 250 lines, both declared ahead of their code.
 - **Control plane:** `src/control.zig`, `src/http_parse.zig`, `src/token.zig`, `src/control_api.zig` — cap 1000 lines combined (D-091): the v0.6 localhost HTTP surface, opt-in via `BOLINA_CONTROL`, bearer-token gated after `/healthz`, unreachable from the protocol wire path; declared ahead of its code.
+- **CA tooling:** `src/ca_material.zig`, `src/ca_cli.zig` — cap 550 lines combined (D-091): the offline `bolina ca init/issue/revoke/list/show` surface; issues real node certs (BE-REV-01 lifetime cap enforced at issue time) and writes BE-CTRL-03 revocation envelopes carrying the subject's own expiry; no network surface, runs only as explicit CLI argv.
 - **Post-authentication unit:** subdivided into three sub-units, together everything an auditor must
   read to verify what a hostile authenticated peer's bytes can reach:
   - **Wire-parser sub-unit:** `src/parser/channel.zig`, `src/parser/session.zig` — cap 652 lines.

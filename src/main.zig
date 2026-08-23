@@ -26,6 +26,7 @@ const grant_ledger = @import("grant_ledger.zig");
 const control_mod = @import("control.zig");
 const control_api = @import("control_api.zig");
 const token_mod = @import("token.zig");
+const ca_cli = @import("ca_cli.zig");
 
 const MAX_DGRAM: usize = 2048;
 const SA_LEN: usize = 28;
@@ -111,9 +112,25 @@ fn resolvePath(spec: []const u8, out: []u8) []const u8 {
     return out[0..total];
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var threaded_io = std.Io.Threaded.init_single_threaded;
     const io = threaded_io.io();
+
+    // 0. Offline CA subcommands (D-091 section 5) exit before any daemon state
+    // exists: `bolina ca init|issue|revoke|list|show` mint and inspect
+    // material; the daemon below is the only network citizen. Argv collected
+    // once into a fixed stack table: zero heap on the daemon path.
+    var argv: [24][:0]const u8 = undefined;
+    var argv_n: usize = 0;
+    {
+        var ait = std.process.Args.Iterator.init(init.minimal.args);
+        while (ait.next()) |a| {
+            if (argv_n == argv.len) break;
+            argv[argv_n] = a;
+            argv_n += 1;
+        }
+    }
+    if (try ca_cli.maybeRun(io, argv[0..argv_n])) return;
 
     // 1. Env. Unparseable or dev-only values exit before anything mutates.
     if (envOr("BOLINA_TEST_CA") != null)
