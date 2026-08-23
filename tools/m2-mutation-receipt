@@ -6,23 +6,33 @@
 # SHA must be HEAD or an ancestor; prumo-verify gates on it.
 # v0.5.0 closeout run 2026-08-22 09:27 UTC: adds d089 CHECK-ABSENCE mutants
 # (MD3 flock -> grant_ledger, MD4 compact -> intent, MD5 dedup -> relay).
-sha=7fcc336
+# v0.5.3 closeout run 2026-08-24: adds the d090 audit-path defence domain;
+# harness tracks d089/d090 as dedicated domains. Full run at 7035eed killed
+# 167/167 + 1 EQUIV with ONE SKIP: the md5-dedup anchor went stale after the
+# fmt canonicalization (38f5a9b) reflowed relay.zig's insert. Anchor repaired
+# in tools/mutation-test.py (find-string only, zero src change) and the d089
+# chunk re-run at the same content state: 3/3 KILLED (logs/d089_rechunk_anchorfix.log).
+# Combined: 168/168 non-equivalent killed, 0 survived, 1 documented equivalent
+# (169 evaluated). grant check 7 remains the sole documented equivalent.
+sha=7035eed
 channel=8/8
 daemon=7/7
 dispatch=6/6
+d089=3/3
+d090=6/6
 evidence=11/11
-grant=21/22 (1 documented equivalent: BE-GRANT-03 check 7, see EQUIVALENT in tools/mutation-test.py)
-grant_ledger=8/8
+grant=22/22 (1 documented equivalent: BE-GRANT-03 check 7, see EQUIVALENT in tools/mutation-test.py)
+grant_ledger=7/7
 grant_revocation=4/4
-intent=7/7
+intent=6/6
 ledger=13/13
 mesh=13/13
 refusal=3/3
-relay=12/12
+relay=11/11
 relay_serve=6/6
 render=6/6
 resolver=10/10
 session=11/11
 sync=12/12
 transport=4/4
-total=162/162 survived=0 equivalent=1
+total=168/168 survived=0 equivalent=1

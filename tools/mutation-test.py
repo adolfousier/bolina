@@ -1949,7 +1949,10 @@ MUTANTS = [
     ("d089", "relay.zig", "CHECK-ABSENCE", "md5-dedup",
      "MD5 re-registration dedup removed: refresh appends duplicate routes until the table fills",
      """        for (self.entries[0..self.count]) |*e| {
-            if (std.mem.eql(u8, &e.overlay_addr, &entry.overlay_addr)) { e.* = entry; return true; }
+            if (std.mem.eql(u8, &e.overlay_addr, &entry.overlay_addr)) {
+                e.* = entry;
+                return true;
+            }
         }""",
      "        // MUTANT: dedup loop removed"),
     # --- D-090 audit path hardening defence mutants ------------------------
