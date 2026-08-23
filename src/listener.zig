@@ -155,7 +155,10 @@ fn makeSockaddr(family: Family, addr: []const u8, port: u16, out: *[28]u8) c_uin
     out.* = .{0} ** 28;
     const af: u8 = if (family == .ipv4) @as(u8, @intCast(AF_INET)) else @as(u8, @intCast(AF_INET6));
     const sa_len: c_uint = if (family == .ipv4) 16 else 28;
-    const bsd = switch (builtin.os.tag) { .macos, .freebsd, .openbsd, .netbsd, .dragonfly => true, else => false };
+    const bsd = switch (builtin.os.tag) {
+        .macos, .freebsd, .openbsd, .netbsd, .dragonfly => true,
+        else => false,
+    };
     out[0] = if (bsd) @intCast(sa_len) else af;
     out[1] = if (bsd) af else 0;
     out[2] = @intCast(port >> 8);

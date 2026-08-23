@@ -126,7 +126,10 @@ pub const RelayTable = struct {
     // false only for a NEW address at a full table.
     pub fn insert(self: *RelayTable, entry: RelayEntry) bool {
         for (self.entries[0..self.count]) |*e| {
-            if (std.mem.eql(u8, &e.overlay_addr, &entry.overlay_addr)) { e.* = entry; return true; }
+            if (std.mem.eql(u8, &e.overlay_addr, &entry.overlay_addr)) {
+                e.* = entry;
+                return true;
+            }
         }
         if (self.count >= MAX_RELAY_TABLE) return false;
         self.entries[self.count] = entry;

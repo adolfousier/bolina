@@ -307,7 +307,6 @@ extern "c" fn sendto(fd: c_int, buf: [*]const u8, len: usize, flags: c_int, dest
 // state) keeps the fail-closed refusal byte-for-byte; no env knob gates it.
 pub var pilot_effect_hook: ?*const fn (channel.Grant) verify.EffectOutcome = null;
 
-
 // Fail-closed default effect (D-089 section 2): the shipped binary executes
 // nothing. The grant verifies, the ledger commits, the effect refuses and
 // the refusal surfaces upward. An effect backend replaces this hook in code;
