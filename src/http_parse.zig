@@ -45,11 +45,14 @@ pub const Method = enum { get, post };
 // or compacts it. body_start is where the body begins; the state machine
 // slices body_start .. body_start + content_length itself once enough
 // bytes exist (parse refuses early so a short body reads back Incomplete).
+// authorization is the raw header value ("" when absent); control.zig
+// strips the Bearer prefix and verifies against its own token.
 pub const Request = struct {
     method: Method,
     target: []const u8,
     content_length: usize,
     body_start: usize,
+    authorization: []const u8,
 };
 
 // parse: one attempt over buf. Incremental contract: with a partial
@@ -96,6 +99,7 @@ pub fn parse(buf: []const u8) ParseError!Request {
     // the left only, so a trailing space in a number is a syntax error.
     var pos: usize = line_end + 2;
     var content_length: ?usize = null;
+    var authorization: []const u8 = "";
     while (pos < term) {
         if (buf[pos] == ' ' or buf[pos] == '\t') return error.MalformedRequest; // obs-fold
         const nl = std.mem.indexOfPos(u8, buf, pos, "\r\n") orelse return error.MalformedRequest;
@@ -110,6 +114,7 @@ pub fn parse(buf: []const u8) ParseError!Request {
         while (val.len > 0 and (val[0] == ' ' or val[0] == '\t')) val = val[1..];
         if (val.len == 0) return error.MalformedRequest;
         if (std.ascii.eqlIgnoreCase(name, "transfer-encoding")) return error.ChunkedNotSupported;
+        if (std.ascii.eqlIgnoreCase(name, "authorization")) authorization = val;
         if (std.ascii.eqlIgnoreCase(name, "content-length")) {
             const n = std.fmt.parseInt(usize, val, 10) catch return error.MalformedRequest;
             if (content_length) |prev| {
@@ -130,5 +135,5 @@ pub fn parse(buf: []const u8) ParseError!Request {
     if (clen > BODY_CAP) return error.BodyTooLarge;
     if (buf.len < body_start + clen) return error.Incomplete;
 
-    return .{ .method = method, .target = t, .content_length = clen, .body_start = body_start };
+    return .{ .method = method, .target = t, .content_length = clen, .body_start = body_start, .authorization = authorization };
 }

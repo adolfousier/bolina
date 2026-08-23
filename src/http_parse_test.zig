@@ -89,3 +89,14 @@ test "body cap enforced at declaration time, before bytes arrive" {
     defer std.testing.allocator.free(edge);
     try std.testing.expectError(error.Incomplete, hp.parse(edge));
 }
+
+test "authorization header captured verbatim, absent reads empty" {
+    const req = try hp.parse("GET /v1/x HTTP/1.1\r\nauthorization: Bearer abc123\r\n\r\n");
+    try std.testing.expectEqualStrings("Bearer abc123", req.authorization);
+    // Name match is case-insensitive; the value is captured verbatim after
+    // its left trim (no right trim exists in the header grammar).
+    const upper = try hp.parse("GET /v1/x HTTP/1.1\r\nAuthOrizaTion: token-here\r\n\r\n");
+    try std.testing.expectEqualStrings("token-here", upper.authorization);
+    const none = try hp.parse("GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+    try std.testing.expectEqualStrings("", none.authorization);
+}
