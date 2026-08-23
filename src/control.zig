@@ -28,6 +28,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const control_api = @import("control_api.zig");
+const channel = @import("parser/channel.zig");
 const http_parse = @import("http_parse.zig");
 const token_mod = @import("token.zig");
 const daemon_mod = @import("daemon.zig");
@@ -110,6 +112,12 @@ pub const Control = struct {
     listen_fd: c_int = -1,
     token_hex: *const [token_mod.TOKEN_HEX_LEN]u8,
     conns: [MAX_CONNS]Conn = undefined,
+    // P2 (D-091): attached by main after both sides construct; null keeps
+    // /v1/* answering 404 so control-only tests need no daemon pieces.
+    api: ?*control_api.Api = null,
+    // Single scratch for API response bodies: routing is single-threaded
+    // and finishes before answerAndClose copies into the conn buffer.
+    scratch: [WRITE_CAP]u8 = undefined,
     // Surfaced counters: /metrics reads these in P2; nothing blocks on them.
     requests_served: u64 = 0,
     auth_refused: u64 = 0,
@@ -271,7 +279,7 @@ pub const Control = struct {
                 return;
             },
         };
-        self.answerAndClose(c, self.routeRequest(req));
+        self.answerAndClose(c, self.routeRequest(req, c.buf[req.body_start..][0..req.content_length], now_ms));
     }
 
     fn onWritable(self: *Control, c: *Conn) void {
@@ -301,7 +309,9 @@ pub const Control = struct {
 
     // routeRequest: /healthz open (F7), everything else behind the bearer
     // token. Unknown paths under a VALID token read 404, never silence.
-    fn routeRequest(self: *Control, req: http_parse.Request) Route {
+    // P2: /v1/* delegates to the Api facade when one is attached (D-091);
+    // with no Api attached every /v1/* route stays 404.
+    fn routeRequest(self: *Control, req: http_parse.Request, body: []const u8, now_ms: u64) Route {
         if (req.method == .get and std.mem.eql(u8, req.target, "/healthz"))
             return .{ .status = 200, .body = "bolina ok\n", .content_type = "text/plain" };
         const tok = bearerValue(req.authorization) orelse {
@@ -312,9 +322,37 @@ pub const Control = struct {
             self.auth_refused += 1;
             return forbidden_route;
         }
-        // P2 routes (POST /v1/intents, GET /v1/events, GET /metrics) land
-        // here, each a facade over existing dispatch/ledger functions.
+        if (self.api) |api| {
+            if (req.method == .get and std.mem.eql(u8, req.target, "/metrics")) {
+                return self.apiRoute(api.metricsBody(&self.scratch, self.requests_served, self.auth_refused, self.timeouts), "text/plain");
+            }
+            if (req.method == .post and std.mem.eql(u8, req.target, "/v1/intents")) {
+                return self.apiRoute(api.postIntent(body, &self.scratch, now_ms), "text/plain");
+            }
+            if (req.method == .get) {
+                if (intentPathId(req.target)) |id_bytes| {
+                    return self.apiRoute(api.getIntentState(id_bytes, &self.scratch), "text/plain");
+                }
+            }
+            if (req.method == .get and std.mem.startsWith(u8, req.target, "/v1/events")) {
+                const since = control_api.Api.parseSince(req.target) catch
+                    return .{ .status = 400, .body = "bad request\n", .content_type = "text/plain" };
+                return self.apiRoute(api.eventsSseBody(&self.scratch, since), "text/event-stream");
+            }
+        }
+        // P2 routes land above; anything else under a valid token is 404.
         return .{ .status = 404, .body = "not found\n", .content_type = "text/plain" };
+    }
+
+    // apiRoute: copies an Api-produced outcome into a Route over the shared
+    // scratch. A 404 from the API carries no body (the transport adds the
+    // standard not-found text).
+    fn apiRoute(self: *Control, outcome: control_api.ApiError!control_api.IntentOutcome, content_type: []const u8) Route {
+        const o = outcome catch
+            return .{ .status = 500, .body = "internal error\n", .content_type = "text/plain" };
+        if (o.status == 404)
+            return .{ .status = 404, .body = "not found\n", .content_type = "text/plain" };
+        return .{ .status = o.status, .body = self.scratch[0..o.body_len], .content_type = content_type };
     }
 
     fn answerAndClose(self: *Control, c: *Conn, r: Route) void {
@@ -348,6 +386,18 @@ pub const Control = struct {
 };
 
 pub const Route = struct { status: u16, body: []const u8, content_type: []const u8 };
+
+// intentPathId: matches GET /v1/intents/{64 hex} exactly (no query, no
+// trailing junk) and decodes the id; null for anything else.
+fn intentPathId(target: []const u8) ?[channel.LEN_INTENT_ID]u8 {
+    const prefix = "/v1/intents/";
+    if (target.len != prefix.len + control_api.ID_HEX_LEN) return null;
+    if (!std.mem.startsWith(u8, target, prefix)) return null;
+    var hex_buf: [control_api.ID_HEX_LEN]u8 = undefined;
+    @memcpy(&hex_buf, target[prefix.len..]);
+    return control_api.parseIdHex(&hex_buf);
+}
+
 const forbidden_route = Route{ .status = 403, .body = "forbidden\n", .content_type = "text/plain" };
 
 // statusRoute: the F5 table. Parser rejections map to exactly two codes:

@@ -29,6 +29,7 @@ const resolver_mod = @import("resolver.zig");
 const verify = @import("verify.zig");
 const grant_ledger = @import("grant_ledger.zig");
 const grant_trace = @import("grant_trace.zig");
+const control_api = @import("control_api.zig");
 
 // Declared defaults (SPEC grant receipts, D-059).
 pub const T_MAX_S_DEFAULT: u64 = 3600;
@@ -85,6 +86,16 @@ var durable_ledger: ?grant_ledger.GrantLedger = null;
 // Recovery borrows the ledger's internal buffer, and tombstoneOrphan mutates
 // the ledger, so the caller must hold its own list while it publishes the
 // interrupted Effects. ResourceExhausted if the orphan list does not fit.
+// Control-plane event feed (D-091 P2): optional ring attached by the
+// daemon at boot; ledger-commit sites publish here so /v1/events streams
+// REAL transitions, never fabricated ones. Null everywhere in wire-only
+// builds: zero cost on the hot path beyond one null check per commit.
+var control_events: ?*control_api.EventRing = null;
+
+pub fn attachEvents(ring: *control_api.EventRing) void {
+    control_events = ring;
+}
+
 pub fn initDurableLedger(io: std.Io, path: []const u8, orphan_out: []grant_ledger.OrphanGrant) grant_ledger.LedgerError!usize {
     var lg = try grant_ledger.GrantLedger.open(io, path);
     const r = try lg.recover();
@@ -142,6 +153,7 @@ fn consumedHook(grant_id: []const u8, not_after_ms: u64, now_ms: u64) bool {
     @memcpy(&gid, grant_id[0..channel.LEN_GRANT_ID]);
     if (lg.isConsumed(gid)) return true;
     lg.commitConsumed(gid, not_after_ms, now_ms) catch return true;
+    if (control_events) |ring| ring.publish(.grant_consumed, gid, now_ms);
     return false;
 }
 
@@ -312,6 +324,7 @@ pub const Dispatch = struct {
                 lg.markPublished(gid) catch {
                     if (grant_trace.enabled) grant_trace.emit(.mark_published_failed, grant_trace.NO_PC, grant.grant_id, now_ms);
                 };
+                if (control_events) |ring| ring.publish(.grant_published, gid, now_ms);
             }
         }
         // Phase A ordering (D-059): the EXECUTING transition lands after a

@@ -337,7 +337,7 @@ kex_pubkey binding fix grew binding.zig past the old floor; the sub-cap sum stay
   - **Handshake sub-unit:** `src/parser.zig`, `src/mac.zig`, `src/noise.zig` — cap 990 lines.
   - **Relay sub-unit:** `src/relay.zig` — cap 256 lines, ratcheted from 510 to its measured floor (PHASE-B-ESTIMATE.md).
   - **Listener sub-unit:** `src/listener.zig`, `src/handshake.zig` — cap 250 lines, both declared ahead of their code.
-- **Control plane:** `src/control.zig`, `src/http_parse.zig`, `src/token.zig` — cap 700 lines combined (D-091): the v0.6 localhost HTTP surface, opt-in via `BOLINA_CONTROL`, bearer-token gated after `/healthz`, unreachable from the protocol wire path; declared ahead of its code.
+- **Control plane:** `src/control.zig`, `src/http_parse.zig`, `src/token.zig`, `src/control_api.zig` — cap 1000 lines combined (D-091): the v0.6 localhost HTTP surface, opt-in via `BOLINA_CONTROL`, bearer-token gated after `/healthz`, unreachable from the protocol wire path; declared ahead of its code.
 - **Post-authentication unit:** subdivided into three sub-units, together everything an auditor must
   read to verify what a hostile authenticated peer's bytes can reach:
   - **Wire-parser sub-unit:** `src/parser/channel.zig`, `src/parser/session.zig` — cap 652 lines.
