@@ -179,6 +179,10 @@ Total: ~1,575 lines of Zig + the SPEC/THREAT-MODEL documents.
 | Zig's `std.crypto` is not vendored or hash-pinned | Accepted risk (THREAT-MODEL §4.8) | Supply chain dependency on Zig upstream |
 | Coverage instrumentation is hand-rolled, not native | Accepted risk (THREAT-MODEL §4.6) | Uncounted branches invisible to fuzzing |
 
+### 7.1 Re-verification record (loop closure, D-092 baseline)
+
+2026-08-23: the 20 Aug reviewer re-verified this registry against sealed `e97a117` (v0.5.3). Confirmed FIXED: F1 (kex binding), F2 (ledger buffer), F3 (fsync dir), F4 (first_receipt durability), F5 (admission ordering), F6 (setRevocation subject expiry), F13 (verify-side lookups). Confirmed dispositioned: F8 -> T11 documented, F10 (revocation pruned by cert_expiry), F12 (per-epoch cookie key), MD3 ledger flock, MD4 intent slot reclaim. Per D-092 Ruling 1 this registry + dispositions enter the G1 pre-audit baseline handed to the external reviewer; it does not itself satisfy G1.
+
 ## 8. Contact
 
 Daniel Carneiro (`loonix`) — author. See `README.md` for contact details.
