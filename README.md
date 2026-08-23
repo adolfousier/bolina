@@ -39,8 +39,8 @@ prints every gate on every run and returns non-zero if an enforced one fails.
 | BE-\* items bound to a named test | 114 of 114 declared, high-water ratchet at 114 | M1, enforced |
 | Test vectors cross-verified (Zig against Python `cryptography`) | 77 passed, 0 failed | M3, enforced |
 | Differential fuzz divergences (production parser against an independent Python reference) | 0 divergences, 72 of 72 parser exit points reached (gate 20,000; extended 1,000,000; nightly soak 5 seeds x 1,000,068 records, 0 divergences, 72/72) | M4, enforced; SPEC §11.6 sealed (D-075) |
-| Mutants killed by the test suite | 162 of 162 non-equivalent (163 evaluated, 1 documented equivalent per D-088), full run at HEAD `7fcc336` | M2, enforced |
-| Pre-authentication attack surface | 1458 of 1500 lines | M5, enforced |
+| Mutants killed by the test suite | 168 of 168 non-equivalent (169 evaluated, 1 documented equivalent per D-088), full run at the D-090 closeout, receipt `tools/m2-mutation-receipt` (log `logs/mutation_final_d090.log`) | M2, enforced |
+| Pre-authentication attack surface | 1460 of 1500 lines | M5, enforced |
 | Post-authentication attack surface | 1488 of 1500 lines | M11, enforced |
 | Parser exit points with a matching `Branch` member | 72 of 72, zero raw error returns | M9, enforced |
 | Pointer-minting builtins in `src/` | 0 | M8, enforced |

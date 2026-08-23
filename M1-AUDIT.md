@@ -903,3 +903,36 @@ eager compaction kept REJECTED corpses beyond every lookup's reach;
 (`31c7a1b`) and the F4 first-receipt restart-survival property gained its
 own ledger test (`7fcc336`). Suite at seal: 397 passed, 7 skipped,
 0 failed. prumo-verify: all enforced gates PASS, M6 informational only.
+
+## Post-seal addendum: D-090 closeout (2026-08-23)
+
+The D-090 slice (BE-HIST-01 real chain validation without clock, BE-HIST-04
+causal revocation via `getRevokeHash` + DAG ancestry, BE-CTRL-03
+subject-expiry Revoke body) landed as five commits on 2026-08-22 with the
+d090 mutation domain chunk-killed 6/6, but its closeout was interrupted
+before the docs sync, the receipt bump, and the gate re-run. The continuity
+watchdog converged it:
+
+- Full non-chunked suite at the closeout HEAD: **168/168 non-equivalent
+  mutants killed, 0 survived, 1 documented equivalent (169 evaluated)**,
+  log `logs/mutation_final_d090.log`, receipt `tools/m2-mutation-receipt`.
+  This discharges the "ONE full-suite run at final HEAD" the D-090 record
+  left pending. Suite: 403 passed, 7 skipped, 0 failed.
+- The closeout gauntlet caught what the interrupted session never measured:
+  `zig fmt --check` flagged `listener.zig`, `daemon.zig`, and `relay.zig`
+  (drift carried on main since the D-089 pilot commits), and prumo-verify
+  FAILED M5/M11: the D-090 chain split had grown `binding.zig` 190 to 220,
+  putting session-state at 789/759 and the post-authentication unit at
+  1518/1500, and the fmt canonicalization reflowed `relay.zig` to 259/256.
+- Reconciliation (D-091): fmt canonicalized (semantics untouched), then a
+  comment-only compaction restored `binding.zig` to its D-087 floor of 190
+  and brought `relay.zig` to 255 (stale 510-line tripwire comment replaced
+  by the v0.3.5 cap sentence). No sub-unit cap moved, no file changed list,
+  no SPEC text: pre-authentication reads 1460/1500 (handshake 961/990,
+  relay 255/256, listener 244/250), post-authentication 1488/1500
+  (wire-parser 652/652, session-state 759/759, sync 77/89), M5 and M11
+  PASS, tests 403/410 identical before and after the compaction.
+- M1: 114/116 bound, high water 114 held. The two missing keyed tests are
+  BE-CTRL-03 (declared by D-090, literal Revoke-body fixture still owed)
+  and BE-TR-01a (declared by D-089, binding-message layout fixture owed);
+  both are worklist items for the next slice, not regressions.
