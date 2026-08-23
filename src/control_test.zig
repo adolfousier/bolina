@@ -24,7 +24,26 @@ const libc = struct {
     extern "c" fn close(fd: c_int) c_int;
     extern "c" fn getsockname(fd: c_int, addr: [*]u8, addrlen: *c_uint) c_int;
     extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
+    extern "c" fn nanosleep(req: *const Ts, rem: ?*Ts) c_int;
 };
+
+const Ts = extern struct { sec: c_long, nsec: c_long };
+
+// recvWait: bounded wait for data or EOF on a non-blocking client fd.
+// Loopback answers are near-instant but the FIN/data wakeup is not
+// synchronous with the server's syscall; 100 x 1ms is the ceiling so a
+// broken server fails fast instead of hanging or flaking.
+fn recvWait(fd: c_int, buf: []u8) isize {
+    const one_ms = Ts{ .sec = 0, .nsec = 1_000_000 };
+    var rem: Ts = undefined;
+    var tries: usize = 0;
+    while (tries < 100) : (tries += 1) {
+        const n = libc.recv(fd, buf.ptr, buf.len, 0);
+        if (n != -1) return n; // bytes or clean EOF
+        _ = libc.nanosleep(&one_ms, &rem);
+    }
+    return -1;
+}
 
 const AF_INET: u32 = 2;
 const SOCK_STREAM: u32 = 1;
@@ -186,7 +205,7 @@ test "P1 slowloris: idle past deadline is swept closed without a reply" {
     try std.testing.expectEqual(ctl.ConnState.idle, h.node.conns[0].state);
     try std.testing.expectEqual(@as(u64, 1), h.node.timeouts);
     var buf: [64]u8 = undefined;
-    const n = libc.recv(h.client, &buf, buf.len, 0);
+    const n = recvWait(h.client, &buf);
     try std.testing.expectEqual(@as(isize, 0), n); // clean EOF, zero bytes sent
 }
 
@@ -272,7 +291,7 @@ test "P1 full table: the overflowing connection reads 503, none evicted" {
     _ = libc.send(extra, "GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n", 35, 0);
     h.lap(T0 + 99); // accept fires, table full: 503 + close, no eviction
     var buf: [128]u8 = undefined;
-    const n = libc.recv(extra, &buf, buf.len, 0);
+    const n = recvWait(extra, &buf);
     try std.testing.expect(n > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(n)], "503 Service Unavailable") != null);
     _ = libc.close(extra); // FIN timing vs non-blocking recv is a race; not asserted
@@ -282,7 +301,7 @@ test "P1 full table: the overflowing connection reads 503, none evicted" {
     for (&h.node.conns) |*c| try std.testing.expectEqual(ctl.ConnState.reading, c.state);
     _ = libc.send(h.client, "P/1.1\r\nHost: x\r\n\r\n", 18, 0);
     h.lap(T0 + 100);
-    const done = libc.recv(h.client, &buf, buf.len, 0);
+    const done = recvWait(h.client, &buf);
     try std.testing.expect(done > 0);
     try std.testing.expect(std.mem.indexOf(u8, buf[0..@intCast(done)], "200 OK") != null);
 }

@@ -23,6 +23,8 @@ const keys_mod = @import("keys.zig");
 const daemon_mod = @import("daemon.zig");
 const dispatch_mod = @import("dispatch.zig");
 const grant_ledger = @import("grant_ledger.zig");
+const control_mod = @import("control.zig");
+const token_mod = @import("token.zig");
 
 const MAX_DGRAM: usize = 2048;
 const SA_LEN: usize = 28;
@@ -32,6 +34,17 @@ const SA_LEN: usize = 28;
 // daemon loop, so main talks to libc directly like every other wire module.
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]u8;
 extern "c" fn clock_gettime(clk_id: c_int, tp: *Timespec) c_int;
+extern "c" fn signal(sig: c_int, handler: ?*const fn (c_int) callconv(.c) void) ?*const fn (c_int) callconv(.c) void;
+
+// SIGTERM/SIGINT land here: flip the flag, nothing else (async-signal-safe).
+// The control-plane runLoop polls it between laps; without BOLINA_CONTROL
+// there is no graceful stop and the plain recv loop runs until killed.
+var shutdown_flag = std.atomic.Value(bool).init(false);
+const SIGINT: c_int = 2;
+const SIGTERM: c_int = 15;
+fn onRequestStop(_: c_int) callconv(.c) void {
+    shutdown_flag.store(true, .monotonic);
+}
 
 // CLOCK_REALTIME is 0 on Linux and macOS both. The daemon's clock is wall
 // time on purpose: cert validity windows (BE-ID-02) are absolute times, and
@@ -163,6 +176,34 @@ pub fn main() !void {
         fatal("daemon init: {s}", .{@errorName(e)});
 
     std.debug.print("bolina: node up on {s}, ledger {s}, entering recv loop\n", .{ bind_spec, ledger_path });
+
+    // Control plane (D-091): opt-in via BOLINA_CONTROL ("a.b.c.d:port",
+    // default 127.0.0.1:7421). The bearer token is load-or-generate under
+    // the data dir; the print-once contract means the hex appears in boot
+    // output exactly when it is minted, never again. Without the env the
+    // plain recv loop below runs byte-for-byte as before (pilot e2e proof).
+    if (envOr("BOLINA_CONTROL")) |ctl_spec| {
+        const ctl_default = "127.0.0.1:7421";
+        const spec = if (ctl_spec.len == 0) ctl_default else ctl_spec;
+        const cbind = parseBind(spec) orelse fatal("unparseable BOLINA_CONTROL '{s}' (want a.b.c.d:port)", .{spec});
+        var token_hex: [token_mod.TOKEN_HEX_LEN]u8 = undefined;
+        if (token_mod.load(io, data_dir)) |t| {
+            token_hex = t;
+        } else {
+            token_hex = token_mod.hex(token_mod.generate(io));
+            token_mod.save(io, data_dir, &token_hex) catch |e|
+                fatal("control token save under {s}: {s}", .{ data_dir, @errorName(e) });
+            std.debug.print("bolina: control plane token {s} (printed once; stored at {s}/control.token)\n", .{ token_hex, data_dir });
+        }
+        const ctl_node = control_mod.Control.init(&cbind.bytes, cbind.port, &token_hex) catch |e|
+            fatal("control plane bind {s} refused ({s})", .{ spec, @errorName(e) });
+        _ = signal(SIGTERM, onRequestStop);
+        _ = signal(SIGINT, onRequestStop);
+        std.debug.print("bolina: control plane on {s}\n", .{spec});
+        ctl_node.runLoop(d, lis.fd, &shutdown_flag, wallMs);
+        std.debug.print("bolina: shutdown complete, ledger consistent\n", .{});
+        return;
+    }
 
     // 9. Recv loop. One thread, one buffer, one classification per datagram;
     // handleDatagram drops what it cannot serve and counts it.
