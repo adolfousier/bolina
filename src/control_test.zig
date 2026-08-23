@@ -173,7 +173,6 @@ test "P1 healthz answers 200 open, no token required" {
     try std.testing.expectEqual(@as(u64, 1), h.node.requests_served);
 }
 
-
 test "P1 incremental delivery: three dribbles then completion" {
     var h = try Harness.setup();
     defer h.shutdown();
