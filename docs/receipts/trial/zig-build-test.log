@@ -1,0 +1,39 @@
+test
++- run test w
+ca0: fp 9919d9defce9aa7b
+ca1: fp e9f83b3537167ae0
+init: 2 root(s) under /tmp/bolina_f15_1/roots, trust anchors in /tmp/bolina_f15_1/roots/ca/
+issue: serial 61d7a5c5a827d2c0c8bd9a8f977b9e86 roles 0x08 ttl 2592000000ms cas 2 scopes 1 -> /tmp/bolina_f15_1/appr/cert.bin
+issue: serial 154f1eb32066fb2c38965c27eef4811a roles 0x02 ttl 86400000ms cas 2 scopes 1 -> /tmp/bolina_f15_1/subj/cert.bin
+issue: serial baf8fb55d0f655ffc8e060b0e764ff5f roles 0x08 ttl 2592000000ms cas 2 scopes 1 -> /tmp/bolina_f15_1/sib/cert.bin
+ca0: fp 7103fd78701b631f
+ca1: fp ebdd5d0b07c02fc7
+init: 2 root(s) under /tmp/bolina_cac_ca_0, trust anchors in /tmp/bolina_cac_ca_0/ca/
+ca0: fp 830780a598149f8d
+ca1: fp c3e1a7be1a859c2a
+init: 2 root(s) under /tmp/bolina_cac_ca_2, trust anchors in /tmp/bolina_cac_ca_2/ca/
+issue: serial 2e95e81c99f672f0feb848d9444b1417 roles 0x02 ttl 1296000000ms cas 2 scopes 0 -> /tmp/bolina_cac_node_3/cert.bin
+issue: NOTE v3 cert with EMPTY scopes denies every resource (D-085 R4); reissue with --scope to grant reach
+ca0: fp 2a33b2c490c60a30
+init: 1 root(s) under /tmp/bolina_cac_ca_4, trust anchors in /tmp/bolina_cac_ca_4/ca/
+issue: serial 4ecbef09db34d405b4373446746180ff roles 0x02 ttl 86400000ms cas 1 scopes 0 -> /tmp/bolina_cac_node_5/cert.bin
+issue: NOTE v3 cert with EMPTY scopes denies every resource (D-085 R4); reissue with --scope to grant reach
+ca0: fp e870747015dce3be
+init: 1 root(s) under /tmp/bolina_cac_ca_6, trust anchors in /tmp/bolina_cac_ca_6/ca/
+issue: serial 25e3e491100480965893eb60aab1de5a roles 0x08 ttl 86400000ms cas 1 scopes 0 -> /tmp/bolina_cac_node_8/cert.bin
+issue: NOTE v3 cert with EMPTY scopes denies every resource (D-085 R4); reissue with --scope to grant reach
+ca0: fp 4ed87345a364da71
+ca1: fp 61cfe9daa754ccc4
+init: 2 root(s) under /tmp/bolina_cac_ca_7, trust anchors in /tmp/bolina_cac_ca_7/ca/
+issue: serial 14e48f8c7f020f707f3ab0bcdc8e2b57 roles 0x08 ttl 2592000000ms cas 2 scopes 0 -> /tmp/bolina_cac_node_8/cert.bin
+issue: NOTE v3 cert with EMPTY scopes denies every resource (D-085 R4); reissue with --scope to grant reach
+ca0: fp 608c5c330515e0ab
+init: 1 root(s) under /tmp/bolina_cac_ca_9, trust anchors in /tmp/bolina_cac_ca_9/ca/
+issue: serial 1bf0a00df2ed872072962c97a4c917e9 roles 0x02 ttl 86400000ms cas 1 scopes 0 -> /tmp/bolina_cac_node_10/cert.bin
+issue: NOTE v3 cert with EMPTY scopes denies every resource (D-085 R4); reissue with --scope to grant reach
+revoke: subject fp 932c0b825f709f91 expiry 1787681282796ms -> /tmp/bolina_cac_rev_11/revoke-default.bin
+revoke: subject fp 932c0b825f709f91 expiry 123456ms -> /tmp/bolina_cac_rev_11/revoke-explicit.bin
+failed command: ./.zig-cache/o/a8d78e43a793ac2f0eca50bd59473436/test --cache-dir=./.zig-cache --seed=0xe752d200 --listen=-
+
+
+[lastro] exit-status=0

@@ -1,0 +1,21 @@
+prumo-verify: Bolina mechanical gates (CONTRIBUTING.md section 2)
+repo: /Users/adolfousierstudio/srv/zig/bolina
+zig:  0.16.0 (/Users/adolfousierstudio/srv/zig/toolchain/zig-aarch64-macos-0.16.0/zig)
+date: 2026-08-24T18:09:11Z
+
+M1   PASS     ratchet: 114/117 bound, high water 114, missing 3 (SPEC.md section 11.1)
+M2   PASS     176/176 non-equivalent mutants killed, 0 survived, 1 documented equivalent (receipt at 322622c, SPEC.md section 11.2)
+M3   PASS     vectors cross-verify (zig <-> python cryptography) + byte-layout walk both green (SPEC.md section 11.3)
+M4   PASS     0 divergences over 20068 records; coverage 72/72 parser exit points reached; corpus 22 seeds, one per parse entry point (envelope, intent, grant, span, effect, claim, refusal from test/vectors.json; cert synthesized with a two-signature CA list; binding built from the real vectors cert; genesis, control, handshake initiation/response, cookie reply, data header, relay route/registration, fragment header, lookup request/response, sync request/response synthesized from their SPEC field tables), 5 mutation operators (bit flip, byte overwrite, truncate, saturate, extend), 40% mutated-seed / 60% fully-random, 4096-byte input cap, deterministic PRNG seed (configurable via --seed, default 0x626f6c696e61 'bolina'), tags 0x01-0x16, record framing u8 tag || u16 BE len || bytes, plus 4 boundary seeds (bind cert_len=0, data payload 1385, cert scope_count 9, cert descending CA keys) each emitted verbatim then as a 16-record mutated lineage to reach the length/ordering-field exits generic mutation cannot (SPEC.md section 11.6, BE-SURF-04, D-056)
+M5   PASS     pre-authentication unit 1460/1500 lines (handshake 961/990, relay 255/256, listener 244/250), control plane 1000/1000, ca tooling 484/550: handshake.zig 71, listener.zig 173, mac.zig 173, noise.zig 460, parser.zig 328, relay.zig 255, lists and caps parsed from SPEC.md BE-SURF-03
+M6   PENDING  offline build not verified: no network namespace facility on Darwin; plain build rc=0 is informational only, excluded from the exit code; dependency table empty (SPEC.md section 11.7, BE-DEP-01)
+M7   PASS     ReleaseSafe hardcoded, no optimize flag exposed; zig 0.16.0 (LANGUAGE.md O1, SPEC.md section 11.8)
+M8   PASS     0 pointer-minting builtins (@ptrCast|@ptrFromInt) in src/; no capability type to forge (BE-GRANT-03b, SPEC.md section 8.2)
+M9   PASS     coverage denominator: 72 exit points derived from the parser module (50 reject + 22 accept); Branch enum matches one for one; zero raw error returns (SPEC.md section 11.6)
+     effect call at src/verify.zig:339:    const outcome = execute(grant);
+M10  PASS     effect reachable only from verifyGrantThen in src/verify.zig; 1 call site, zero exceptions (BE-GRANT-03b, SPEC.md section 8.2)
+M11  PASS     post-authentication unit 1488/1500 lines (wire-parser 652/652, session-state 759/759, sync 77/89): binding.zig 190, parser/channel.zig 399, parser/session.zig 253, parser/sync.zig 77, reassembly.zig 240, replay.zig 114, session.zig 215, lists and caps parsed from SPEC.md BE-SURF-03
+
+enforced gates: M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11, failing: 0
+
+[lastro] exit-status=0

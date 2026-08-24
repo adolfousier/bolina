@@ -11,3 +11,8 @@ __pycache__/
 
 # differential fuzz corpus (D-056): regenerable deterministic artifact, ~1MB/100k records, never committed
 /fuzz_corpus.bin
+
+# phase-3 receipt pipeline (Lastro): private key material NEVER committed;
+# public keys (.pub), trust anchors, and the executor cert are public wire material and stay
+ci/ca/*.key
+ci/runner/*.key
