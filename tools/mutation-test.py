@@ -186,6 +186,7 @@ TARGETS = {
     "control_api.zig": SRC / "control_api.zig",
     "http_parse.zig": SRC / "http_parse.zig",
     "token.zig": SRC / "token.zig",
+    "ca_material.zig": SRC / "ca_material.zig",
 }
 ORIGINALS = {name: path.read_text() for name, path in TARGETS.items()}
 
