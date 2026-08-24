@@ -1429,3 +1429,174 @@ test "F10_D090 revoke body without the expiry field never prunes" {
     try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), verify.revokePruneExpiry(&[_]u8{}));
     try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), verify.revokePruneExpiry(&[_]u8{ 0x01, 0x02, 0x03 }));
 }
+
+// ---------------------------------------------------------------------------
+// F15 (pre-audit v0.6.0 §2): the OFFICIAL issuer feeds the grant chain. The
+// D-085 tests hand-build certs, so they never touched the issuer's version
+// byte - the exact gap that let caIssue mint scope-inert v2 certs while
+// reporting success. Everything here mints through caMaterial.caIssue for the
+// canonical fixture identities and drives the REAL parse + validate path.
+
+const ca_material = @import("ca_material.zig");
+const keys_mod = @import("keys.zig");
+
+fn f15ReadCert(io: std.Io, path: []const u8, buf: *[1024]u8) !parser.session.Cert {
+    const f = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer f.close(io);
+    const n = try f.readPositionalAll(io, buf, 0);
+    return parser.session.parseCert(buf[0..n]);
+}
+
+test "F15 caIssue mints enforced v3 certs; tool-scoped approver refuses out-of-scope end to end" {
+    var th = std.Io.Threaded.init_single_threaded;
+    defer th.deinit();
+    const io = th.io();
+
+    var f15_seq: u32 = 0;
+    f15_seq += 1;
+    var rb: [64]u8 = undefined;
+    const root = try std.fmt.bufPrint(&rb, "/tmp/bolina_f15_{d}", .{f15_seq});
+    std.Io.Dir.cwd().createDir(io, root, @enumFromInt(0o700)) catch {};
+    var b1: [96]u8 = undefined;
+    const ca_dir = try std.fmt.bufPrint(&b1, "{s}/roots", .{root});
+    var b2: [96]u8 = undefined;
+    const appr_dir = try std.fmt.bufPrint(&b2, "{s}/appr", .{root});
+    var b3: [96]u8 = undefined;
+    const subj_dir = try std.fmt.bufPrint(&b3, "{s}/subj", .{root});
+    var b4: [96]u8 = undefined;
+    const sib_dir = try std.fmt.bufPrint(&b4, "{s}/sib", .{root});
+    inline for (.{ ca_dir, appr_dir, subj_dir, sib_dir }) |p| {
+        std.Io.Dir.cwd().createDir(io, p, @enumFromInt(0o700)) catch {};
+    }
+
+    // Node key material on disk, exactly what ca issue reads back. Identities
+    // are the DISPATCH fixture keys (seedFrom prefixes): the grant below is
+    // signed by cth.keypair(0xB1), so certs must bind THAT pubkey - the
+    // vector-identity APPROVER_PUB would mismatch at check 2 (BadSignature).
+    const kex = cth.pubkeyOf(0x5A);
+    var k1: [128]u8 = undefined;
+    try keys_mod.writeKeyFile(io, try std.fmt.bufPrint(&k1, "{s}/sig.pub", .{appr_dir}), &cth.pubkeyOf(0xB1));
+    var k2: [128]u8 = undefined;
+    try keys_mod.writeKeyFile(io, try std.fmt.bufPrint(&k2, "{s}/static.pub", .{appr_dir}), &kex);
+    var k3: [128]u8 = undefined;
+    try keys_mod.writeKeyFile(io, try std.fmt.bufPrint(&k3, "{s}/sig.pub", .{subj_dir}), &cth.pubkeyOf(0xA1));
+    var k4: [128]u8 = undefined;
+    try keys_mod.writeKeyFile(io, try std.fmt.bufPrint(&k4, "{s}/static.pub", .{subj_dir}), &kex);
+    var k5: [128]u8 = undefined;
+    try keys_mod.writeKeyFile(io, try std.fmt.bufPrint(&k5, "{s}/sig.pub", .{sib_dir}), &cth.pubkeyOf(0xB1));
+    var k6: [128]u8 = undefined;
+    try keys_mod.writeKeyFile(io, try std.fmt.bufPrint(&k6, "{s}/static.pub", .{sib_dir}), &kex);
+
+    // Two random roots, trust anchors read back the way a daemon boots.
+    try ca_material.caInit(io, ca_dir, 2);
+    var tp: [2][32]u8 = undefined;
+    var ts: [2][]const u8 = undefined;
+    for (0..2) |i| {
+        var pb: [96]u8 = undefined;
+        const pp = try std.fmt.bufPrint(&pb, "{s}/ca/ca{d}.pub", .{ ca_dir, i });
+        if (!try keys_mod.readKeyFile(io, pp, &tp[i])) return error.TestUnexpectedResult;
+        ts[i] = &tp[i];
+    }
+    const trusted: []const []const u8 = &ts;
+
+    const org = cth.RESOURCE_ID[0..std.mem.indexOf(u8, cth.RESOURCE_ID, "/").?];
+    const covering = scopeIdOf(org);
+    const sibling = scopeIdOf("bol:other_org");
+    const ttl_priv = binding.MAX_PRIVILEGED_LIFETIME_MS;
+    _ = try ca_material.caIssue(io, .{ .ca_dir = ca_dir, .node_dir = appr_dir, .role_bits = binding.ROLE_APPROVER, .ttl_ms = ttl_priv, .name = "f15-appr", .scopes = &.{covering} });
+    _ = try ca_material.caIssue(io, .{ .ca_dir = ca_dir, .node_dir = subj_dir, .role_bits = binding.ROLE_AGENT, .ttl_ms = 86_400_000, .name = "f15-subj", .scopes = &.{covering} });
+    _ = try ca_material.caIssue(io, .{ .ca_dir = ca_dir, .node_dir = sib_dir, .role_bits = binding.ROLE_APPROVER, .ttl_ms = ttl_priv, .name = "f15-sib", .scopes = &.{sibling} });
+
+    var raw: [1024]u8 = undefined;
+    var cb1: [1024]u8 = undefined;
+    const acert = try f15ReadCert(io, try std.fmt.bufPrint(&raw, "{s}/cert.bin", .{appr_dir}), &cb1);
+    var raw2: [1024]u8 = undefined;
+    var cb2: [1024]u8 = undefined;
+    const scert = try f15ReadCert(io, try std.fmt.bufPrint(&raw2, "{s}/cert.bin", .{subj_dir}), &cb2);
+    var raw3: [1024]u8 = undefined;
+    var cb3: [1024]u8 = undefined;
+    const sibcert = try f15ReadCert(io, try std.fmt.bufPrint(&raw3, "{s}/cert.bin", .{sib_dir}), &cb3);
+
+    // THE pin against regression: the tool's byte 0 is 3, scopes ride along.
+    try std.testing.expectEqual(@as(u8, 3), acert.version);
+    try std.testing.expectEqual(@as(usize, 1), acert.scope_count);
+    try std.testing.expectEqualSlices(u8, &covering, acert.scope_ids[0..8]);
+    binding.validateCert(acert, trusted, scert.not_before + 1000) catch |e| return e;
+
+    // Fresh grant over the canonical fixtures, signed by the canonical
+    // approver key, clock anchored to the issued cert's own validity window.
+    const now = scert.not_before + 1000;
+    var gw: [512]u8 = undefined;
+    var n: usize = 0;
+    gw[n] = 2;
+    n += 1;
+    const gid = [_]u8{0x5F} ** 16;
+    @memcpy(gw[n..][0..16], &gid);
+    n += 16;
+    @memcpy(gw[n..][0..16], &cth.INTENT_ID);
+    n += 16;
+    const appr_pub = cth.pubkeyOf(0xB1);
+    const subj_pub = cth.pubkeyOf(0xA1);
+    @memcpy(gw[n..][0..32], &appr_pub);
+    n += 32;
+    @memcpy(gw[n..][0..32], &subj_pub);
+    n += 32;
+    @memcpy(gw[n..][0..32], &EXECUTOR_BYTES);
+    n += 32;
+    std.mem.writeInt(u16, gw[n..][0..2], @intCast(cth.RESOURCE_ID.len), .big);
+    n += 2;
+    @memcpy(gw[n..][0..cth.RESOURCE_ID.len], cth.RESOURCE_ID);
+    n += cth.RESOURCE_ID.len;
+    const dig = verify.actionDigest(ACTION);
+    @memcpy(gw[n..][0..32], &dig);
+    n += 32;
+    std.mem.writeInt(u64, gw[n..][0..8], now + 3_590_000, .big);
+    n += 8;
+    var msg: [1 + 512]u8 = undefined;
+    msg[0] = parser.channel.DOMAIN_GRANT;
+    @memcpy(msg[1..][0..n], gw[0..n]);
+    const akp = cth.keypair(0xB1);
+    const gsig = try Ed.KeyPair.sign(akp, msg[0 .. 1 + n], null);
+    const gsb = Ed.Signature.toBytes(gsig);
+    @memcpy(gw[n..][0..64], &gsb);
+    n += 64;
+    const grant = try parser.channel.parseGrant(gw[0..n]);
+    const env = grantEnvelope(grant);
+
+    var itab = intent_mod.Table.init();
+    try itab.admit(.{ .intent_id = &cth.INTENT_ID, .resource_id = cth.RESOURCE_ID, .action = ACTION, .rationale = "" }, now);
+    var se: [1]verify.SenderTable.Entry = undefined;
+    @memcpy(&se[0].intent_id, &cth.INTENT_ID);
+    se[0].sender = cth.pubkeyOf(0xA1);
+    @memcpy(se[0].action[0..ACTION.len], ACTION);
+    se[0].action_len = ACTION.len;
+    const stable = verify.SenderTable{ .entries = &se, .len = 1 };
+
+    var ctx = verify.GrantContext{
+        .own_pubkey = &EXECUTOR_BYTES,
+        .trusted_ca_keys = trusted,
+        .approver_cert = sibcert,
+        .subject_cert = scert,
+        .intent_table = &itab,
+        .sender_table = &stable,
+        .now_ms = now,
+        .first_receipt_ms = now - 1000,
+        .t_max_s = 3600,
+        .t_recv_s = 300,
+        .already_consumed = &ledgerFresh,
+        .is_revoked = &revokedNo,
+    };
+
+    // Negative FIRST (a fired grant consumes state): sibling-scope approver
+    // refuses at check 3a even though its cert came from the official tool.
+    resetEffect();
+    try std.testing.expectError(error.ApproverOutOfScope, verify.verifyGrantThen(env, &grant, ctx, &recordEffect));
+    try std.testing.expectEqual(@as(usize, 0), effect_calls);
+
+    // Positive: swap to the covering-scope tool cert - the SAME wire grant,
+    // SAME tables, now reaches the effect exactly once.
+    ctx.approver_cert = acert;
+    resetEffect();
+    _ = try verify.verifyGrantThen(env, &grant, ctx, &recordEffect);
+    try std.testing.expectEqual(@as(usize, 1), effect_calls);
+}

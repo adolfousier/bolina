@@ -200,8 +200,11 @@ pub fn caIssue(io: std.Io, req: IssueReq) !IssueResult {
     const now = wallMs();
     var wire: [MAX_CERT]u8 = undefined;
     var n: usize = 0;
-    wire[n] = 2; // version 2 (Grant.version==2 convention, SPEC 2.2)
-    n += 1;
+    wire[n] = 3; // v3 ALWAYS (pre-audit F15): the grant chain gates scopeCoversResource
+    n += 1; // on cert.version >= 3, so the old v2 here silently DISABLED scope
+    // enforcement for every tool-minted cert while --scope reported success.
+    // Empty scopes = deny-all by design (D-085 ruling 4): fail-closed beats
+    // silently all-powerful, and the CLI warns below so nobody is surprised.
     wire[n] = role_bits;
     n += 1;
     @memcpy(wire[n..][0..KEY_LEN], &sig_pub);
@@ -255,7 +258,10 @@ pub fn caIssue(io: std.Io, req: IssueReq) !IssueResult {
     const arch_path = try joinPath(&sb, issued_dir_path, &serial);
     try keys_mod.writeKeyFile(io, arch_path, cert_bytes);
 
-    std.debug.print("issue: serial {s} roles 0x{X:0>2} ttl {d}ms cas {d} -> {s}\n", .{ serial, role_bits, ttl, n_cas, cert_path });
+    std.debug.print("issue: serial {s} roles 0x{X:0>2} ttl {d}ms cas {d} scopes {d} -> {s}\n", .{ serial, role_bits, ttl, n_cas, req.scopes.len, cert_path });
+    if (req.scopes.len == 0) {
+        std.debug.print("issue: NOTE v3 cert with EMPTY scopes denies every resource (D-085 R4); reissue with --scope to grant reach\n", .{});
+    }
     return .{ .serial_hex = serial };
 }
 
