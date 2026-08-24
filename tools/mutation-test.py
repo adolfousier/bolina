@@ -2070,9 +2070,33 @@ MUTANTS = [
             \\\\bolina_control_requests_total {d}""",
      """            \\\\bolina_events_dropped_suppressed {d}
             \\\\bolina_control_requests_total {d}"""),
+    ("d092", "ca_material.zig", "WRONG-FIELD", "cert-v3",
+     "issuer regresses to v2: verifier gates scopeCoversResource on >=3, so every tool-minted scope goes silently inert (pre-audit F15 HIGH)",
+     "    wire[n] = 3; // v3 ALWAYS (pre-audit F15): the grant chain gates scopeCoversResource",
+     "    wire[n] = 2; // MUTANT: v2 byte silently disables scope enforcement"),
+    ("d092", "control_api.zig", "CHECK-ABSENCE", "subject-binding",
+     "sender record skipped for HTTP intents: admitted intent can never reach EXECUTING, the F16 dead end returns",
+     "            self.recordSender(&id_buf, &sub_buf, act_buf[0..act_len_o.?]);",
+     "            _ = id_buf; // MUTANT: sender record never written -> UnknownSender forever"),
 ]
 
 
+
+
+
+D092_DEFENCE_PROPS = [
+    ("cert-v3", "F15: the official issuer mints version-3 certs whose scopes "
+     "the grant chain actually enforces; regression to v2 is caught by the "
+     "e2e tool-cert test (version pin + ApproverOutOfScope)"),
+    ("subject-binding", "F16: an HTTP-admitted intent lands the sender record "
+     "wire checks bind against; dropping it makes every HTTP intent "
+     "unexecutable and the composition test fails"),
+]
+
+
+def d092_defence_properties():
+    """Defence properties introduced by the pre-audit fixes (F15/F16)."""
+    return {key for key, _what in D092_DEFENCE_PROPS}
 
 SUITE_TIMEOUT_SECS = int(os.environ.get("MUTATION_SUITE_TIMEOUT", "600"))
 
@@ -2169,6 +2193,9 @@ def main():
     d091_props = d091_defence_properties()
     if not d091_props:
         sys.exit("FATAL: no d091 defence properties detected (D-091 missing?)")
+    d092_props = d092_defence_properties()
+    if not d092_props:
+        sys.exit("FATAL: no d092 defence properties detected (pre-audit fixes missing?)")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -2192,6 +2219,7 @@ def main():
     print(f"  d089 defence properties (D-089): {sorted(d089_props)} ({len(d089_props)})")
     print(f"  d090 defence properties (D-090): {sorted(d090_props)} ({len(d090_props)})")
     print(f"  d091 defence properties (D-091): {sorted(d091_props)} ({len(d091_props)})")
+    print(f"  d092 defence properties (pre-audit): {sorted(d092_props)} ({len(d092_props)})")
     print(f"  render properties (§8.3):        {sorted(render_props)} ({len(render_props)})")
     print(f"  sync properties (§6.4):          {sorted(sync_props)} ({len(sync_props)})")
     print()
@@ -2278,6 +2306,10 @@ def main():
             if key not in d091_props:
                 sys.exit(f"FATAL: d091 mutant '{name}' attacks '{key}', which "
                          "the D-091 rulings do not record (scope lie)")
+        elif domain == "d092":
+            if key not in d092_props:
+                sys.exit(f"FATAL: d092 mutant '{name}' attacks '{key}', which "
+                         "the pre-audit dispositions do not record (scope lie)")
         elif domain == "sync":
             if key not in sync_props:
                 sys.exit(f"FATAL: sync mutant '{name}' attacks '{key}', which "
@@ -2458,6 +2490,11 @@ def main():
     if in_scope("d091"):
         dd91_cov = {r["key"] for r in dd91_run if r["killed"]}
         print(f"d091:     {len(dd91_cov)}/{len(d091_props)} D-091 defence "
+              f"properties covered by killed mutants")
+    dd92_run, dd92_surv, dd92_uncov, _ = gate_domain("d092", d092_props)
+    if in_scope("d092"):
+        dd92_cov = {r["key"] for r in dd92_run if r["killed"]}
+        print(f"d092:     {len(dd92_cov)}/{len(d092_props)} pre-audit defence "
               f"properties covered by killed mutants")
     r_run, r_surv, r_uncov, _ = gate_domain("relay", relay_props)
     if in_scope("relay"):
