@@ -182,6 +182,10 @@ TARGETS = {
     "render.zig": SRC / "render.zig",
     "sync.zig": SRC / "sync.zig",
     "parser/sync.zig": SRC / "parser" / "sync.zig",
+    "control.zig": SRC / "control.zig",
+    "control_api.zig": SRC / "control_api.zig",
+    "http_parse.zig": SRC / "http_parse.zig",
+    "token.zig": SRC / "token.zig",
 }
 ORIGINALS = {name: path.read_text() for name, path in TARGETS.items()}
 
@@ -563,6 +567,27 @@ D090_DEFENCE_PROPS = [
 def d090_defence_properties():
     """The set of D-090 audit-path defence properties the slice must prove."""
     return {key for key, _what in D090_DEFENCE_PROPS}
+
+
+D091_DEFENCE_PROPS = [
+    # (denominator key, what D-091 records)
+    ("auth-gate", "D-091 F5/F7: every non-healthz control route verifies the "
+     "bearer token against the boot token (constant-time compare); failures "
+     "answer 403 and count auth_refused"),
+    ("http-caps", "BE-SURF-03: the parser enforces HEADER_CAP; no unbounded "
+     "header block can enter a connection buffer"),
+    ("intent-idempotent", "D-091 F4: a retried intent_id still PENDING maps "
+     "to idempotent 202 and never double-counts admitted_total"),
+    ("ring-drop-oldest", "D-091: event ring overflow drops OLDEST and counts "
+     "every loss in dropped_total, never blocks publish"),
+    ("metrics-honesty", "D-091: /metrics surfaces the dropped counter under "
+     "its pinned name so a gap is visible to tooling, never silent"),
+]
+
+
+def d091_defence_properties():
+    """The set of D-091 control-plane defence properties the slice must prove."""
+    return {key for key, _what in D091_DEFENCE_PROPS}
 
 
 def relay_serve_properties():
@@ -1986,15 +2011,88 @@ MUTANTS = [
      "prune expiry falls back to zero instead of never-prune (revocation forgotten immediately)",
      "    if (body.len >= 8) return std.mem.readInt(u64, body[0..8], .big);\n    return std.math.maxInt(u64);",
      "    if (body.len >= 8) return std.mem.readInt(u64, body[0..8], .big);\n    return 0; // MUTANT: immediately prunable"),
+    # --- D-091 control-plane defence mutants -------------------------------
+    ("d091", "control.zig", "CHECK-ABSENCE", "auth-gate",
+     "bearer auth gate removed from routeRequest: unauthenticated callers reach /v1 routes",
+     """        const tok = bearerValue(req.authorization) orelse {
+            self.auth_refused += 1;
+            return forbidden_route;
+        };
+        if (!token_mod.verify(tok, self.token_hex)) {
+            self.auth_refused += 1;
+            return forbidden_route;
+        }""",
+     "        _ = bearerValue(req.authorization); // MUTANT: bearer auth gate removed"),
+    ("d091", "token.zig", "WRONG-LOGIC", "auth-gate",
+     "token compare always accepts: any bearer value authenticates",
+     """    var p: [TOKEN_HEX_LEN]u8 = undefined;
+    @memcpy(&p, provided);
+    return std.crypto.timing_safe.eql([TOKEN_HEX_LEN]u8, p, expected.*);""",
+     """    var p: [TOKEN_HEX_LEN]u8 = undefined;
+    @memcpy(&p, provided);
+    if (false) return std.crypto.timing_safe.eql([TOKEN_HEX_LEN]u8, p, expected.*);
+    return true; // MUTANT: compare always accepts"""),
+    ("d091", "http_parse.zig", "CHECK-ABSENCE", "http-caps",
+     "HEADER_CAP enforcement removed: an unterminated header block grows without bound",
+     "        if (buf.len >= HEADER_CAP) return error.HeadersTooLarge;",
+     "        if (false) return error.HeadersTooLarge; // MUTANT: header cap removed"),
+    ("d091", "control_api.zig", "WRONG-LOGIC", "intent-idempotent",
+     "F4 idempotency dropped: a retried intent_id answers 422 and double-counts refusal",
+     """            error.DuplicateIntentId => {
+                const text = std.fmt.bufPrint(out, "accepted {s}\\n", .{hex_buf[0..]}) catch return error.OutBufferTooSmall;
+                return .{ .status = 202, .body_len = text.len };
+            },""",
+     """            error.DuplicateIntentId => {
+                self.refused_unprocessable_total += 1; // MUTANT: retry no longer idempotent
+                if (UNPROCESSABLE.len > out.len) return error.OutBufferTooSmall;
+                @memcpy(out[0..UNPROCESSABLE.len], UNPROCESSABLE);
+                return .{ .status = 422, .body_len = UNPROCESSABLE.len };
+            },"""),
+    ("d091", "control_api.zig", "WRONG-LOGIC", "ring-drop-oldest",
+     "ring overflow drops NEWEST instead of oldest: replay loses the most recent events",
+     """        const e = &self.entries[self.head];
+        e.* = .{ .seq = self.next_seq, .tag = tag, .id = id, .ts_ms = now_ms };
+        self.next_seq += 1;
+        if (self.count == RING_CAP) self.dropped_total += 1 else self.count += 1;
+        self.head = (self.head + 1) % RING_CAP;""",
+     """        if (self.count == RING_CAP) {
+            self.dropped_total += 1; // MUTANT: drops newest instead of oldest
+            return;
+        }
+        const e = &self.entries[self.head];
+        e.* = .{ .seq = self.next_seq, .tag = tag, .id = id, .ts_ms = now_ms };
+        self.next_seq += 1;
+        self.count += 1;
+        self.head = (self.head + 1) % RING_CAP;"""),
+    ("d091", "control_api.zig", "WRONG-FIELD", "metrics-honesty",
+     "dropped counter renamed in /metrics: tooling watching the pinned name goes blind to gaps",
+     """            \\\\bolina_events_dropped_total {d}
+            \\\\bolina_control_requests_total {d}""",
+     """            \\\\bolina_events_dropped_suppressed {d}
+            \\\\bolina_control_requests_total {d}"""),
 ]
 
 
 
+SUITE_TIMEOUT_SECS = int(os.environ.get("MUTATION_SUITE_TIMEOUT", "600"))
+
+
 def run_suite():
-    p = subprocess.run(
-        [str(ZIG), "build", "test", "--summary", "all"],
-        cwd=ROOT, capture_output=True, text=True,
-    )
+    # MUTANT-SAFE CEILING: a mutant can wedge the suite itself (control_test
+    # once spun forever when BE_EXEC_04's fill loop stopped raising count).
+    # Without a ceiling the harness waits forever - proven live: one d091
+    # evaluation held the process 9h at zero CPU with no child left. A hang is
+    # NEVER evidence of a kill: it returns None and the caller records TIMEOUT,
+    # a distinct verdict that blocks the gate like a survivor until the hang
+    # is diagnosed and fixed.
+    try:
+        p = subprocess.run(
+            [str(ZIG), "build", "test", "--summary", "all"],
+            cwd=ROOT, capture_output=True, text=True,
+            timeout=SUITE_TIMEOUT_SECS,
+        )
+    except subprocess.TimeoutExpired:
+        return None
     return p.returncode, p.stdout + p.stderr
 
 
@@ -2065,6 +2163,9 @@ def main():
     d090_props = d090_defence_properties()
     if not d090_props:
         sys.exit("FATAL: no d090 defence properties detected (D-090 missing?)")
+    d091_props = d091_defence_properties()
+    if not d091_props:
+        sys.exit("FATAL: no d091 defence properties detected (D-091 missing?)")
 
     print("denominators derived from SPEC.md (not self-counted):")
     print(f"  BE-GRANT-03 enumerated checks: {enumerated} ({len(enumerated)})")
@@ -2087,6 +2188,7 @@ def main():
     print(f"  grant_revocation properties (D-064): {sorted(grant_revocation_props)} ({len(grant_revocation_props)})")
     print(f"  d089 defence properties (D-089): {sorted(d089_props)} ({len(d089_props)})")
     print(f"  d090 defence properties (D-090): {sorted(d090_props)} ({len(d090_props)})")
+    print(f"  d091 defence properties (D-091): {sorted(d091_props)} ({len(d091_props)})")
     print(f"  render properties (§8.3):        {sorted(render_props)} ({len(render_props)})")
     print(f"  sync properties (§6.4):          {sorted(sync_props)} ({len(sync_props)})")
     print()
@@ -2169,6 +2271,10 @@ def main():
             if key not in d090_props:
                 sys.exit(f"FATAL: d090 mutant '{name}' attacks '{key}', which "
                          "the D-090 rulings do not record (scope lie)")
+        elif domain == "d091":
+            if key not in d091_props:
+                sys.exit(f"FATAL: d091 mutant '{name}' attacks '{key}', which "
+                         "the D-091 rulings do not record (scope lie)")
         elif domain == "sync":
             if key not in sync_props:
                 sys.exit(f"FATAL: sync mutant '{name}' attacks '{key}', which "
@@ -2223,6 +2329,14 @@ def main():
             path = TARGETS[target]
             path.write_text(ORIGINALS[target].replace(find, replace, 1))
             rc, _ = run_suite()
+            if rc is None:
+                print(f"TIMEOUT [{domain}/{klass}] {name}: suite exceeded "
+                      f"{SUITE_TIMEOUT_SECS}s under this mutant - a test hangs; "
+                      f"diagnose the hang, never count it as kill evidence")
+                results.append({"domain": domain, "klass": klass, "key": key,
+                                "name": name, "killed": False, "skipped": False,
+                                "timeout": True})
+                continue
             is_killed = rc != 0
             equiv = (domain, name) in EQUIVALENT
             if equiv:
@@ -2327,6 +2441,21 @@ def main():
         gr_cov = {r["key"] for r in gr_run if r["killed"]}
         print(f"grant_revocation: {len(gr_cov)}/{len(grant_revocation_props)} D-064 "
               f"properties covered by killed mutants")
+    dd89_run, dd89_surv, dd89_uncov, _ = gate_domain("d089", d089_props)
+    if in_scope("d089"):
+        dd89_cov = {r["key"] for r in dd89_run if r["killed"]}
+        print(f"d089:     {len(dd89_cov)}/{len(d089_props)} D-089 defence "
+              f"properties covered by killed mutants")
+    dd90_run, dd90_surv, dd90_uncov, _ = gate_domain("d090", d090_props)
+    if in_scope("d090"):
+        dd90_cov = {r["key"] for r in dd90_run if r["killed"]}
+        print(f"d090:     {len(dd90_cov)}/{len(d090_props)} D-090 defence "
+              f"properties covered by killed mutants")
+    dd91_run, dd91_surv, dd91_uncov, _ = gate_domain("d091", d091_props)
+    if in_scope("d091"):
+        dd91_cov = {r["key"] for r in dd91_run if r["killed"]}
+        print(f"d091:     {len(dd91_cov)}/{len(d091_props)} D-091 defence "
+              f"properties covered by killed mutants")
     r_run, r_surv, r_uncov, _ = gate_domain("relay", relay_props)
     if in_scope("relay"):
         r_cov = {r["key"] for r in r_run if r["killed"]}
@@ -2368,7 +2497,8 @@ def main():
     total_surv = (len(g_surv) + len(e_surv) + len(t_surv) + len(s_surv)
                   + len(c_surv) + len(m_surv) + len(r_surv) + len(l_surv)
                   + len(i_surv) + len(f_surv) + len(v_surv) + len(w_surv)
-                  + len(dp_surv) + len(dmn_surv) + len(rs_surv) + len(gr_surv))
+                  + len(dp_surv) + len(dmn_surv) + len(rs_surv) + len(gr_surv)
+                  + len(gl_surv) + len(dd89_surv) + len(dd90_surv) + len(dd91_surv))
     non_equiv = len(total_run) - len(total_equiv)
     print(f"total:   {total_killed}/{non_equiv} non-equivalent mutants killed, "
           f"{total_surv} survived, {len(total_equiv)} documented equivalent "
@@ -2410,6 +2540,14 @@ def main():
         print(f"  relay_serve SURVIVORS: {rs_surv}")
     if gr_surv:
         print(f"  grant_revocation SURVIVORS: {gr_surv}")
+    if gl_surv:
+        print(f"  grant_ledger SURVIVORS: {gl_surv}")
+    if dd89_surv:
+        print(f"  d089 SURVIVORS: {dd89_surv}")
+    if dd90_surv:
+        print(f"  d090 SURVIVORS: {dd90_surv}")
+    if dd91_surv:
+        print(f"  d091 SURVIVORS: {dd91_surv}")
     if g_uncov:
         print(f"  UNCOVERED grant checks: {g_uncov}")
     if e_uncov:
@@ -2446,6 +2584,14 @@ def main():
         print(f"  UNCOVERED grant_ledger properties: {gl_uncov}")
     if gr_uncov:
         print(f"  UNCOVERED grant_revocation properties: {gr_uncov}")
+    if gl_uncov:
+        print(f"  UNCOVERED grant_ledger properties: {gl_uncov}")
+    if dd89_uncov:
+        print(f"  UNCOVERED d089 defence properties: {dd89_uncov}")
+    if dd90_uncov:
+        print(f"  UNCOVERED d090 defence properties: {dd90_uncov}")
+    if dd91_uncov:
+        print(f"  UNCOVERED d091 defence properties: {dd91_uncov}")
     if not g_cb:
         print("  UNCOVERED: BE-GRANT-03b callback property")
 
@@ -2461,7 +2607,10 @@ def main():
           and (not dp_surv) and (not dp_uncov)
           and (not dmn_surv) and (not dmn_uncov) and (not rs_surv) and (not rs_uncov)
           and (not gl_surv) and (not gl_uncov)
-          and (not gr_surv) and (not gr_uncov) and g_cb)
+          and (not gr_surv) and (not gr_uncov)
+          and (not dd89_surv) and (not dd89_uncov)
+          and (not dd90_surv) and (not dd90_uncov)
+          and (not dd91_surv) and (not dd91_uncov) and g_cb)
     return 0 if ok else 1
 
 
