@@ -16,6 +16,7 @@ const verify = @import("verify.zig");
 const binding = @import("binding.zig");
 const cth = @import("cert_test_helpers.zig");
 const grant_ledger_mod = @import("grant_ledger.zig");
+const control_api = @import("control_api.zig");
 const Ed = std.crypto.sign.Ed25519;
 
 // Literal fixtures (D-027).
@@ -399,6 +400,76 @@ pub fn buildGrantWire(intent_id: [16]u8, resource: []const u8, action: []const u
     @memcpy(grant_body[n..][0..64], &sig_bytes);
     n += 64;
     return grant_body[0..n];
+}
+
+// ---------------------------------------------------------------------------
+// F16 (pre-audit v0.6.0 §3): composition of the HTTP control plane with the
+// wire grant path. Before the subject field existed, an intent admitted over
+// POST /v1/intents got NO sender record, so every future wire grant died in
+// UnknownSender: a 202 that could never reach EXECUTING. This pins the fix -
+// same tables, same grant machinery, only the admission channel differs.
+
+fn hexFill(src: []const u8, dst: []u8) void {
+    const digits = "0123456789abcdef";
+    for (src, 0..) |b, i| {
+        dst[i * 2] = digits[b >> 4];
+        dst[i * 2 + 1] = digits[b & 15];
+    }
+}
+
+test "F16 composition: HTTP-admitted intent executes via wire grant; missing subject reads 400" {
+    const sl = try initSeamLedger("f16");
+    defer closeSeamLedger(sl);
+    ensureGrantCerts();
+    effect_count = 0;
+    const executor_pub = cth.pubkeyOf(EXECUTOR_PREFIX);
+    var res = resolver_mod.Resolver.init(&executor_pub);
+    var canonical_a_buf: [64]u8 = undefined;
+    const canonical_a = executorCanonical(&canonical_a_buf, "logs/deploy.log");
+    try res.add(canonical_a);
+    var d = dispatch_mod.Dispatch.init(res, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+    var ring = control_api.EventRing{};
+    var api = control_api.Api{
+        .resolver = &d.resolver,
+        .table = &d.intents,
+        .ring = &ring,
+        .senders = &d.senders,
+        .senders_len = &d.senders_len,
+    };
+    // Admission over HTTP: the agent declares itself as the subject.
+    var subj_hex: [64]u8 = undefined;
+    hexFill(&cth.pubkeyOf(AGENT_PREFIX), &subj_hex);
+    var id_hex: [32]u8 = undefined;
+    hexFill(&G_INTENT_ID, &id_hex);
+    var body: [256]u8 = undefined;
+    const raw = std.fmt.bufPrint(&body, "{{\"intent_id\":\"{s}\",\"resource_id\":\"{s}\",\"action\":\"{s}\",\"rationale\":\"f16\",\"subject\":\"{s}\"}}", .{ id_hex, canonical_a, ACTION, subj_hex }) catch unreachable;
+    var out: [128]u8 = undefined;
+    const oc = try api.postIntent(raw, &out, GRANT_NOW_MS);
+    try std.testing.expectEqual(@as(u16, 202), oc.status);
+    try std.testing.expectEqual(@as(usize, 1), d.senders_len);
+    // Approval arrives on the WIRE: the exact happy-path grant now executes.
+    const hooks = dispatch_mod.Hooks{ .execute_effect = &testEffect, .cert_for_sender = &grantPathCertHook, .on_rejected = &noopRejected };
+    const env_grant = grantEnvelopeSigned(buildGrantWire(G_INTENT_ID, canonical_a, ACTION));
+    try std.testing.expectEqual(dispatch_mod.Outcome.grant_executed, try d.dispatch(env_grant, hooks, GRANT_NOW_MS));
+    try std.testing.expectEqual(@as(usize, 1), effect_count);
+    // Negative pin: without a declared subject, admission refuses 400 and
+    // nothing lands anywhere (the old dead end is unreachable by construction).
+    var res2 = resolver_mod.Resolver.init(&executor_pub);
+    try res2.add(canonical_a);
+    var d2 = dispatch_mod.Dispatch.init(res2, &executor_pub, std.mem.zeroes(session.Cert), cth.trustedSet());
+    var ring2 = control_api.EventRing{};
+    var api2 = control_api.Api{
+        .resolver = &d2.resolver,
+        .table = &d2.intents,
+        .ring = &ring2,
+        .senders = &d2.senders,
+        .senders_len = &d2.senders_len,
+    };
+    const raw2 = std.fmt.bufPrint(&body, "{{\"intent_id\":\"{s}\",\"resource_id\":\"{s}\",\"action\":\"{s}\",\"rationale\":\"f16\"}}", .{ id_hex, canonical_a, ACTION }) catch unreachable;
+    const oc2 = try api2.postIntent(raw2, &out, GRANT_NOW_MS);
+    try std.testing.expectEqual(@as(u16, 400), oc2.status);
+    try std.testing.expectEqual(@as(usize, 0), d2.intents.len);
+    try std.testing.expectEqual(@as(usize, 0), d2.senders_len);
 }
 
 test "DAEMON_D grant happy path: effect once inside the frame, replay refused by state" {

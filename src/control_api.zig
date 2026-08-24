@@ -64,6 +64,11 @@ pub const EventRing = struct {
     }
 };
 
+const verify = @import("verify.zig");
+pub const SenderEntry = verify.SenderTable.Entry;
+
+pub const SUBJ_HEX_LEN: usize = 64; // 32-byte Ed25519 pubkey, hex-encoded
+
 pub const ApiError = error{
     MalformedBody,
     MalformedTarget,
@@ -79,23 +84,42 @@ pub const Api = struct {
     resolver: *resolver_mod.Resolver,
     table: *intent_mod.Table,
     ring: *EventRing,
+    // F16: HTTP intents share the wire sender table, subject declared.
+    // No record = admitted-but-unexecutable (UnknownSender forever).
+    senders: []SenderEntry = &.{},
+    senders_len: *usize = undefined,
     // Surfaced counters (/metrics reads these).
     admitted_total: u64 = 0,
     refused_conflict_total: u64 = 0,
     refused_unprocessable_total: u64 = 0,
     bad_request_total: u64 = 0,
 
-    // postIntent: flat JSON {intent_id, resource_id, action, rationale}
-    // -> hex-decoded 16-byte id -> resolveAndAdmit. Error map is the F5
-    // contract: syntax/bad-hex/oversize 400, ResourceHeld/TableFull 409,
-    // resolver semantics (unknown/ambiguous/foreign) 422. Body echoes the
-    // hex id so a client never parses Zig types to learn what landed.
+    // Same write + capacity guard as dispatchIntent: check 6 binds
+    // grant.subject to this record; tables fill 1:1 so full-senders is
+    // unreachable once the intent table admitted (wire-path reasoning).
+    fn recordSender(self: *Api, id: *const [channel.LEN_INTENT_ID]u8, sender: *const [32]u8, action: []const u8) void {
+        if (self.senders_len.* >= self.senders.len) return;
+        const rec = &self.senders[self.senders_len.*];
+        @memcpy(&rec.intent_id, id);
+        @memcpy(&rec.sender, sender);
+        const alen = @min(action.len, rec.action.len);
+        @memcpy(rec.action[0..alen], action[0..alen]);
+        rec.action_len = alen;
+        self.senders_len.* += 1;
+    }
+
+    // postIntent: flat JSON {intent_id, resource_id, action, rationale,
+    // subject} -> resolveAndAdmit. F5 map: bad-syntax/hex/oversize/missing
+    // subject 400, ResourceHeld/TableFull 409, resolver semantics 422. The
+    // body echoes the hex id so clients never parse Zig types.
     pub fn postIntent(self: *Api, body: []const u8, out: []u8, now_ms: u64) ApiError!IntentOutcome {
         var hex_buf: [ID_HEX_LEN]u8 = undefined;
         var id_buf: [channel.LEN_INTENT_ID]u8 = undefined;
         var res_buf: [channel.MAX_RESOURCE]u8 = undefined;
         var act_buf: [ACTION_MAX]u8 = undefined;
         var rat_buf: [RATIONALE_MAX]u8 = undefined;
+        var sub_hex: [SUBJ_HEX_LEN]u8 = undefined;
+        var sub_buf: [32]u8 = undefined;
 
         const bad = IntentOutcome{ .status = 400, .body_len = BAD_BODY.len };
         const ok_str = extractString(body, "intent_id", &hex_buf);
@@ -110,6 +134,13 @@ pub const Api = struct {
             self.bad_request_total += 1;
             return bad;
         }
+        // F16: operator-trusted claim (loopback+bearer), unauthenticated by
+        // crypto - but a lie refuses loudly at check 4/6, never silently.
+        const sub_len_o = extractString(body, "subject", &sub_hex);
+        if (sub_len_o == null or sub_len_o.? != SUBJ_HEX_LEN or !hexDecode32(&sub_hex, &sub_buf)) {
+            self.bad_request_total += 1;
+            return bad;
+        }
         const it = channel.Intent{
             .intent_id = &id_buf,
             .resource_id = res_buf[0..res_len_o.?],
@@ -119,6 +150,7 @@ pub const Api = struct {
 
         if (self.resolver.resolveAndAdmit(self.table, it, now_ms)) {
             self.admitted_total += 1;
+            self.recordSender(&id_buf, &sub_buf, act_buf[0..act_len_o.?]);
             const text = std.fmt.bufPrint(out, "accepted {s}\n", .{hex_buf[0..]}) catch return error.OutBufferTooSmall;
             return .{ .status = 202, .body_len = text.len };
         } else |e| switch (e) {
@@ -272,6 +304,16 @@ pub fn parseIdHex(hex: *const [ID_HEX_LEN]u8) ?[channel.LEN_INTENT_ID]u8 {
 fn hexDecode16(hex: *const [ID_HEX_LEN]u8, out: *[channel.LEN_INTENT_ID]u8) bool {
     var i: usize = 0;
     while (i < channel.LEN_INTENT_ID) : (i += 1) {
+        const hi = hexVal(hex[i * 2]) orelse return false;
+        const lo = hexVal(hex[i * 2 + 1]) orelse return false;
+        out[i] = (hi << 4) | lo;
+    }
+    return true;
+}
+
+fn hexDecode32(hex: *const [SUBJ_HEX_LEN]u8, out: *[32]u8) bool {
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
         const hi = hexVal(hex[i * 2]) orelse return false;
         const lo = hexVal(hex[i * 2 + 1]) orelse return false;
         out[i] = (hi << 4) | lo;

@@ -21,16 +21,29 @@ const RES_FOREIGN = "bol:cc6009c6dabe53b1/print/queue/main";
 const ID_A_HEX = "aa" ** 16;
 
 var shared_table: intent_mod.Table = undefined;
+var shared_senders: [intent_mod.MAX_PENDING]api_mod.SenderEntry = undefined;
+var shared_senders_len: usize = 0;
+var subj_hex_buf: [64]u8 = undefined;
 
 fn makeApi() struct { api: *api_mod.Api, ring: *api_mod.EventRing } {
     static_ring = .{};
     shared_table = intent_mod.Table.init();
+    shared_senders_len = 0;
     static_resolver = resolver.Resolver.init(&h.pubkeyOf(0xE1));
     static_resolver.add(RES_A) catch unreachable;
+    // Deterministic subject identity for the F16 field (runtime pubkey -> hex).
+    const digits = "0123456789abcdef";
+    const sp = h.pubkeyOf(0xE2);
+    for (sp, 0..) |b, i| {
+        subj_hex_buf[i * 2] = digits[b >> 4];
+        subj_hex_buf[i * 2 + 1] = digits[b & 15];
+    }
     static_api = .{
         .resolver = &static_resolver,
         .table = &shared_table,
         .ring = &static_ring,
+        .senders = &shared_senders,
+        .senders_len = &shared_senders_len,
     };
     return .{ .api = &static_api, .ring = &static_ring };
 }
@@ -71,13 +84,17 @@ test "P2 postIntent: happy path admits pending and echoes the hex id" {
     const f = makeApi();
     var buf: [512]u8 = undefined;
     var body: [512]u8 = undefined;
-    const raw = std.fmt.bufPrint(&body, "{{\"intent_id\":\"{s}\",\"resource_id\":\"{s}\",\"action\":\"read\",\"rationale\":\"e2e\"}}", .{ ID_A_HEX, RES_A }) catch unreachable;
+    const raw = std.fmt.bufPrint(&body, "{{\"intent_id\":\"{s}\",\"resource_id\":\"{s}\",\"action\":\"read\",\"rationale\":\"e2e\",\"subject\":\"{s}\"}}", .{ ID_A_HEX, RES_A, subj_hex_buf }) catch unreachable;
     const res = try f.api.postIntent(raw, &buf, 1000);
     try std.testing.expectEqual(@as(u16, 202), res.status);
     try std.testing.expect(std.mem.startsWith(u8, buf[0..res.body_len], "accepted " ++ ID_A_HEX));
     try std.testing.expectEqual(@as(u64, 1), f.api.admitted_total);
     try std.testing.expectEqual(@as(usize, 1), f.api.table.len);
     try std.testing.expectEqual(intent_mod.State.pending, f.api.table.entries[0].state);
+    // F16: the declared subject landed in the sender table, bound to this id.
+    const want_subj = h.pubkeyOf(0xE2);
+    try std.testing.expectEqual(@as(usize, 1), f.api.senders_len.*);
+    try std.testing.expectEqualSlices(u8, &want_subj, &f.api.senders[0].sender);
 }
 
 test "P2 postIntent: second intent on the same resource reads 409 conflict" {
@@ -86,7 +103,7 @@ test "P2 postIntent: second intent on the same resource reads 409 conflict" {
     const mk = struct {
         fn call(a: *api_mod.Api, o: []u8, hex: []const u8, now: u64) !u16 {
             var b: [512]u8 = undefined;
-            const raw = std.fmt.bufPrint(&b, "{{\"intent_id\":\"{s}\",\"resource_id\":\"{s}\",\"action\":\"r\",\"rationale\":\"x\"}}", .{ hex, RES_A }) catch unreachable;
+            const raw = std.fmt.bufPrint(&b, "{{\"intent_id\":\"{s}\",\"resource_id\":\"{s}\",\"action\":\"r\",\"rationale\":\"x\",\"subject\":\"{s}\"}}", .{ hex, RES_A, subj_hex_buf }) catch unreachable;
             return (try a.postIntent(raw, o, now)).status;
         }
     }.call;
@@ -99,13 +116,13 @@ test "P2 postIntent: unknown resource and foreign executor read 422" {
     const f = makeApi();
     var out: [512]u8 = undefined;
     var b: [512]u8 = undefined;
-    const raw = std.fmt.bufPrint(&b, "{{\"intent_id\":\"{s}\",\"resource_id\":\"bol:{s}/files/ghost\",\"action\":\"r\",\"rationale\":\"x\"}}", .{ ID_A_HEX, FP1 }) catch unreachable;
+    const raw = std.fmt.bufPrint(&b, "{{\"intent_id\":\"{s}\",\"resource_id\":\"bol:{s}/files/ghost\",\"action\":\"r\",\"rationale\":\"x\",\"subject\":\"{s}\"}}", .{ ID_A_HEX, FP1, subj_hex_buf }) catch unreachable;
     const res = try f.api.postIntent(raw, &out, 1000);
     try std.testing.expectEqual(@as(u16, 422), res.status);
     try std.testing.expectEqual(@as(u64, 1), f.api.refused_unprocessable_total);
 
     var b2: [512]u8 = undefined;
-    const raw2 = std.fmt.bufPrint(&b2, "{{\"intent_id\":\"{s}\",\"resource_id\":\"{s}\",\"action\":\"r\",\"rationale\":\"x\"}}", .{ ID_A_HEX, RES_FOREIGN }) catch unreachable;
+    const raw2 = std.fmt.bufPrint(&b2, "{{\"intent_id\":\"{s}\",\"resource_id\":\"{s}\",\"action\":\"r\",\"rationale\":\"x\",\"subject\":\"{s}\"}}", .{ ID_A_HEX, RES_FOREIGN, subj_hex_buf }) catch unreachable;
     const res2 = try f.api.postIntent(raw2, &out, 1001);
     try std.testing.expectEqual(@as(u16, 422), res2.status);
 }
@@ -135,7 +152,7 @@ test "P2 getIntentState: pending found by decoded id, unknown reads 404" {
     const f = makeApi();
     var out: [512]u8 = undefined;
     var b: [512]u8 = undefined;
-    const raw = std.fmt.bufPrint(&b, "{{\"intent_id\":\"{s}\",\"resource_id\":\"{s}\",\"action\":\"r\",\"rationale\":\"x\"}}", .{ ID_A_HEX, RES_A }) catch unreachable;
+    const raw = std.fmt.bufPrint(&b, "{{\"intent_id\":\"{s}\",\"resource_id\":\"{s}\",\"action\":\"r\",\"rationale\":\"x\",\"subject\":\"{s}\"}}", .{ ID_A_HEX, RES_A, subj_hex_buf }) catch unreachable;
     _ = try f.api.postIntent(raw, &out, 1000);
 
     const hex: [32]u8 = ID_A_HEX[0..].*;
@@ -195,10 +212,12 @@ test "P2 postIntent: retried intent_id reads idempotent 202, no double count" {
     const f = makeApi();
     var buf: [512]u8 = undefined;
     var body: [512]u8 = undefined;
-    const raw = std.fmt.bufPrint(&body, "{{\"intent_id\":\"{s}\",\"resource_id\":\"{s}\",\"action\":\"read\",\"rationale\":\"e2e\"}}", .{ ID_A_HEX, RES_A }) catch unreachable;
+    const raw = std.fmt.bufPrint(&body, "{{\"intent_id\":\"{s}\",\"resource_id\":\"{s}\",\"action\":\"read\",\"rationale\":\"e2e\",\"subject\":\"{s}\"}}", .{ ID_A_HEX, RES_A, subj_hex_buf }) catch unreachable;
     try std.testing.expectEqual(@as(u16, 202), (try f.api.postIntent(raw, &buf, 1000)).status);
     try std.testing.expectEqual(@as(u16, 202), (try f.api.postIntent(raw, &buf, 1001)).status);
-    // One admission, one table entry: the retry changed nothing.
+    // One admission, one table entry: the retry changed nothing. The sender
+    // record is also written ONCE - the dup path skips recordSender.
     try std.testing.expectEqual(@as(u64, 1), f.api.admitted_total);
     try std.testing.expectEqual(@as(usize, 1), f.api.table.len);
+    try std.testing.expectEqual(@as(usize, 1), f.api.senders_len.*);
 }

@@ -241,6 +241,10 @@ pub fn main(init: std.process.Init) !void {
             .resolver = &d.dispatcher.resolver,
             .table = &d.dispatcher.intents,
             .ring = &ring,
+            // F16: HTTP-admitted intents declare their subject and land in the
+            // SAME sender table the wire path uses, so grants can bind to them.
+            .senders = &d.dispatcher.senders,
+            .senders_len = &d.dispatcher.senders_len,
         };
         ctl_node.api = &api;
         _ = signal(SIGTERM, onRequestStop);
