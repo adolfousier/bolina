@@ -115,15 +115,20 @@ Bolina's answer is to stop asking the sender for the guarantee:
 
 ## Documents
 
+Root keeps four: `README.md` (this file), `SPEC.md`, `CHANGELOG.md`, `CONTRIBUTING.md`.
+Everything else lives under `docs/` (see `docs/README.md` for the index).
+
 | File | What it is |
 |---|---|
 | **`SPEC.md`** | The protocol. Six layers, the wire format, the state machine, and every Boundary Expectation (BE-\*) an implementation must satisfy |
-| **`THREAT-MODEL.md`** | Assets, five adversaries — starting with *the model itself* — security goals stated so they can be falsified, and the accepted risks named rather than hidden |
-| **`LANGUAGE.md`** | Decided: **Zig**, on the zero-dependency constraint. Records the four obligations that choice activates, and what would reopen it |
-| **`M1-AUDIT.md`** | What has been measured in M1 and how: the marker-by-marker keying audit, the mutation rounds, the attack-surface budget, and the addenda that correct earlier numbers |
+| **`CHANGELOG.md`** | Every version since the first draft, dated, each sealed version naming its ruling and receipt |
 | **`CONTRIBUTING.md`** | The merge rules, split into mechanical (`tools/prumo-verify` refuses it) and judgement (a person decides and records why) |
-| **`M1-AUDIT.md`** | What has been measured in M1 and how: the marker-by-marker keying audit, the mutation rounds, the attack-surface budget, and the addenda that correct earlier numbers |
-| **`CONTRIBUTING.md`** | The merge rules, split into mechanical (`tools/prumo-verify` refuses it) and judgement (a person decides and records why) |
+| **`docs/DECISION-LOG.md`** | The numbered rulings (D-\*): who decided, what, and why — the project's institutional memory |
+| **`docs/THREAT-MODEL.md`** | Assets, five adversaries — starting with *the model itself* — security goals stated so they can be falsified, and the accepted risks named rather than hidden |
+| **`docs/LANGUAGE.md`** | Decided: **Zig**, on the zero-dependency constraint. Records the four obligations that choice activates, and what would reopen it |
+| **`docs/INTEGRATION.md`** | Booting a node, issuing identities with the CA CLI, and speaking the local control plane from any language |
+| **`docs/audits/`** | Measurement and adversarial records: `M1-AUDIT.md` (what has been measured in M1 and how), `KEYING-AUDIT.md`, `CRYPTO-REVIEW-BRIEF.md` (+ findings register), `INCIDENTS.md`, `RED-TEAM-08/09.md` |
+| **`docs/planning/`** | Closed phase estimates (\*-ESTIMATE.md): declared ahead of code, closed when measured — kept as the paper trail of what was predicted vs what landed |
 
 Read `SPEC.md` §0 and §7–§8 first; those are the parts that are not borrowed.
 
