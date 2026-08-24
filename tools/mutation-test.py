@@ -2092,7 +2092,10 @@ def run_suite():
             timeout=SUITE_TIMEOUT_SECS,
         )
     except subprocess.TimeoutExpired:
-        return None
+        # Tuple shape, not bare None: every caller unpacks (rc, out) before
+        # checking rc (proven live - bare None crashed the harness with
+        # TypeError at the unpack instead of recording the TIMEOUT verdict).
+        return (None, "")
     return p.returncode, p.stdout + p.stderr
 
 

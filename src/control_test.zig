@@ -24,8 +24,28 @@ const libc = struct {
     extern "c" fn close(fd: c_int) c_int;
     extern "c" fn getsockname(fd: c_int, addr: [*]u8, addrlen: *c_uint) c_int;
     extern "c" fn fcntl(fd: c_int, cmd: c_int, arg: c_int) c_int;
+    extern "c" fn setsockopt(fd: c_int, level: c_int, optname: c_int, optval: *const anyopaque, optlen: c_uint) c_int;
+    extern "c" fn clock_gettime(clk_id: c_int, tp: *Ts) c_int;
     extern "c" fn nanosleep(req: *const Ts, rem: ?*Ts) c_int;
 };
+
+const CLOCK_MONOTONIC: c_int = if (@import("builtin").os.tag == .macos) 6 else 1;
+
+// nowMs: monotonic wall clock for bounded waits (std.time lost its
+// timestamp functions in 0.16; the Io-based Clock needs an io we don't hold).
+fn nowMs() i64 {
+    var ts: Ts = undefined;
+    _ = libc.clock_gettime(CLOCK_MONOTONIC, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(ts.nsec, 1_000_000);
+}
+
+// Belt-and-braces receive deadline: SO_RCVTIMEO makes even a socket whose
+// O_NONBLOCK silently failed (ABI/flag-value traps differ per OS - proven
+// live: the wrong-constant fcntl left recv parked in the kernel until the
+// mutation fence fired) return -1 after 2s instead of blocking forever.
+const SOL_SOCKET: c_int = if (@import("builtin").os.tag == .macos) 0xffff else 1;
+const SO_RCVTIMEO: c_int = if (@import("builtin").os.tag == .macos) 0x1006 else 20;
+const Timeval = extern struct { sec: isize, usec: isize };
 
 const Ts = extern struct { sec: c_long, nsec: c_long };
 
@@ -36,10 +56,15 @@ const Ts = extern struct { sec: c_long, nsec: c_long };
 fn recvWait(fd: c_int, buf: []u8) isize {
     const one_ms = Ts{ .sec = 0, .nsec = 1_000_000 };
     var rem: Ts = undefined;
+    const start = nowMs();
     var tries: usize = 0;
     while (tries < 100) : (tries += 1) {
         const n = libc.recv(fd, buf.ptr, buf.len, 0);
         if (n != -1) return n; // bytes or clean EOF
+        // Wall-clock ceiling, not just a try count: if O_NONBLOCK silently
+        // failed and SO_RCVTIMEO is what un-parks us, ONE recv costs 2s -
+        // the try cap alone would allow 100 x 2s. Ceiling ends it in ~2s.
+        if (nowMs() - start > 250) return -1;
         _ = libc.nanosleep(&one_ms, &rem);
     }
     return -1;
@@ -48,7 +73,7 @@ fn recvWait(fd: c_int, buf: []u8) isize {
 const AF_INET: u32 = 2;
 const SOCK_STREAM: u32 = 1;
 const F_SETFL: c_int = 4;
-const O_NONBLOCK: c_int = 0o4000; // same value on macOS and Linux
+const O_NONBLOCK: c_int = if (@import("builtin").os.tag == .macos) 0x4 else 0o4000; // VALUE DIFFERS PER OS - the old "same value everywhere" claim was wrong: 0o4000 is O_EXCL on macOS, which silently left test-client sockets BLOCKING; harmless on every happy path (data arrives at once) and catastrophic under a server-silencing mutant, where recvfrom parked in the kernel until the fence fired
 
 const T0: u64 = 10_000; // arbitrary test epoch, ms
 
@@ -111,12 +136,16 @@ const Harness = struct {
     }
 
     // readResponse: recv until the full head+body message is in hand or the
-    // peer closes. Parses Content-Length out of the head to know when to stop.
+    // peer closes, through the same bounded wait as every other read here.
+    // A raw recv here parked the WHOLE suite in the kernel under the
+    // http-caps mutant (silenced server + accidentally-blocking client:
+    // O_NONBLOCK had the Linux value, which is O_EXCL on macOS) until the
+    // harness fence fired at 600s. Bounded wait = loud fast failure instead.
     fn readResponse(self: *Harness, buf: []u8) usize {
         var total: usize = 0;
         while (total < buf.len) {
-            const n = libc.recv(self.client, buf.ptr + total, buf.len - total, 0);
-            if (n <= 0) break; // EOF after Connection: close
+            const n = recvWait(self.client, buf[total..]);
+            if (n <= 0) break; // budget exhausted (-1) or clean EOF (0)
             total += @intCast(n);
             const term = std.mem.indexOf(u8, buf[0..total], "\r\n\r\n") orelse continue;
             const clen_line = std.mem.indexOf(u8, buf[0..total], "Content-Length: ") orelse break;
@@ -157,6 +186,8 @@ fn connectTo(port: u16) c_int {
     // Non-blocking client side: a server that never answers turns into a
     // fast short read and a loud assert, never a blocked recv.
     _ = libc.fcntl(cfd, F_SETFL, O_NONBLOCK);
+    const tv = Timeval{ .sec = 2, .usec = 0 };
+    _ = libc.setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, @sizeOf(Timeval));
     return cfd;
 }
 
