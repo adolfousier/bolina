@@ -12,6 +12,8 @@ The format is adapted from [Keep a Changelog](https://keepachangelog.com/).
 
 Local control plane, offline CA tooling, integration surface. Design D-091, owner-approved
 phase by phase; the v1.0 line itself is defined by D-092 (three external gates, zero features).
+Receipt `d4ebf81`: 174/174 non-equivalent mutants killed, 0 survived, 0 timeouts, 1 documented
+equivalent (175 evaluated).
 
 ### Added
 - **Control plane** (`src/http_parse.zig`, `src/token.zig`, `src/control.zig`): opt-in HTTP/1.1
@@ -43,6 +45,10 @@ phase by phase; the v1.0 line itself is defined by D-092 (three external gates, 
 - Boot log double-hexed the node fingerprint (an operator would have configured garbage).
 - Control-plane facade is attached by `main.zig`; earlier tests wired it by hand and a live
   daemon answered 404 to everything.
+- Test-client sockets were blocking by accident: the O_NONBLOCK constant carried Linux's value,
+  which on macOS is O_EXCL, so a silent server parked reads forever (one mutated evaluation held
+  its harness nine hours). Now non-blocking per-OS with SO_RCVTIMEO and a wall-clock ceiling,
+  proven live under the re-applied http-caps mutant.
 
 ## [0.5.3] - 2026-08-23
 

@@ -7,19 +7,23 @@
 # v0.5.0 closeout run 2026-08-22 09:27 UTC: adds d089 CHECK-ABSENCE mutants
 # (MD3 flock -> grant_ledger, MD4 compact -> intent, MD5 dedup -> relay).
 # v0.5.3 closeout run 2026-08-24: adds the d090 audit-path defence domain;
-# harness tracks d089/d090 as dedicated domains. Full run at 7035eed killed
-# 167/167 + 1 EQUIV with ONE SKIP: the md5-dedup anchor went stale after the
-# fmt canonicalization (38f5a9b) reflowed relay.zig's insert. Anchor repaired
-# in tools/mutation-test.py (find-string only, zero src change) and the d089
-# chunk re-run at the same content state: 3/3 KILLED (logs/d089_rechunk_anchorfix.log).
-# Combined: 168/168 non-equivalent killed, 0 survived, 1 documented equivalent
-# (169 evaluated). grant check 7 remains the sole documented equivalent.
-sha=7035eed
+# md5-dedup SKIP caught (stale anchor after fmt canonicalization), anchor
+# repaired, chunk re-run 3/3. Combined 168/168 + 1 EQUIV at 7035eed.
+# v0.6.0 closeout run 2026-08-24 (~12:20 UTC): adds the d091 control-plane
+# defence domain (auth-gate, http-caps, intent-idempotent, metrics-honesty,
+# ring-drop-oldest). Full run at d4ebf81: 174/174 non-equivalent killed,
+# 0 survived, 0 TIMEOUT (per-evaluation fence armed but never fired),
+# 1 documented equivalent. grant check 7 remains the sole equivalent.
+# Provenance note: the harness bytes running this evaluation are exactly
+# commit d82b0c5 + the anti-wedge hardening d4ebf81 (timeout fence returns
+# tuple; test-client sockets non-blocking with correct per-OS O_NONBLOCK).
+sha=d4ebf81
 channel=8/8
-daemon=7/7
-dispatch=6/6
 d089=3/3
 d090=6/6
+d091=6/6
+daemon=7/7
+dispatch=6/6
 evidence=11/11
 grant=22/22 (1 documented equivalent: BE-GRANT-03 check 7, see EQUIVALENT in tools/mutation-test.py)
 grant_ledger=7/7
@@ -35,4 +39,4 @@ resolver=10/10
 session=11/11
 sync=12/12
 transport=4/4
-total=168/168 survived=0 equivalent=1
+total=174/174 survived=0 equivalent=1

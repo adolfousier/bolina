@@ -1,6 +1,6 @@
 # Bolina Protocol — Specification
 
-**Version:** 0.5.3 · **Status:** CLOSED AND SEALED · **Date:** 2026-08-24
+**Version:** 0.6.0 · **Status:** CLOSED AND SEALED · **Date:** 2026-08-24
 **Design:** Daniel Carneiro (`loonix`) · **Contributors:** see `CONTRIBUTORS` · **External work
 credited in:** §10.1, §11.9 · **Licence:** Apache 2.0
 
@@ -59,6 +59,8 @@ span wire bytes change, no sub-unit cap changes.
 **Changes from v0.5.0:** crypto-review follow-ups recorded after the v0.5.0 seal. F13 (D-087): the Grant verifier owns its checks 6-9 state, fetching the pending intent and sender record through `intent_table` and `sender_table` references instead of caller-assembled fields; the sender record's action copy is executor storage policy at 512 bytes, refused above by `ActionTooLarge` at admission, never sized from the 256 KiB wire ceiling. BE-SURF-03 housekeeping owed by the sealed v0.5.0 tree (D-087 ruling 4): the F1 `kex_pubkey` binding fix grew `src/binding.zig` from 179 to 190 lines, so the session-state sub-unit cap is re-floored 748 to 759 and the sync sub-unit cap rebalanced 100 to 89, keeping the sub-cap sum at 1500 (post-authentication measured total 1488 of 1500). No wire bytes change.
 
 **Changes from v0.5.2:** the audit path hardens to admission-path standard (D-090). `validateCertNoClock` becomes a real validator: `src/binding.zig` splits into chain validation and window check, so the NoClock audit path enforces approver/subject roles, quorum, the BE-REV-01 lifetime cap, CA signatures and the trust set with zero clock input; the narrowed error set makes a hidden temporal check unrepresentable in that path. Revoke control bodies MAY carry the revoked subject's own expiry as a `u64be` tail (BE-CTRL-03): the prune obeys the subject's lifetime, an absent tail means never-prune (fail-closed), and the admin-expiry placeholder dies. BE-HIST-04 becomes causal: `getRevokeHash` exposes the revocation's own hash, so envelopes predating a revocation pass audit while post-revocation ones fail on ancestry instead of blanket rejection. The d090 defence domain (6 mutants) joins the mutation gate; the md5-dedup anchor was repaired after the fmt canonicalization reflowed `relay.zig`'s insert and the d089 chunk re-ran clean (3/3). Wire bytes change: the optional Revoke body tail only. No sub-unit cap changes.
+
+**Changes from v0.5.3:** the integration milestone closes (D-091), and the road to v1.0 is defined as external evidence only (D-092). `src/http_parse.zig`, `src/token.zig`, `src/control.zig` and `src/control_api.zig` join BE-SURF-03 as the declared Control plane sub-unit (cap 1000): an opt-in localhost HTTP/1.1 subset (`BOLINA_CONTROL=host:port`) multiplexed by the daemon's single `poll()` loop alongside the UDP wire, zero threads, bearer token generated at first boot (32 bytes, file 0600, printed once), per-connection deadlines with a slowloris guard, chunked transfer answered with an explicit 501. `POST /v1/intents` routes through the same resolver and intent table as the wire path (no god-mode path exists; idempotent by client intent_id); `GET /v1/events` replays ledger commits over SSE from a drop-oldest ring; `/metrics` speaks Prometheus text; `/healthz` is the only unauthenticated route; error-to-status mapping is pinned. `BOLINA_RESOURCES` declares the executor's resources at boot (malformed entries fatal, none declared fail-closed). `src/ca_cli.zig` and `src/ca_material.zig` join as the CA tooling sub-unit (cap 550): offline `bolina ca init|issue|list|show|revoke` in the node binary, two-of-two root signatures on issued certs, revoke emitting the BE-CTRL-03 subject-expiry tail. The d091 defence domain (six mutants) joins the mutation gate, and d089/d090/d091 verdicts now gate the exit code: before this change a surviving defence mutant failed silently, a gap the repaired md5-dedup SKIP of the v0.5.3 run proved. Harness hardening from that incident: a per-evaluation timeout fence emits a distinct TIMEOUT verdict that blocks the gate like a survivor (a hang is never kill evidence), and the test client's sockets became genuinely non-blocking after the O_NONBLOCK constant was found carrying Linux's value on macOS, where it is O_EXCL. Wire bytes unchanged.
 
 **Changes from v0.5.1:** the daemon milestone closes (D-089). `src/keys.zig` joins the tree as the node's key-material layer: load-or-generate X25519 + Ed25519 statics under `BOLINA_DATA_DIR` (0600 files, 0700 dir), stored public keys cross-checked against derived ones, `cert.bin` loaded verbatim or absent-as-unbound-accept, trusted CA keys from fixed `ca/caN.pub` labels — replacing the boot skeleton's zeroed-key placeholder and closing that D-018 violation. `src/daemon.zig` joins as the node core: one struct owns type 1/4/5/6 routing, pushes its BE-TR-01 binding frame immediately after handshake commit, gates every pre-bound transport payload behind the peer's verified binding, counts-and-drops every failure path, and treats relay serving as optional process wiring (certs carry no relay role; no env knob flips it). `src/main.zig` becomes env-only boot (`BOLINA_BIND` default 0.0.0.0:7420, `BOLINA_DATA_DIR`, `BOLINA_LEDGER`; `BOLINA_TEST_CA` is dev-only-fatal) with EADDRINUSE fatal and orphan tombstoning at recover. BE-TR-01a pins the binding message byte layout. Both files join the BE-SURF-03 non-surface list (D-089). No sub-unit cap changes.
 
@@ -1899,6 +1901,22 @@ out of every lookup's reach; `intent_test.zig` now pins the terminality filter d
 hand-set corpses (commit `31c7a1b`), and the intent chunk kills 6/6. The population claim is
 superseded: the same eighteen source domains plus the `d089` defence family (three mutants).
 Receipt: `tools/m2-mutation-receipt`.*
+
+*Sealed (D-091/D-092, 2026-08-24, v0.6.0 closeout). 174/174 non-equivalent mutants killed at HEAD
+`d4ebf81` (full non-chunked run, 175 evaluated, 0 TIMEOUT, 1 documented equivalent, receipt sha
+bumped with this seal). The control plane enters the population as the `d091` defence family (six
+mutants): auth-gate removal, http header/body caps removal, intent idempotency removal, metrics
+honesty removal, ring drop-oldest removal; each killed by a named test in `control_test.zig` or
+`control_api_test.zig`. Two harness gaps closed en route: d089/d090/d091 verdicts now gate the exit
+code (a surviving defence mutant previously failed silently, proven by the repaired md5-dedup SKIP
+of the v0.5.3 run), and a per-evaluation timeout fence returns a distinct TIMEOUT verdict that
+blocks the gate like a survivor, after one d091 evaluation held its process nine hours at zero CPU
+with no child process alive. The same investigation exposed that the test harness's own client
+sockets were blocking by accident (Linux's O_NONBLOCK value applied on macOS equals O_EXCL); fixed
+per-OS with SO_RCVTIMEO and a wall-clock ceiling, and proven live: under the re-applied http-caps
+mutant the suite completes in bounded time with loud failures instead of parking in recvfrom. What
+this seal does NOT claim: any external review, second implementation, or dedicated-hardware soak.
+Those are the D-092 gates G1/G2/G3 and all three remain open.*
 
 ### 11.3 Cross-implementation test vectors
 
