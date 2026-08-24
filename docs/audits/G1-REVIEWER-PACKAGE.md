@@ -1,6 +1,6 @@
 # Bolina — External Cryptographic Review: Engagement Package
 
-**Gate:** D-092 G1 (external adversarial review) · **Frozen target:** `v0.6.0` (commit `c5c69a2`) · **Prepared:** 2026-08-24 · **For:** the independent reviewer · **Contact/owner:** Daniel (`@iamloonix`)
+**Gate:** D-092 G1 (external adversarial review) · **Frozen target:** `v0.6.1` (commit `7207fb0`) · **Prepared:** 2026-08-24 · **For:** the independent reviewer · **Contact/owner:** Daniel (`@iamloonix`)
 
 This document is self-contained: it defines what Bolina is, what is under review, what independence means for this engagement, how to build and verify everything yourself, and what deliverable closes the gate.
 
@@ -35,15 +35,19 @@ Review **this exact tree**, not `main` in motion (D-092 requirement):
 
 ```bash
 git clone <REPO_URL> bolina && cd bolina
-git checkout c5c69a2          # seal commit, tagged v0.6.0
+git checkout 7207fb0         # seal commit, tagged v0.6.1
 ```
+
+Note: the two open findings from the pre-audit refresh (CA v2/scope inertness; control-plane
+sender binding) are FIXED at this target with defence mutants (`d092`); see CHANGELOG 0.6.1.
+Your budget belongs to the composition seams, not these.
 
 Toolchain: Zig 0.16.0 (`tools/toolchain.json`). Then:
 
 ```bash
-zig build test                # expect: 439 pass, 7 skip, 0 fail
+zig build test                # expect: 441 pass, 7 skip, 0 fail
 zig build                     # produces zig-out/bin/bolina
-bash tools/prumo-verify       # mechanical gates M1-M11; enforced gates must report failing: 0
+bash tools/prumo-verify       # mechanical gates M1-M12; enforced gates must report failing: 0
 python3 tools/mutation-test.py --help   # mutation harness (see §5)
 python3 tools/fuzz_diff.py    # differential fuzz against tools/refparse.py
 ```
@@ -91,7 +95,7 @@ Quoted intent from D-092, using the shared-authorship vocabulary of SPEC §11.4:
 
 - You must not share authorship, employer, funding, or close collaboration with the authors of this codebase. Work from the same ecosystem is self-consistent evidence, not independence.
 - The internal review of 2026-08-20 (`CRYPTO-REVIEW-FINDINGS.md`, registry F1-F14) does **not** satisfy this gate — same ecosystem as the authors. It is provided to you as **pre-audit baseline**: what was already found, what was fixed, what was accepted, including an independent re-verification pass against the previous seal (`e97a117`, v0.5.3) recorded in `docs/audits/CRYPTO-REVIEW-BRIEF.md` §7.1.
-- This review runs against the frozen `v0.6.0` tree above, never against moving `main`.
+- This review runs against the frozen `v0.6.1` tree above, never against moving `main`.
 
 ## 7. Materials
 
@@ -102,7 +106,7 @@ Quoted intent from D-092, using the shared-authorship vocabulary of SPEC §11.4:
 | `docs/DECISION-LOG.md` | 41 numbered decisions (D-001..D-092); D-092 defines this gate |
 | `docs/audits/CRYPTO-REVIEW-BRIEF.md` | Baseline: composition concerns §3, known-issues registry §7 (+§7.1 re-verification) |
 | `docs/audits/M1-AUDIT.md`, `KEYING-AUDIT.md`, `RED-TEAM-08.md`, `RED-TEAM-09.md`, `INCIDENTS.md` | Prior internal audits, red-team rounds, incident record |
-| `CHANGELOG.md` | Full sealed version lineage v0.1.0 → v0.6.0 with receipts |
+| `CHANGELOG.md` | Full sealed version lineage v0.1.0 → v0.6.1 with receipts |
 | Core source, suggested order | `src/parser.zig` (328) → `src/noise.zig` (460) → `src/binding.zig` (190) → `src/verify.zig` (711) → `src/grant_ledger.zig` (554) → `src/historical.zig` (105) → `src/daemon.zig` (342) → `src/control.zig` + `src/control_api.zig` (741) → `src/ca_material.zig` + `src/ca_cli.zig` (478) |
 
 Total core: ~4,000 lines of Zig + the documents above.

@@ -8,6 +8,19 @@ milestones closed against the SPEC, and a version is *sealed* only when mechanic
 
 The format is adapted from [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+
+- Phase-3 receipt pipeline (Lastro) trial cycle: CI-dedicated CA under `ci/ca` (2 roots), runner
+  identity minted by `lastro keygen` (`ci/runner`, fp `4286cba0dcfb79ce`), executor cert issued by
+  `bolina ca issue` (serial `13eb64cc…`, TTL 30d, signed by both CI roots). Trial receipts for
+  `zig build test` and `prumo-verify` under `docs/receipts/trial/`, both VERIFIED by
+  `lastro verify` against the CI trust anchors.
+- Gate **M12** in `tools/prumo-verify`: fails when the CI executor cert has fewer than 7 days of
+  validity left, or is missing/malformed (fail-closed), with the reissue command in the message.
+  Threshold from the ratified D-092 phase-3 merge condition (premortem risk #1).
+
 ## [0.6.1] - 2026-08-24
 
 Pre-audit refresh fixes (baseline pass against sealed v0.6.0; dispositions in
