@@ -49,6 +49,7 @@ None of these involve anyone's judgement, and none may be waived by agreement in
 | M8 | The capability type is gone, so there is nothing to forge: zero code-only pointer-minting builtins (`@ptrCast` or `@ptrFromInt`) anywhere in `src/`. `verifyGrantThen` runs the effect as a callback and hands back no value, so no boundary cast remains and no negative canary is needed. | §8.2, BE-GRANT-03b |
 | M9 | Every parser error exit routes through `coverage.reject()` and every accepted return through `coverage.accept()`; `src/parser.zig` contains zero raw error returns, no exceptions, and the coverage denominator is counted from those call sites at run time. | §11.6 |
 | M10 | The effect is reachable only from `verifyGrantThen`: the single `execute()` call site in `src/verify.zig` is the only reach path, enforced by a zero-exceptions grep in M9's shape (the count of 1 is read from the source at run time). | §8.2, BE-GRANT-03b |
+| M12 | The CI executor certificate that signs phase-3 receipts (`ci/runner/cert.bin`) has more than 7 days of validity left; a missing, malformed, or near-expiry cert fails the gate with the reissue command in the message (fail-closed in every direction). | BE-REV-01; D-092 phase 3 ratified merge condition |
 
 If a change cannot satisfy one of these, the change is wrong or the rule is wrong. Both are fine
 outcomes. Merging anyway is not.
@@ -73,7 +74,8 @@ source.
 
 A literal number in a gate is a smell. If one is unavoidable, it must cite the external source
 it mirrors: M10's count of 1 mirrors the single reach path in `src/verify.zig`; M5 and M11 carry
-no literal at all, parsing the cap from BE-SURF-03's text. M8's count is zero because round 4 deleted the capability value; a zero
+no literal at all, parsing the cap from BE-SURF-03's text. M12's 7 days mirror the ratified
+D-092 phase-3 merge condition (premortem risk #1), not a number the gate invented. M8's count is zero because round 4 deleted the capability value; a zero
 count needs no external mirror, since it is the absence, not a literal. A literal that names no
 source is a denominator the gate invented, and inventing a denominator is the same failure as
 counting what the gate controls.

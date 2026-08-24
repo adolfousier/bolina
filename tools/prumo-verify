@@ -603,6 +603,34 @@ if [ "$M11_VERDICT" = "FAIL" ]; then
     FAILS=$((FAILS + 1))
 fi
 
+# ---- M12: CI executor cert expiry alarm (D-092 phase 3, premortem risk #1) ----
+# The receipt pipeline (Lastro) signs seal-step evidence with ci/runner/cert.bin;
+# BE-REV-01 caps that cert's life at 30 days, so without a mechanical alarm an
+# expired signer turns every future receipt red as furniture. FAILS when fewer
+# than 7 days remain - the threshold of the ratified phase-3 merge condition -
+# and fail-closed on a missing or malformed cert, with the reissue command in
+# the message so the fix is one paste away. not_after lives at tbs bytes
+# 74-81 (SPEC section 3.1 layout: version+role+2 keys+not_before), u64 BE ms.
+CI_CERT="ci/runner/cert.bin"
+if [ ! -f "$CI_CERT" ]; then
+    row M12 FAIL "$CI_CERT missing: bootstrap with 'bolina ca init --dir ci/ca && lastro keygen -dir ci/runner && zig-out/bin/bolina ca issue --ca-dir ci/ca --node-dir ci/runner --role executor --ttl 30d' (D-092 phase 3)"
+    FAILS=$((FAILS + 1))
+else
+    M12_OUT="$(python3 -c 'import struct,sys,time; raw=open(sys.argv[1],"rb").read(); na=struct.unpack(">Q",raw[74:82])[0] if len(raw)>=82 else 0; print(na, "%.2f" % ((na-time.time()*1000)/86400000.0))' "$CI_CERT" 2>/dev/null || echo "0 x")"
+    M12_NA="$(printf '%s' "$M12_OUT" | cut -d' ' -f1)"
+    M12_DAYS="$(printf '%s' "$M12_OUT" | cut -d' ' -f2)"
+    case "$M12_DAYS" in ''|*[!0-9.-]*) M12_DAYS="x" ;; esac
+    if [ "$M12_NA" = "0" ] || [ "$M12_DAYS" = "x" ]; then
+        row M12 FAIL "$CI_CERT unreadable or malformed: refusing to guess (fail-closed); reissue with 'zig-out/bin/bolina ca issue --ca-dir ci/ca --node-dir ci/runner --role executor --ttl 30d'"
+        FAILS=$((FAILS + 1))
+    elif python3 -c "import sys; sys.exit(0 if float('$M12_DAYS') < 7.0 else 1)" 2>/dev/null; then
+        row M12 FAIL "CI executor cert expires in $M12_DAYS days (<7): reissue NOW with 'zig-out/bin/bolina ca issue --ca-dir ci/ca --node-dir ci/runner --role executor --ttl 30d', then rerun the receipt steps (D-092 phase 3 merge condition)"
+        FAILS=$((FAILS + 1))
+    else
+        row M12 PASS "CI executor cert valid for another $M12_DAYS days (threshold 7; BE-REV-01 span cap, D-092 phase 3)"
+    fi
+fi
+
 echo
-echo "enforced gates: M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11, failing: $FAILS"
+echo "enforced gates: M1 M2 M3 M4 M5 M6 M7 M8 M9 M10 M11 M12, failing: $FAILS"
 exit "$FAILS"
