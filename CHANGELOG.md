@@ -21,6 +21,17 @@ The format is adapted from [Keep a Changelog](https://keepachangelog.com/).
   validity left, or is missing/malformed (fail-closed), with the reissue command in the message.
   Threshold from the ratified D-092 phase-3 merge condition (premortem risk #1).
 
+### Fixed
+
+- **Linux build**: `zig build test` (and the daemon executable) failed to compile on
+  x86_64-linux with 21-22 "dependency on libc must be explicitly specified" errors: the test
+  and exe modules declare `extern "c"` seams but never set `link_libc`; macOS links libc
+  implicitly, so every prior suite run was macOS-only. Found by the G3 soak on dedicated
+  hardware (2026-08-24). Proof of fix: cross-compile to x86_64-linux-gnu now completes the
+  compile step cleanly (only the expected host-cannot-exec remains locally); native suite
+  unchanged at 441 pass / 0 fail. Note for reviewers: tag v0.6.1 (`7207fb0`) predates this
+  fix, so its suite is verified on macOS; Linux verification holds from main onward.
+
 ## [0.6.1] - 2026-08-24
 
 Pre-audit refresh fixes (baseline pass against sealed v0.6.0; dispositions in

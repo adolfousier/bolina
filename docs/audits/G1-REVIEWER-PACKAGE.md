@@ -42,6 +42,10 @@ Note: the two open findings from the pre-audit refresh (CA v2/scope inertness; c
 sender binding) are FIXED at this target with defence mutants (`d092`); see CHANGELOG 0.6.1.
 Your budget belongs to the composition seams, not these.
 
+Platform disclosure: at tag v0.6.1 the suite is verified on macOS (aarch64). On Linux the
+`zig build test`/daemon compile fails for lack of `link_libc` (fixed on `main` after this tag,
+2026-08-24, found by the G3 soak); fuzz targets are unaffected and run green on Linux.
+
 Toolchain: Zig 0.16.0 (`tools/toolchain.json`). Then:
 
 ```bash

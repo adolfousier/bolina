@@ -38,6 +38,12 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        // The daemon surface (listener/daemon/grant_ledger) declares extern "c"
+        // flat-libc seams. macOS links libc implicitly; every other target
+        // needs this or compilation dies with "dependency on libc must be
+        // explicitly specified". Found by the G3 soak on x86_64-linux
+        // (2026-08-24): the test tree had never compiled off-macOS.
+        .link_libc = true,
     });
     exe_mod.addImport("build_options", opts_mod);
     const exe = b.addExecutable(.{ .name = "bolina", .root_module = exe_mod });
@@ -75,6 +81,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .single_threaded = true,
+        // Same extern "c" rule as exe_mod above: the network-surface tests
+        // (control/daemon/listener) need libc on every non-macOS target.
+        .link_libc = true,
     });
     test_mod.addImport("build_options", opts_mod);
     // The vectors harness (src/vectors_test.zig) embeds test/vectors.json at
