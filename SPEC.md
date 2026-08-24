@@ -1781,6 +1781,12 @@ a key was revoked stays valid history; one that a node accepts after receiving t
 refused regardless of causal position. *Admission fails closed and audit stays truthful; these are
 different jobs and they get different rules.*
 
+**BE-HIST-04a (audit trusts the CURRENT set; accepted coupling)** - Historical
+re-validation checks CA signatures against the trust set as it exists *now*. A CA key
+rotated out of the set makes previously-valid history fail audit (`UntrustedCA`): you must
+still trust a signing CA to trust what it signed. Accepted trade (pre-audit v0.6.0 section 4,
+D-092 baseline); revisiting means persisting historical trust sets alongside channels.
+
 ### 9.1 Honest limitation
 
 Tamper-*evidence*, not tamper-*resistance*, and only within a channel. Colluding members can agree

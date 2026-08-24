@@ -128,3 +128,18 @@ Gate closure: every finding either fixed in code (with regression test) or expli
 | Review window | ___ (suggest 3-4 weeks for scope above) |
 | Repo access method | ___ (private clone invite / bundle) |
 | Findings channel | ___ (private, encrypted preferred; findings embargoed until dispositioned) |
+
+## 10. Where to spend the review budget (pre-audit refresh guidance)
+
+A second baseline pass ran against this exact tree (v0.6.0, `c5c69a2`) and its registry
+entries are closed with fixes on main; F1-F14 need little of your time. Highest-value
+seams, all cross-subsystem joints where per-file mutation gates are weakest by
+construction:
+
+1. Control-plane / wire identity boundary: intents admitted over loopback HTTP declare
+   a subject that later wire grants bind against (checks 4 and 6); admission trusts the
+   bearer token as operator authority.
+2. Scope-version coupling: certificates are v3-only from the official tool and scope
+   enforcement is gated on cert.version >= 3; v2 remains accepted for migration.
+3. BE-HIST-04a: historical audit validates CA chains against the CURRENT trust set, so
+   CA rotation couples to historical verifiability (accepted trade, named in SPEC).

@@ -8,6 +8,22 @@ milestones closed against the SPEC, and a version is *sealed* only when mechanic
 
 The format is adapted from [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+Pre-audit refresh fixes (baseline pass against sealed v0.6.0; dispositions in
+`docs/audits/CRYPTO-REVIEW-BRIEF.md` 7.2):
+
+- **FIXED HIGH** - `ca issue` minted version-2 certificates while the grant chain only
+  enforces scopes on v3+: every tool-minted scope was silently inert (`9c96732`). Tool now
+  mints v3 always; empty scopes deny-all by design (D-085 R4) with an issue-time note;
+  e2e test drives real tool certs through parse+validate into the grant verdict.
+- **FIXED MEDIUM** - intents admitted over `POST /v1/intents` had no sender record, so a
+  wire grant could never execute them (`b047043`). The endpoint now requires `subject`
+  (agent pubkey, hex64) and lands the same sender record the wire path writes; F16
+  composition test proves HTTP admission executes via wire grant.
+- **Accepted-with-name** - BE-HIST-04a (audit vs current trust set) and the flat-JSON
+  extractor posture (THREAT-MODEL 4.11).
+
 ## [0.6.0] - 2026-08-24
 
 Local control plane, offline CA tooling, integration surface. Design D-091, owner-approved

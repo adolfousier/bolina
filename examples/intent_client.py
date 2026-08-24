@@ -8,6 +8,10 @@ token is read from the daemon's data dir (control.token, mode 0600).
 Usage:
     python3 examples/intent_client.py health
     python3 examples/intent_client.py intent <intent_id_hex32> <resource_id> <action> [rationale]
+
+The intent command requires BOLINA_SUBJECT (64 hex chars = the agent's
+Ed25519 pubkey): grants must later name this identity as their subject
+and its certificate must carry ROLE_AGENT.
     python3 examples/intent_client.py events [since_seq]
     python3 examples/intent_client.py metrics
 
@@ -67,11 +71,16 @@ def main() -> int:
             return 2
         intent_id, resource_id, action = sys.argv[2:5]
         rationale = sys.argv[5] if len(sys.argv) > 5 else ""
+        subject = os.environ.get("BOLINA_SUBJECT", "")
+        if len(subject) != 64:
+            print("BOLINA_SUBJECT must be set: agent pubkey, 64 hex chars (F16)")
+            return 2
         status, body = request("POST", "/v1/intents", {
             "intent_id": intent_id,
             "resource_id": resource_id,
             "action": action,
             "rationale": rationale,
+            "subject": subject,
         })
         print(f"{status} {body}")
         # 202 = admitted (or idempotent retry), 409 = resource held,

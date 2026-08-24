@@ -183,6 +183,23 @@ Total: ~1,575 lines of Zig + the SPEC/THREAT-MODEL documents.
 
 2026-08-23: the 20 Aug reviewer re-verified this registry against sealed `e97a117` (v0.5.3). Confirmed FIXED: F1 (kex binding), F2 (ledger buffer), F3 (fsync dir), F4 (first_receipt durability), F5 (admission ordering), F6 (setRevocation subject expiry), F13 (verify-side lookups). Confirmed dispositioned: F8 -> T11 documented, F10 (revocation pruned by cert_expiry), F12 (per-epoch cookie key), MD3 ledger flock, MD4 intent slot reclaim. Per D-092 Ruling 1 this registry + dispositions enter the G1 pre-audit baseline handed to the external reviewer; it does not itself satisfy G1.
 
+### 7.2 Second pre-audit refresh against v0.6.0 (`c5c69a2`) - dispositions
+
+2026-08-24 refresh (same-author baseline pass, NOT G1) extended coverage to the no-clock
+audit path, HTTP control plane and CA tooling. New findings, both fixed on main:
+
+| Finding | Disposition |
+|---|---|
+| HIGH F15: caIssue wrote cert version=2 while the verifier gates scopeCoversResource on >=3 - every tool-minted scope silently inert | Fixed (`9c96732`): tool mints v3 ALWAYS (empty scopes deny-all per D-085 R4, issue-time note); F15 e2e drives REAL tool certs through parse+validate into verifyGrantThen - sibling-scope approver refuses, covering scope fires once, version byte pinned |
+| MEDIUM F16: HTTP-admitted intents had no sender record - wire grants could never execute them (202 into UnknownSender forever) | Fixed (`b047043`): POST /v1/intents REQUIRES subject (hex64) and writes dispatchIntent's same sender record; claim operator-trusted/unauthenticated-by-crypto, lies refuse loudly at checks 4/6; F16 composition test proves HTTP admission executes via wire grant |
+| Caveat: audit re-validates chains against the CURRENT trust set (CA rotation couples history) | Accepted-with-name: SPEC BE-HIST-04a |
+| Caveat: flat-JSON extractor substring-matches keys; loopback+bearer assumed | Accepted-with-name: THREAT-MODEL 4.11 - beyond-loopback promotion requires a real parser |
+
+Reviewer emphasis (refresh section 6): spend external budget on the seams - control-plane/wire
+identity boundary (now subject-bound) and scope-version coupling; plus BE-HIST-04a
+trust/history coupling. Cross-subsystem joints are where per-file mutation gates are weakest
+by construction. Everything in section 1 is regression-tested closed; treat F1-F14 as spent.
+
 ## 8. Contact
 
 Daniel Carneiro (`loonix`) — author. See `README.md` for contact details.

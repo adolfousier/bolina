@@ -320,6 +320,17 @@ version for *reporting*; this makes it an integrity control as well.
 
 ---
 
+### 4.11 The loopback control plane - ACCEPTED POSTURE
+
+The HTTP facade binds loopback and requires a bearer token; possession of that token IS
+the operator. Two accepted consequences, named so promotion beyond loopback stays a
+conscious decision: (1) intents admitted over HTTP declare their SUBJECT explicitly
+(F16) - the claim is operator-trusted, not crypto-authenticated, and misdeclaration
+refuses loudly at grant-verification checks 4/6 rather than silently executing;
+(2) request bodies are parsed by a hand-rolled flat-JSON extractor that matches "key":
+as a substring - robust enough for one trusted local caller, NOT a general JSON parser;
+exposing this surface beyond loopback requires replacing it first.
+
 ## 5. Non-goals
 
 Stated so nobody builds on an assumption the protocol never made.

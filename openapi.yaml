@@ -35,7 +35,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [intent_id, resource_id, action]
+              required: [intent_id, resource_id, action, subject]
               properties:
                 intent_id:
                   type: string
@@ -53,6 +53,16 @@ paths:
                   type: string
                   maxLength: 512
                   description: Optional free text for audit trails.
+                subject:
+                  type: string
+                  pattern: "^[0-9a-f]{64}$"
+                  description: >
+                    Ed25519 signing pubkey of the AGENT this intent is for
+                    (F16). Grants must name this identity as their subject and
+                    its certificate must carry ROLE_AGENT; the claim is
+                    operator-trusted (loopback+bearer), not crypto-authenticated,
+                    and a mismatched or uncertified subject refuses loudly at
+                    verification checks 6/4.
       responses:
         "202":
           description: Admitted (or idempotent retry of a still-pending intent_id)
