@@ -7,7 +7,7 @@ message.**
 > jamming. Náutico like the rest of the family (Prumo, Caravela, Nau, Orbit), six letters, ASCII.
 > Change it in one line if you have better.
 
-**Status:** v0.6.0 (closed and sealed). Eight §11 conformance items produce evidence and carry seal
+**Status:** v0.6.1 (closed and sealed). Eight §11 conformance items produce evidence and carry seal
 paragraphs; every ruling names its receipt. The M1 milestone is built in Zig, held by mechanical
 gates, and the model checking (§11.4), adversarial evaluation (§11.5), fuzzing (§11.6), mutation
 testing (§11.2), test vectors (§11.3), bijection (§11.1), zero-deps (§11.7), and measured build
@@ -43,7 +43,7 @@ prints every gate on every run and returns non-zero if an enforced one fails.
 | BE-\* items bound to a named test | 114 of 114 declared, high-water ratchet at 114 | M1, enforced |
 | Test vectors cross-verified (Zig against Python `cryptography`) | 77 passed, 0 failed | M3, enforced |
 | Differential fuzz divergences (production parser against an independent Python reference) | 0 divergences, 72 of 72 parser exit points reached (gate 20,000; extended 1,000,000; nightly soak 5 seeds x 1,000,068 records, 0 divergences, 72/72) | M4, enforced; SPEC §11.6 sealed (D-075) |
-| Mutants killed by the test suite | 174 of 174 non-equivalent (175 evaluated, 1 documented equivalent per D-088), full run at the v0.6.0 closeout, receipt `tools/m2-mutation-receipt` (log `logs/mutation_full_v060.log`) | M2, enforced |
+| Mutants killed by the test suite | 176 of 176 non-equivalent (177 evaluated, 1 documented equivalent per D-088), combined runs at the v0.6.1 closeout, receipt `tools/m2-mutation-receipt` (logs `logs/mutation_d092.log` + `logs/mutation_d092_chunk.log`) | M2, enforced |
 | Pre-authentication attack surface | 1460 of 1500 lines; plus the declared control plane (958 of 1000) and CA tooling (478 of 550) sub-units | M5, enforced |
 | Post-authentication attack surface | 1488 of 1500 lines | M11, enforced |
 | Parser exit points with a matching `Branch` member | 72 of 72, zero raw error returns | M9, enforced |

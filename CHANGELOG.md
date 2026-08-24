@@ -8,7 +8,7 @@ milestones closed against the SPEC, and a version is *sealed* only when mechanic
 
 The format is adapted from [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.6.1] - 2026-08-24
 
 Pre-audit refresh fixes (baseline pass against sealed v0.6.0; dispositions in
 `docs/audits/CRYPTO-REVIEW-BRIEF.md` 7.2):
@@ -23,6 +23,10 @@ Pre-audit refresh fixes (baseline pass against sealed v0.6.0; dispositions in
   composition test proves HTTP admission executes via wire grant.
 - **Accepted-with-name** - BE-HIST-04a (audit vs current trust set) and the flat-JSON
   extractor posture (THREAT-MODEL 4.11).
+
+Sealed at `322622c`. Receipt `sha=322622c`: 176/176 non-equivalent mutants killed,
+0 survived, 1 documented equivalent (177 evaluated) — legacy FULL at `90e46a5` plus the
+d092 chunk after a TARGETS registration fix (tools-only, zero src/ drift). d092: 2/2.
 
 ## [0.6.0] - 2026-08-24
 

@@ -10,18 +10,25 @@
 # md5-dedup SKIP caught (stale anchor after fmt canonicalization), anchor
 # repaired, chunk re-run 3/3. Combined 168/168 + 1 EQUIV at 7035eed.
 # v0.6.0 closeout run 2026-08-24 (~12:20 UTC): adds the d091 control-plane
-# defence domain (auth-gate, http-caps, intent-idempotent, metrics-honesty,
-# ring-drop-oldest). Full run at d4ebf81: 174/174 non-equivalent killed,
-# 0 survived, 0 TIMEOUT (per-evaluation fence armed but never fired),
-# 1 documented equivalent. grant check 7 remains the sole equivalent.
-# Provenance note: the harness bytes running this evaluation are exactly
-# commit d82b0c5 + the anti-wedge hardening d4ebf81 (timeout fence returns
-# tuple; test-client sockets non-blocking with correct per-OS O_NONBLOCK).
-sha=d4ebf81
+# defence domain. Full run at d4ebf81: 174/174 non-equivalent killed,
+# 0 survived, 0 TIMEOUT (fence armed but never fired), 1 documented
+# equivalent. grant check 7 remains the sole equivalent.
+# v0.6.1 closeout runs 2026-08-24 (~13:20-15:10 UTC): adds the d092 pre-audit
+# defence domain (F15 cert-v3 -> ca_material.zig, F16 subject-binding ->
+# control_api.zig). Legacy leg: FULL at 90e46a5, 174 KILLED + 1 EQUIV
+# (175 evaluated), 0 survived, 0 TIMEOUT. First attempt then crashed in the
+# harness (KeyError: ca_material.zig missing from TARGETS) when reaching the
+# first d092 mutant - registration bug, all legacy results unaffected. Fixed
+# in 322622c (tools-only, zero src/ drift verified by git diff), d092 chunk
+# re-run with MUTATION_DOMAIN=d092: 2/2 KILLED. Combined at 322622c:
+# 176/176 non-equivalent killed, 0 survived, 1 documented equivalent,
+# 177 evaluated.
+sha=322622c
 channel=8/8
 d089=3/3
 d090=6/6
 d091=6/6
+d092=2/2
 daemon=7/7
 dispatch=6/6
 evidence=11/11
@@ -39,4 +46,4 @@ resolver=10/10
 session=11/11
 sync=12/12
 transport=4/4
-total=174/174 survived=0 equivalent=1
+total=176/176 survived=0 equivalent=1
