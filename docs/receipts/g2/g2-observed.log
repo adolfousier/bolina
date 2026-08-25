@@ -1,0 +1,12 @@
+daemon commit: 9447ca8
+interop: [A] initiation sent (144 bytes)
+interop: [A] handshake complete · transcript h=6dfafe5be155… · daemon index=0x00000000 (echo=0x51530001)
+interop: [B] binding frame sent (278 bytes cert)
+interop: [B] daemon binding verified · daemon fp=25c384cec7833681 · chain clock-free OK
+interop: [C] intent_id=2739c53a4ca45764d43772b2ea5c1aee
+interop: [C] Intent envelope sent (249 bytes) · resource bol:25c384cec7833681/interop/demo
+interop: [C] check the daemon metrics for bolina_intents_admitted_total
+daemon admission state for intent 2739c53a4ca45764d43772b2ea5c1aee: pending
+G2 LIVE INTEROP: PASS (Go intent admitted by Zig daemon)
+
+[lastro] exit-status=0
