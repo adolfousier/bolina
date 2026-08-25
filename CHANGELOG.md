@@ -31,6 +31,15 @@ The format is adapted from [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **handshake response indexes were swapped on the wire** (`src/handshake.zig`): the type-2
+  response carried the initiator's index at offset 4 and the responder's chosen slot at
+  offset 8, the reverse of SPEC 4.1a (and WireGuard). Invisible internally - no Zig consumer
+  parsed those fields and test index numbering coincided with slot numbering; a live Noise_IK
+  interop run against the Go implementation surfaced it. A spec-conformant initiator rejects
+  every response where announced index != responder slot. Fixed to conformant layout with a
+  byte-level regression pin in the pilot e2e (distinct announced index so the pin bites);
+  kill-proven by reverting the fix under the pin. Go side must flip its two msg2 reads before
+  the next interop run against post-fix main.
 - **g3-soak kit**, six operator-reported defects from the first G3 run (`tools/g3-soak.sh`):
   user units invisible to pause/restore (the develop bot is one); sudo `$HOME` shift sent the
   journal to /root; a system zig shadowing PATH could silently replace the hash-verified

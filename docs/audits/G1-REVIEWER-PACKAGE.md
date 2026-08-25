@@ -151,3 +151,8 @@ construction:
    enforcement is gated on cert.version >= 3; v2 remains accepted for migration.
 3. BE-HIST-04a: historical audit validates CA chains against the CURRENT trust set, so
    CA rotation couples to historical verifiability (accepted trade, named in SPEC).
+4. Known post-freeze defect in this tag, fixed on main: the type-2 handshake response
+   carries its two session-index fields swapped relative to SPEC 4.1a tables (initiator
+   echo at offset 4, responder slot at offset 8). Found by the live G2 interop run; see
+   CHANGELOG Fixed. Review budget is better spent elsewhere; the fix lands in the next
+   seal and the pilot e2e pins the conformant bytes.

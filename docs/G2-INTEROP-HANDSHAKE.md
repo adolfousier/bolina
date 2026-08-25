@@ -71,16 +71,19 @@ shipped-build property holds without flags.
    - **B**: both sides validate the peer cert chain against the shared
      anchors; session stays alive (no silent drop).
    - **C** (the money shot): send ONE wire Intent envelope (your codec,
-     vector-conformant) over the session, then:
+     vector-conformant) over the session, then verify admission by
+     querying the intent back:
 
      ```bash
      curl -s -H "Authorization: Bearer $(cat "$BOLINA_DATA_DIR/control.token")" \
-       http://127.0.0.1:7421/metrics | grep bolina_intents_admitted_total
+       http://127.0.0.1:7421/v1/intents/<intent_id_hex>
      ```
 
-     Expect `bolina_intents_admitted_total 1`. That single line means:
-     handshake OK, binding OK, envelope parsed OK, signature OK,
-     admission decided identically to Zig. G2 done.
+     Expect status `pending`. That single word means: handshake OK,
+     binding OK, envelope parsed OK, signature OK, admission decided
+     identically to Zig. G2 done. NOTE: `bolina_intents_admitted_total`
+     counts ONLY HTTP-path admissions and stays 0 for wire admits - it
+     is not the proof (corrected after the first live run found this).
 
 ## Evidence to bring back
 
