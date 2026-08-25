@@ -936,3 +936,18 @@ watchdog converged it:
   BE-CTRL-03 (declared by D-090, literal Revoke-body fixture still owed)
   and BE-TR-01a (declared by D-089, binding-message layout fixture owed);
   both are worklist items for the next slice, not regressions.
+
+- 2026-08-25 addendum (D-093): the two owed fixtures landed. BE-CTRL-03 is
+  bound by literal Revoke-body bytes (0x0000018BCFE56800 read as the
+  independently written decimal 1_700_000_000_000; empty and short bodies
+  stay maxInt, never pruned), replacing the two F10_D090 writeInt-constructed
+  tests that proved the same reader without binding the marker. BE-TR-01a is
+  bound by the literal 70-byte binding frame (u16be cert_len 4 | cert
+  C711429A | 64-byte sig fill B0..EF) through parseBindingMessage: round-trip
+  slice offsets, cert_len zero -> Malformed, short frame -> Truncated,
+  trailing byte -> TrailingBytes. parseBindingMessage previously had zero
+  direct unit tests (its callers are the daemon's parse-then-drop path and
+  the fuzz harness). M1 reads 116/117, high water 116; the sole unbound
+  marker is BE-HIST-04a, the accepted-coupling audit disposition (SPEC 9.1),
+  deliberately unbound. No production line changed, no wire bytes changed,
+  no surface budget moved.

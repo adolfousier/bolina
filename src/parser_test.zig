@@ -393,6 +393,58 @@ test "BE_WIRE_02 truncated fragment header is rejected" {
     try std.testing.expectError(error.Truncated, parser.session.parseFragmentHeader(bytes[0..11]));
 }
 
+// ---------------------------------------------------------------------------
+// BE-TR-01a (D-089): the binding message is the ENTIRE first plaintext a
+// session carries in each direction: u16be cert_len | cert | [64] Ed25519
+// signature over (0x05 || h) per BE-SIG-01. No envelope header and no
+// pre-binding allowlist: until the frame verifies, every transport payload
+// from that session drops unparsed (daemon.zig pushes its own binding frame
+// at handshake commit and never dispatches from an unbound session). The
+// M1-AUDIT worklist owed this literal layout fixture: hex literals with a
+// distinct fill per field (D-027), so the slice offsets are asserted, not
+// just the lengths. No canonical vector exists for this frame (D-020).
+// ---------------------------------------------------------------------------
+
+// 64-byte signature fill: the consecutive bytes 0xB0..0xEF.
+const SIG_64_FILL =
+    "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf" ++
+    "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf" ++
+    "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf" ++
+    "e0e1e2e3e4e5e6e7e8e9eaebecedeeef";
+
+// Binding frame: u16be cert_len = 4, opaque cert 0xC711429A (parseCert and
+// the BE-ID-01..04 checks run in the caller, not here), then the sig.
+// 2 + 4 + 64 = 70 bytes.
+const BINDING_FRAME_HEX =
+    "0004" ++ // u16be cert_len = 4
+    "c711429a" ++ // opaque cert slice
+    SIG_64_FILL;
+
+test "BE_TR_01a binding frame round-trips u16be cert_len then cert then 64-byte sig" {
+    const bytes = decodeHex(BINDING_FRAME_HEX);
+    try std.testing.expectEqual(@as(usize, 70), bytes.len);
+    const bm = try parser.session.parseBindingMessage(&bytes);
+    // The cert is the exact 4 bytes between the length and the signature.
+    try std.testing.expectEqualSlices(u8, bytes[2..6], bm.cert);
+    // The sig is the closing 64 bytes, aliased, full length.
+    const sig_fill = decodeHex(SIG_64_FILL);
+    try std.testing.expectEqualSlices(u8, &sig_fill, bm.sig);
+    try std.testing.expectEqual(@as(usize, 64), bm.sig.len);
+}
+
+test "BE_TR_01a zero cert_len, short frame, and trailing bytes all reject" {
+    // cert_len = 0: the grammar floor, Malformed (coverage .bind_cert_len_zero).
+    // A zero-length cert cannot be authenticated, so the frame never parses.
+    const zero_len = decodeHex("0000" ++ SIG_64_FILL);
+    try std.testing.expectError(error.Malformed, parser.session.parseBindingMessage(&zero_len));
+    // cert_len 4 but the frame stops inside the signature: Truncated.
+    const short = decodeHex("0004c711429a" ++ "b0b1");
+    try std.testing.expectError(error.Truncated, parser.session.parseBindingMessage(&short));
+    // One byte after the closing signature: trailing bytes, rejected (SPEC 2.2).
+    const trailing = decodeHex(BINDING_FRAME_HEX ++ "ff");
+    try std.testing.expectError(error.TrailingBytes, parser.session.parseBindingMessage(&trailing));
+}
+
 // LookupRequest (SPEC 5.1a): u8 version + [16] overlay_addr = 17 bytes fixed.
 const OVERLAY_ADDR_FILL = "0a" ** 16; // 16 bytes, the overlay address being looked up
 const LOOKUP_REQ_HEX =

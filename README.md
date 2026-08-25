@@ -40,7 +40,7 @@ prints every gate on every run and returns non-zero if an enforced one fails.
 
 | Measure | Value | Gate |
 |---|---|---|
-| BE-\* items bound to a named test | 114 of 114 declared, high-water ratchet at 114 | M1, enforced |
+| BE-\* items bound to a named test | 116 of 117 declared, high-water ratchet at 116 (BE-HIST-04a deliberately unbound: accepted-coupling audit disposition, SPEC 9.1) | M1, enforced |
 | Test vectors cross-verified (Zig against Python `cryptography`) | 77 passed, 0 failed | M3, enforced |
 | Differential fuzz divergences (production parser against an independent Python reference) | 0 divergences, 72 of 72 parser exit points reached (gate 20,000; extended 1,000,000; nightly soak 5 seeds x 1,000,068 records, 0 divergences, 72/72) | M4, enforced; SPEC §11.6 sealed (D-075) |
 | Mutants killed by the test suite | 176 of 176 non-equivalent (177 evaluated, 1 documented equivalent per D-088), combined runs at the v0.6.1 closeout, receipt `tools/m2-mutation-receipt` (logs `logs/mutation_d092.log` + `logs/mutation_d092_chunk.log`) | M2, enforced |

@@ -1412,18 +1412,24 @@ test "BE_GRANT_09 a verified refusal matching no pending intent is dropped" {
 }
 
 // ---------------------------------------------------------------------------
-// F10/D-090: a Revoke body carries the SUBJECT's cert expiry as u64be. The
-// reader is pure; admission wiring calls it in the F6 block of
-// verifyEnvelopeAdmission. Absent field = never prune (fail-closed).
+// F10/D-090 -> BE-CTRL-03: a Revoke body carries the SUBJECT's cert expiry
+// as u64be so the entry can prune once it has passed. The reader is pure;
+// admission wiring calls it in the F6 block of verifyEnvelopeAdmission.
+// Absent field = never prune (fail-closed). Bound by name to BE-CTRL-03 per
+// the M1-AUDIT worklist (literal Revoke-body fixture owed): D-027 discipline,
+// the byte literal and the decimal expectation are written independently,
+// no writeInt round-trip that could agree with itself.
 // ---------------------------------------------------------------------------
 
-test "F10_D090 revoke body expiry read as u64be" {
-    var body: [8]u8 = undefined;
-    std.mem.writeInt(u64, &body, 1_700_000_000_000, .big);
+test "BE_CTRL_03 revoke body expiry read as u64be from literal bytes" {
+    // 0x00_00_01_8B_CF_E5_68_00 == 1_700_000_000_000 ms since epoch,
+    // derived once outside this file: bytes and decimal must disagree if
+    // either the reader or this constant is wrong.
+    const body = [_]u8{ 0x00, 0x00, 0x01, 0x8b, 0xcf, 0xe5, 0x68, 0x00 };
     try std.testing.expectEqual(@as(u64, 1_700_000_000_000), verify.revokePruneExpiry(&body));
 }
 
-test "F10_D090 revoke body without the expiry field never prunes" {
+test "BE_CTRL_03 revoke body without the expiry field never prunes" {
     // Pre-D-090 bodies (empty or short) carry no subject expiry: the only
     // safe reading is maxInt, i.e. the revocation is never pruned.
     try std.testing.expectEqual(@as(u64, std.math.maxInt(u64)), verify.revokePruneExpiry(&[_]u8{}));
