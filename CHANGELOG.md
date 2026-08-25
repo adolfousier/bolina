@@ -20,8 +20,23 @@ The format is adapted from [Keep a Changelog](https://keepachangelog.com/).
 - Gate **M12** in `tools/prumo-verify`: fails when the CI executor cert has fewer than 7 days of
   validity left, or is missing/malformed (fail-closed), with the reissue command in the message.
   Threshold from the ratified D-092 phase-3 merge condition (premortem risk #1).
+- **G3 CLOSED** (D-092 gate 3, D-094): 24h03 continuous adversarial soak on dedicated owner
+  hardware against frozen v0.6.1 - 110 chaos units (110B inputs, coverage ON, 0 panics),
+  36 differential rounds Zig-vs-Python oracle with 0 divergences, 0 infra failures, max
+  76 C, parser exit coverage complete. Signed Lastro receipt VERIFIED clock-free against the
+  CI CA; evidence under `docs/receipts/g3/`. Deliberately no new prumo gate: a finished soak
+  is historical evidence, not a living invariant (D-094 ruling 1).
+- G3 soak runner identity `ci/runner-g3` (fp `a1c71dab7e4c24a3`, executor cert serial
+  `a6069f15…`, TTL 30d).
 
 ### Fixed
+
+- **g3-soak kit**, six operator-reported defects from the first G3 run (`tools/g3-soak.sh`):
+  user units invisible to pause/restore (the develop bot is one); sudo `$HOME` shift sent the
+  journal to /root; a system zig shadowing PATH could silently replace the hash-verified
+  toolchain (R4 hazard - pinned now wins); differential workdirs accumulated ~1.3 GB per round;
+  the hash step died on a vanished log under `set -e`, poisoning the wrapper exit code before
+  its own verdict; soak chaos logs overwrote burnin logs (same seed rotation).
 
 - **Linux build**: `zig build test` (and the daemon executable) failed to compile on
   x86_64-linux with 21-22 "dependency on libc must be explicitly specified" errors: the test

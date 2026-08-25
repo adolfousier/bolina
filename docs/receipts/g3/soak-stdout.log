@@ -1,0 +1,27 @@
+[g3 2026-08-24T20:10:03Z] BEGIN phase=soak deadline=2026-08-25T20:10:03Z logs=/home/loonix/g3-soak-logs
+[g3 2026-08-24T20:23:07Z] HEARTBEAT phase=soak elapsed_min=13 chaos_units=1 diff_rounds=0 divergences=0 panics=0 max_temp_mC=70000 throttle_samples=9
+[g3 2026-08-24T21:28:50Z] HEARTBEAT phase=soak elapsed_min=78 chaos_units=6 diff_rounds=1 divergences=0 panics=0 max_temp_mC=70000 throttle_samples=9
+[g3 2026-08-24T22:34:56Z] HEARTBEAT phase=soak elapsed_min=144 chaos_units=11 diff_rounds=3 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=9
+[g3 2026-08-24T23:41:00Z] HEARTBEAT phase=soak elapsed_min=210 chaos_units=16 diff_rounds=5 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=9
+[g3 2026-08-25T00:46:30Z] HEARTBEAT phase=soak elapsed_min=276 chaos_units=21 diff_rounds=6 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=9
+[g3 2026-08-25T01:52:09Z] HEARTBEAT phase=soak elapsed_min=342 chaos_units=26 diff_rounds=8 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=10
+[g3 2026-08-25T02:57:44Z] HEARTBEAT phase=soak elapsed_min=407 chaos_units=31 diff_rounds=10 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=11
+[g3 2026-08-25T04:03:16Z] HEARTBEAT phase=soak elapsed_min=473 chaos_units=36 diff_rounds=11 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=12
+[g3 2026-08-25T05:08:54Z] HEARTBEAT phase=soak elapsed_min=538 chaos_units=41 diff_rounds=13 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=12
+[g3 2026-08-25T06:14:31Z] HEARTBEAT phase=soak elapsed_min=604 chaos_units=46 diff_rounds=15 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=12
+[g3 2026-08-25T07:20:04Z] HEARTBEAT phase=soak elapsed_min=670 chaos_units=51 diff_rounds=16 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=12
+[g3 2026-08-25T08:25:40Z] HEARTBEAT phase=soak elapsed_min=735 chaos_units=56 diff_rounds=18 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=12
+[g3 2026-08-25T09:31:16Z] HEARTBEAT phase=soak elapsed_min=801 chaos_units=61 diff_rounds=20 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=13
+[g3 2026-08-25T10:36:47Z] HEARTBEAT phase=soak elapsed_min=866 chaos_units=66 diff_rounds=21 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=15
+[g3 2026-08-25T11:42:23Z] HEARTBEAT phase=soak elapsed_min=932 chaos_units=71 diff_rounds=23 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=15
+[g3 2026-08-25T12:48:02Z] HEARTBEAT phase=soak elapsed_min=997 chaos_units=76 diff_rounds=25 divergences=0 panics=0 max_temp_mC=71000 throttle_samples=16
+[g3 2026-08-25T13:53:32Z] HEARTBEAT phase=soak elapsed_min=1063 chaos_units=81 diff_rounds=26 divergences=0 panics=0 max_temp_mC=72000 throttle_samples=16
+[g3 2026-08-25T14:59:09Z] HEARTBEAT phase=soak elapsed_min=1129 chaos_units=86 diff_rounds=28 divergences=0 panics=0 max_temp_mC=72000 throttle_samples=18
+[g3 2026-08-25T16:04:47Z] HEARTBEAT phase=soak elapsed_min=1194 chaos_units=91 diff_rounds=30 divergences=0 panics=0 max_temp_mC=72000 throttle_samples=19
+[g3 2026-08-25T17:10:19Z] HEARTBEAT phase=soak elapsed_min=1260 chaos_units=96 diff_rounds=31 divergences=0 panics=0 max_temp_mC=72000 throttle_samples=20
+[g3 2026-08-25T18:15:57Z] HEARTBEAT phase=soak elapsed_min=1325 chaos_units=101 diff_rounds=33 divergences=0 panics=0 max_temp_mC=72000 throttle_samples=21
+[g3 2026-08-25T19:21:34Z] HEARTBEAT phase=soak elapsed_min=1391 chaos_units=106 diff_rounds=35 divergences=0 panics=0 max_temp_mC=72000 throttle_samples=21
+[g3 2026-08-25T20:14:01Z] SUMMARY phase=soak wall_minutes=1443 chaos_units=110 panics=0 diff_rounds=36 divergences=0 infra_failures=0 max_temp_mC=76000
+[g3 2026-08-25T20:14:01Z] LOG HASHES BEGIN
+sha256sum: ./chaos-seed999999-u63.log: No such file or directory
+lastro: receipt /home/loonix/g3-soak-logs/g3-soak.receipt · bol:a1c71dab7e4c24a3/git/bolina/7207fb000113990199a903895e2ff4dde1ec9962/check/g3-soak-24h · exit 1 · 3769 bytes observed · digest 77b0d5159af274bb…

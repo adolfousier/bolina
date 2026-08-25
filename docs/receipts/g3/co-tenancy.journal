@@ -1,0 +1,18 @@
+2026-08-24T18:58:20Z BEGIN WINDOW co-tenancy snapshot follows
+2026-08-24T18:58:20Z PAUSED gitlab-runner.service
+2026-08-24T18:58:20Z MASKED sleep/suspend targets
+2026-08-24T18:58:20Z skip unattended-upgrades.service (absent or refused)
+2026-08-24T18:58:20Z DISABLED apt-daily.timer
+2026-08-24T18:58:21Z DISABLED apt-daily-upgrade.timer
+2026-08-24T18:58:22Z DISABLED cron.service
+2026-08-24T18:58:22Z skip crond.service (absent or refused)
+2026-08-24T18:58:22Z END PAUSE PHASE - machine now soak-dedicated
+2026-08-24T18:58:39Z PAUSED orbit-discord-bot.service (user unit; kit detect_units so ve system units - operador pausou manualmente as 18:58:23Z)
+2026-08-25T20:46:17Z UNMASKED sleep targets
+2026-08-25T20:46:18Z RESTORED apt-daily.timer
+2026-08-25T20:46:18Z RESTORED apt-daily-upgrade.timer
+2026-08-25T20:46:19Z RESTORED cron.service
+2026-08-25T20:46:19Z skip crond.service
+2026-08-25T20:46:19Z RESUMED gitlab-runner.service
+2026-08-25T20:46:19Z RESUME FAILED orbit-discord-bot.service
+2026-08-25T20:46:19Z END WINDOW

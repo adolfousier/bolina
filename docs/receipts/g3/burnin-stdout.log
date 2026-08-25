@@ -1,0 +1,5 @@
+[g3 2026-08-24T18:58:39Z] BEGIN phase=burnin deadline=2026-08-24T19:58:39Z logs=/home/loonix/g3-soak-logs
+[g3 2026-08-24T19:11:57Z] HEARTBEAT phase=burnin elapsed_min=13 chaos_units=1 diff_rounds=0 divergences=0 panics=0 max_temp_mC=68000 throttle_samples=3
+[g3 2026-08-24T20:05:10Z] SUMMARY phase=burnin wall_minutes=66 chaos_units=5 panics=0 diff_rounds=0 divergences=0 infra_failures=0 max_temp_mC=70000
+[g3 2026-08-24T20:05:10Z] LOG HASHES BEGIN
+sha256sum: ./chaos-seed108230699740769-u0.log: No such file or directory
