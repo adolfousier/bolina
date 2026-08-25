@@ -54,7 +54,11 @@ pub const HandshakeServer = struct {
         const sender_index = std.mem.readInt(u32, datagram[noise.OFF1_SENDER_INDEX..][0..4], .big);
         var msg2: [noise.MSG2_SIZE]u8 = undefined;
         const no_cookie = [_]u8{0} ** mac.MAC_BYTES;
-        responder.writeResponse(&msg2, sender_index, @intCast(self.session_count), self.responder_sig_pubkey, no_cookie) catch return error.Refused;
+        // SPEC 4.1a: sender_index carries OUR newly chosen index; receiver_
+        // index echoes the initiator's. The G2 live interop run found these
+        // two arguments swapped (echo at 4, our slot at 8), which a
+        // spec-conformant initiator rejects whenever the two differ.
+        responder.writeResponse(&msg2, @intCast(self.session_count), sender_index, self.responder_sig_pubkey, no_cookie) catch return error.Refused;
         const want: isize = @intCast(msg2.len);
         if (sendto(self.fd, &msg2, msg2.len, 0, reply_sa, reply_sa_len) != want) return error.SendFailed;
         const result = responder.finalize();

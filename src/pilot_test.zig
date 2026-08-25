@@ -288,6 +288,11 @@ fn clientHandshake(
     try initiator.readResponse(buf[0..noise.MSG2_SIZE], b_sig_pub);
     const result = initiator.finalize();
     const peer_index = std.mem.readInt(u32, buf[noise.OFF2_SENDER_INDEX..][0..4], .big);
+    // SPEC 4.1a pin: receiver_index echoes the initiator's announced index.
+    // The G2 live interop run found this field swapped with sender_index on
+    // the wire; this assert pins the conformant layout against regression.
+    const echo = std.mem.readInt(u32, buf[noise.OFF2_RECEIVER_INDEX..][0..4], .big);
+    try testing.expectEqual(announced_index, echo);
     const slot = try table.admit(peer_index, result, now);
 
     // B's binding push arrives next (BE-TR-01: responder pushes first).
@@ -414,7 +419,7 @@ test "D-089 pilot: handshake, binding both ways, intent, grant, effect, ledger, 
     var table = session.SessionTable.init();
 
     // --- Handshake + binding, agent session (slot 0) ---
-    const slot_a = try clientHandshake(io, &lis_c, d, &lis_b, &sa_b, &table, &agent, bx.public, bkeys.sig_public, ca_pub, 0, null, NOW_MS);
+    const slot_a = try clientHandshake(io, &lis_c, d, &lis_b, &sa_b, &table, &agent, bx.public, bkeys.sig_public, ca_pub, 0xA70F1E, null, NOW_MS);
     try testing.expect(driveB(d, &lis_b, NOW_MS) == .bound);
     try testing.expectEqual(@as(u32, 0), slot_a);
     try testing.expectEqual(@as(u64, 1), d.handshakes_committed);
