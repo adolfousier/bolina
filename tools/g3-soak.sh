@@ -22,7 +22,13 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LOG_DIR="${SOAK_LOG_DIR:-$HOME/g3-soak-logs}"
+# Bug-fix #2 (G3 feedback): under sudo $HOME shifts to /root; derive the real
+# user's home so the journal/logs land where the operator can read them.
+RUN_HOME="$HOME"
+if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ]; then
+  RUN_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+fi
+LOG_DIR="${SOAK_LOG_DIR:-$RUN_HOME/g3-soak-logs}"
 SEEDS=(108230699740769 42 1337 999999 3735928559)   # canonical CI matrix seeds
 CHAOS_CHUNK=1000000000                              # 1B inputs per chaos unit
 HEARTBEAT_SECS=3600
@@ -35,8 +41,12 @@ need_repo() { [ -f "$REPO_ROOT/build.zig" ] || die "run from a bolina checkout";
 ensure_logdir() { mkdir -p "$LOG_DIR"; }
 
 zig_bin() {
+  # Bug-fix #3 (G3 feedback): a system zig shadowing PATH silently replaced the
+  # hash-verified toolchain (R4). Pinned wins whenever present; PATH is fallback.
+  local PINNED="$HOME/zig-toolchain/zig-x86_64-linux-0.16.0/zig"
+  if [ -x "$PINNED" ]; then printf '%s' "$PINNED"; return 0; fi
   ZIG="$(command -v zig || true)"
-  [ -n "$ZIG" ] || ZIG="$HOME/zig-toolchain/zig-x86_64-linux-0.16.0/zig"
+  [ -n "$ZIG" ] || ZIG="$PINNED"
   [ -x "$ZIG" ] || die "no zig; run: $0 deps"
   printf '%s' "$ZIG"
 }
@@ -91,7 +101,7 @@ cmd_deps() {
     mkdir -p "$HOME/zig-toolchain"; tar -xJf /tmp/g3-zig.tar.xz -C "$HOME/zig-toolchain"
   fi
   export PATH="$DIR:$PATH"
-  test "$(zig version)" = "$VERS" || die "zig version mismatch"
+  test "$("$(zig_bin)" version)" = "$VERS" || die "zig version mismatch (system zig shadow? fix PATH or run deps again)"
   log "deps warm build (ReleaseSafe by build.zig pin) + 1k smoke fuzz"
   (cd "$REPO_ROOT" && zig build fuzz -Dcoverage -Dfuzz-seed=42 -Dfuzz-budget=1000) \
     >"$LOG_DIR/warm-build.log" 2>&1 || { tail -20 "$LOG_DIR/warm-build.log"; die "warm build failed"; }
@@ -102,9 +112,20 @@ cmd_deps() {
 detect_units() {
   systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null \
     | awk '{print $1}' | grep -iE 'bot|develop|gitlab-runner' || true
+  # user units carry an @user suffix so pause/resume route through user_systemctl
+  user_systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null \
+    | awk '{print $1}' | grep -iE 'bot|develop' | sed 's/$/@user/' || true
 }
 
 journal() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$LOG_DIR/co-tenancy.journal"; }
+
+# Bug-fix #1 (G3 feedback): the develop bot is a systemd USER unit; plain
+# systemctl never sees it and root cannot manage it without the user session.
+user_systemctl() {
+  [ -n "${SUDO_USER:-}" ] || return 1
+  sudo -u "$SUDO_USER" env XDG_RUNTIME_DIR="/run/user/$(id -u "$SUDO_USER")" \
+    systemctl --user "$@"
+}
 
 cmd_pause() {
   ensure_logdir
@@ -123,7 +144,13 @@ cmd_pause() {
     > "$LOG_DIR/services-before.txt"
   for U in "${UNITS[@]:-}"; do
     [ -n "$U" ] || continue
-    systemctl stop "$U" && journal "PAUSED $U" || journal "PAUSE FAILED $U (recorded; continuing)"
+    case "$U" in
+      *@user)
+        user_systemctl stop "${U%@user}" && journal "PAUSED $U (user unit)" \
+          || journal "PAUSE FAILED $U (recorded; continuing)" ;;
+      *)
+        systemctl stop "$U" && journal "PAUSED $U" || journal "PAUSE FAILED $U (recorded; continuing)" ;;
+    esac
   done
   # sleep/updates/cron lockdown (checklist: sem sleep/updates/cron); best-effort, all recorded
   systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target 2>/dev/null \
@@ -137,7 +164,9 @@ cmd_pause() {
 
 run_chaos_unit() {  # $1 seed, $2 unit index
   local SEED="$1" IDX="$2"
-  local LF="$LOG_DIR/chaos-seed${SEED}-u${IDX}.log"
+  # Bug-fix #6 (G3 feedback): phase prefix so soak units never overwrite
+  # burnin logs (both rotate the same canonical seeds from index 0).
+  local LF="$LOG_DIR/${PHASE:-run}-chaos-seed${SEED}-u${IDX}.log"
   local RC=0
   (cd "$REPO_ROOT" && zig build fuzz -Dcoverage -Dfuzz-seed="$SEED" -Dfuzz-budget="$CHAOS_CHUNK") \
     >"$LF" 2>&1 || RC=$?
@@ -155,7 +184,7 @@ run_diff_round() {  # $1 round index, $2 seed
   local BUDGET=$(( AVAIL_KB * 1024 * 35 / 100 / CORPUS_BYTES_PER_REC ))
   (( BUDGET > 100000 )) || BUDGET=100000
   (( BUDGET < 1000000 )) || BUDGET=1000000
-  local LF="$LOG_DIR/diff-r${IDX}-seed${SEED}.log"
+  local LF="$LOG_DIR/${PHASE:-run}-diff-r${IDX}-seed${SEED}.log"
   local RC=0
   python3 "$REPO_ROOT/tools/fuzz_diff.py" --budget "$BUDGET" --seed "$SEED" \
       --workdir "$LOG_DIR/diff-work-r$IDX" --zig "$(zig_bin)" >"$LF" 2>&1 || RC=$?
@@ -167,11 +196,15 @@ run_diff_round() {  # $1 round index, $2 seed
     DIFF_INFRA=$((DIFF_INFRA+1)); return 0
   fi
   grep -h "^COVERAGE\|^RECEIPT" "$LF" | tail -3 >> "$LOG_DIR/fuzz-summary.txt" || true
+  # Bug-fix #4 (G3 feedback): clean round workdirs on success (~1.3GB each);
+  # divergences and infra failures keep their workdir as evidence.
+  rm -rf "$LOG_DIR/diff-work-r$IDX"
   return 0
 }
 
 soak_loop() {  # $1 label, $2 deadline_epoch ; chaos always, differential only in soak
   local LABEL="$1" DEADLINE="$2" DIFFMODE="$3"
+  PHASE="$LABEL"
   START=$(date +%s); UNIT=0; ROUND=0; DIFF_DIV=0; DIFF_INFRA=0; PANICS=0
   start_thermal_sampler
   trap 'log "ABORT signal received at unit $UNIT; partial evidence preserved in $LOG_DIR"; kill $SAMPLER_PID 2>/dev/null; exit 130' INT TERM
@@ -192,9 +225,19 @@ soak_loop() {  # $1 label, $2 deadline_epoch ; chaos always, differential only i
   TOTAL_MIN=$(( ($(date +%s) - START) / 60 ))
   MAXTEMP=$(awk -F, '$2 ~ /^thermal/{if($3+0>m)m=$3+0; }END{print m+0}' "$(thermal_csv)")
   log "SUMMARY phase=$LABEL wall_minutes=$TOTAL_MIN chaos_units=$UNIT panics=$PANICS diff_rounds=$ROUND divergences=$DIFF_DIV infra_failures=$DIFF_INFRA max_temp_mC=$MAXTEMP"
+  # Bug-fix #5 (G3 feedback, root cause of the wrapper exit-1): a log vanishing
+  # between find and sha256sum returned nonzero under set -e and killed the
+  # script before its own verdict. Existence-checked, guarded, subshell-free.
   log "LOG HASHES BEGIN"
-  ( cd "$LOG_DIR" && find . -type f \( -name 'chaos-*' -o -name 'diff-*' -o -name 'thermal.csv' -o -name 'fuzz-summary.txt' -o -name 'co-tenancy.journal' \) -print0 ) \
-    | while IFS= read -r -d '' F; do sha256sum "$F"; done
+  HASHFAILS=0
+  while IFS= read -r -d '' F; do
+    if [ -f "$F" ]; then
+      sha256sum "$F" || { log "HASH FAILED $F"; HASHFAILS=$((HASHFAILS+1)); }
+    else
+      log "HASH SKIP vanished $F"
+    fi
+  done < <( cd "$LOG_DIR" && find . -type f \( -name '*chaos-seed*' -o -name '*diff-*' -o -name 'thermal.csv' -o -name 'fuzz-summary.txt' -o -name 'co-tenancy.journal' \) -print0 )
+  [ "$HASHFAILS" -eq 0 ] || log "WARNING: $HASHFAILS hash failure(s); evidence completeness reduced"
   log "LOG HASHES END"
   [ "$PANICS" -eq 0 ] && [ "$DIFF_DIV" -eq 0 ] && [ "$DIFF_INFRA" -eq 0 ] || exit 1
   exit 0
@@ -223,7 +266,14 @@ cmd_restore() {
   done
   systemctl enable --now unattended-upgrades.service 2>/dev/null && journal "RESTORED unattended-upgrades" || true
   PAUSED=$(grep ' PAUSED ' "$LOG_DIR/co-tenancy.journal" 2>/dev/null | awk '{print $3}' | sort -u || true)
-  for U in $PAUSED; do systemctl start "$U" && journal "RESUMED $U" || journal "RESUME FAILED $U"; done
+  for U in $PAUSED; do
+    case "$U" in
+      *@user) UU="${U%@user}"
+        user_systemctl start "$UU" && journal "RESUMED $U" \
+          || journal "RESUME FAILED $U (manual: as $SUDO_USER, XDG_RUNTIME_DIR=/run/user/$(id -u "$SUDO_USER") systemctl --user start $UU)" ;;
+      *) systemctl start "$U" && journal "RESUMED $U" || journal "RESUME FAILED $U" ;;
+    esac
+  done
   systemctl list-units --type=service --state=running --no-pager --no-legend | awk '{print $1}' \
     > "$LOG_DIR/services-after.txt"
   journal "END WINDOW"
