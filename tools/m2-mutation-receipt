@@ -23,7 +23,8 @@
 # re-run with MUTATION_DOMAIN=d092: 2/2 KILLED. Combined at 322622c:
 # 176/176 non-equivalent killed, 0 survived, 1 documented equivalent,
 # 177 evaluated.
-sha=322622c
+# afe5fe4 full re-run 2026-08-25: 176/176 non-equivalent killed, 0 survived, 1 documented equivalent, 0 TIMEOUT (M1 bind slice BE-CTRL-03 + BE-TR-01a)
+sha=afe5fe4
 channel=8/8
 d089=3/3
 d090=6/6
