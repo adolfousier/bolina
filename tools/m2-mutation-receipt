@@ -24,7 +24,11 @@
 # 176/176 non-equivalent killed, 0 survived, 1 documented equivalent,
 # 177 evaluated.
 # afe5fe4 full re-run 2026-08-25: 176/176 non-equivalent killed, 0 survived, 1 documented equivalent, 0 TIMEOUT (M1 bind slice BE-CTRL-03 + BE-TR-01a)
-sha=afe5fe4
+# f6eb3ac full re-run 2026-08-26 (~08:06-09:0x UTC, cron bolina-continuity): drift after
+# the SPEC 4.1a type-2 conformant fix (e4fd0d4 touched src/handshake.zig + src/pilot_test.zig).
+# Clean full suite: 176/176 non-equivalent killed, 0 survived, 0 SKIP, 0 TIMEOUT,
+# 1 documented equivalent. Per-domain tally identical to the afe5fe4 leg.
+sha=f6eb3ac
 channel=8/8
 d089=3/3
 d090=6/6
