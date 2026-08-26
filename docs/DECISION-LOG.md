@@ -1684,3 +1684,13 @@ model's assumptions are not merely self-reinforcing.
 
 **Gate scoreboard (final).** G3 CLOSED. **G2 CLOSED** - second implementation reproduces wire formats, authority decisions, AND live transport conformance over a real handshake with both sides spec-conformant. G1 unlock FIRES as of this entry: community review request opens, reviewer selection is the owner's move, pack targets v0.6.1 with known-issue disclosure.
 
+## D-096 - 2026-08-26 - Rust port of the reference head APPROVED (Huntley method); crypto fork option A; G1 runs in parallel
+
+**Decision:** Owner picked moving the reference implementation to Rust, citing ecosystem cost over code cost: a language whose leadership is publicly hostile to AI-assisted work fights how this house builds (agent loops, mutation harnesses, receipts). Method: ghuntley.com/porting stage 2/3 entry point (Bolina's SPEC + frozen vectors + conformant Go second head already satisfy Huntley stage 1). Full plan: opencrabs project dossier `bolina/rust-port-huntley-plan.md` (waves W0-W6, gauntlet rebuild, estimates). Baseline: bolina main @ `1b88522`; Zig tree remains supported until an explicit swap decision after a full battery.
+
+**Rulings locked this day:**
+
+1. **Crypto fork = A.** BE-DEP-01 is amended for the RUST HEAD ONLY: audited third-party crates permitted (ed25519-dalek/x25519-dalek family + RustCrypto blake2/chacha20poly1305), versions pinned in-tree, lockfile audit (`cargo audit`) mandatory before each seal, supply-chain noted in specs. Rationale: rolling our own constant-time crypto shifts burden to unbounded human timing-audit work exactly where mechanical gates are blind. BE-DEP-01 stands UNCHANGED for the Zig tree and for all prior seals.
+2. **G1 launches in parallel against frozen tag v0.6.1** while the port runs. The external review targets protocol composition and evidence quality, which survive a reference-language change; v1.0 must not be held hostage to the port. Pack as amended (`23737d2`).
+3. **Definition of done - PENDING owner pick:** first sealable milestone at W4 (wire-head parity: RFC KATs green, frozen vectors byte-a-byte incl. negatives, live interop vs the Zig daemon repeating the G2 ladder) vs W6 total parity (daemon+control plane+CA CLI) before any interim seal. In BOTH readings the swap itself happens only after the complete rebuilt battery (mutation domains, cross-diff differential Zig-vs-Rust, re-soak with signed receipts).
+
