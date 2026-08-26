@@ -42,14 +42,21 @@ Note: the two open findings from the pre-audit refresh (CA v2/scope inertness; c
 sender binding) are FIXED at this target with defence mutants (`d092`); see CHANGELOG 0.6.1.
 Your budget belongs to the composition seams, not these.
 
-Platform disclosure: at tag v0.6.1 the suite is verified on macOS (aarch64). On Linux the
-`zig build test`/daemon compile fails for lack of `link_libc` (fixed on `main` after this tag,
-2026-08-24, found by the G3 soak); fuzz targets are unaffected and run green on Linux.
+Platform of the mechanical evidence (honest limit). At tag v0.6.1 the suite does not
+compile on x86_64-linux (missing link_libc; fixed on main in `f55c4b5`, 2026-08-24, found
+by the G3 soak). With that fix, the suite compiles on Linux but does not yet pass natively
+there: `zig build test` on main (measured at `f6eb3ac`) reports ~408 pass / 28 fail /
+7 crash: socket/libc externs with macOS-hardcoded constants and durable-ledger I/O
+assumptions. This is test-harness portability, not a production-code defect: the daemon
+itself runs on Linux, demonstrated by the G2 live interop (a Go initiator handshakes with
+the Linux daemon and its Intent is admitted). All sealed conformance evidence is therefore
+macOS-verified; a reviewer should weight the Linux test-harness gap accordingly. Fuzz
+targets are unaffected and run green on Linux (24h soak).
 
 Toolchain: Zig 0.16.0 (`tools/toolchain.json`). Then:
 
 ```bash
-zig build test                # expect: 441 pass, 7 skip, 0 fail
+zig build test                # expect on macOS: 441 pass, 7 skip, 0 fail (Linux: see platform note above)
 zig build                     # produces zig-out/bin/bolina
 bash tools/prumo-verify       # mechanical gates M1-M12; enforced gates must report failing: 0
 python3 tools/mutation-test.py --help   # mutation harness (see §5)
