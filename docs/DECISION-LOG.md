@@ -1694,3 +1694,14 @@ model's assumptions are not merely self-reinforcing.
 2. **G1 launches in parallel against frozen tag v0.6.1** while the port runs. The external review targets protocol composition and evidence quality, which survive a reference-language change; v1.0 must not be held hostage to the port. Pack as amended (`23737d2`).
 3. **Definition of done - PENDING owner pick:** first sealable milestone at W4 (wire-head parity: RFC KATs green, frozen vectors byte-a-byte incl. negatives, live interop vs the Zig daemon repeating the G2 ladder) vs W6 total parity (daemon+control plane+CA CLI) before any interim seal. In BOTH readings the swap itself happens only after the complete rebuilt battery (mutation domains, cross-diff differential Zig-vs-Rust, re-soak with signed receipts).
 
+
+## D-097 — Paridade medida por fichas; ondas W7-W10 (emenda ao D-096 R1) — 2026-09-05
+
+**Owner:** Daniel (@iamloonix), ratificado via /goal no Daniel OS Project.
+**Descoberta que motivou:** as ondas W1-W6 derivaram do perímetro do marco v0.6 (daemon closeout), não do inventário da árvore. A camada de autoridade (v0.5.x) nunca foi agendada. "W6 parity" = fim do perímetro, não paridade com a árvore (3.165 vs ~10.1k linhas; camada de autoridade 100% ausente).
+**Critério corrigido pelo owner:** paridade NÃO se mede por ficheiros portados (ficheiros mentem: control.rs 208 linhas vs 922 do Zig sem a API /v1). Mede-se pelas **33 fichas em specs/**: cada item de cada ficha implementado + teste nomeado. Verificável, sem "marginal".
+**Passo zero entregue:** inventário funcional (`bolina-rs/docs/inventory.md`, commit `1ea7b40`) — assinaturas 243/506 (48%); camada ausente ~3.050 linhas em 13 fichas; gaps reais dentro de portados (control_api 5%, mac cookies, relay drain, daemon wiring).
+**Ondas ratificadas:** W7 autoridade (verify+dispatch+resolver) · W8 audit/attestation (evidence+dag+historical+grant_trace) · W9 suporte+wiring · W10 completar portado (âmbito do inventário).
+**Barra por onda (idêntica a W1-W6):** itens da ficha implementados; testes nomeados por semântica; mutação 100% nos módulos novos; cross-diff onde comparável; recibo lastro por gate; linha no LOGBOOK.
+**Regras mantidas:** bugfixes no Zig primeiro enquanto reference; bytes campo a campo sem transmute; sem async até revisão pós-swap; src/ do Zig intocado.
+**Selado fica selado:** tag `e24c839` e caça à anomalia ronda 562 intocadas. Recibo G3 diz **wire-head**, nunca "paridade".
